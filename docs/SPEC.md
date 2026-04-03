@@ -31,7 +31,7 @@ real-time signal iteration.
 
 ## Unsafe boundary
 
-The crate root uses `#![forbid(unsafe_code)]`. All `unsafe` blocks are
+The crate root uses `#![deny(unsafe_code)]`. All `unsafe` blocks are
 confined to a single internal `unsafe_ops` module marked with
 `#![allow(unsafe_code)]`. This module re-exports safe `pub(crate)`
 wrapper functions. An auditor can read one module to verify all unsafe
@@ -48,7 +48,7 @@ Nothing else in the crate contains `unsafe` blocks. The public
 `daemonize()` function is `unsafe fn` (see below); its unsafety is a
 caller contract, not an `unsafe` block in the implementation.
 
------
+---
 
 ## Public API
 
@@ -60,17 +60,17 @@ It derives `Default`, `Debug`, `Clone`, `Eq`, and `PartialEq`.
 
 All fields are private; callers use builder methods.
 
-|Field     |Type                   |Default             |Builder method    |Builder input type        |Semantics  |
-|----------|-----------------------|--------------------|------------------|--------------------------|-----------|
-|`pidfile` |`Option<PathBuf>`      |`None`              |`.pidfile(path)`  |`impl Into<PathBuf>`      |Setter     |
-|`chdir`   |`PathBuf`              |`PathBuf::from("/")`|`.chdir(path)`    |`impl Into<PathBuf>`      |Setter     |
-|`umask`   |`nix::sys::stat::Mode` |`Mode::empty()` (0) |`.umask(mode)`    |`nix::sys::stat::Mode`    |Setter     |
-|`stdout`  |`Option<PathBuf>`      |`None`              |`.stdout(path)`   |`impl Into<PathBuf>`      |Setter     |
-|`stderr`  |`Option<PathBuf>`      |`None`              |`.stderr(path)`   |`impl Into<PathBuf>`      |Setter     |
-|`append`  |`bool`                 |`false`             |`.append(bool)`   |`bool`                    |Setter     |
-|`lockfile`|`Option<PathBuf>`      |`None`              |`.lockfile(path)` |`impl Into<PathBuf>`      |Setter     |
-|`user`    |`Option<String>`       |`None`              |`.user(name)`     |`impl Into<String>`       |Setter     |
-|`env`     |`Vec<(String, String)>`|`vec![]`            |`.env(key, value)`|`impl Into<String>` (both)|Accumulator|
+| Field      | Type                    | Default              | Builder method     | Builder input type         | Semantics   |
+| ---------- | ----------------------- | -------------------- | ------------------ | -------------------------- | ----------- |
+| `pidfile`  | `Option<PathBuf>`       | `None`               | `.pidfile(path)`   | `impl Into<PathBuf>`       | Setter      |
+| `chdir`    | `PathBuf`               | `PathBuf::from("/")` | `.chdir(path)`     | `impl Into<PathBuf>`       | Setter      |
+| `umask`    | `nix::sys::stat::Mode`  | `Mode::empty()` (0)  | `.umask(mode)`     | `nix::sys::stat::Mode`     | Setter      |
+| `stdout`   | `Option<PathBuf>`       | `None`               | `.stdout(path)`    | `impl Into<PathBuf>`       | Setter      |
+| `stderr`   | `Option<PathBuf>`       | `None`               | `.stderr(path)`    | `impl Into<PathBuf>`       | Setter      |
+| `append`   | `bool`                  | `false`              | `.append(bool)`    | `bool`                     | Setter      |
+| `lockfile` | `Option<PathBuf>`       | `None`               | `.lockfile(path)`  | `impl Into<PathBuf>`       | Setter      |
+| `user`     | `Option<String>`        | `None`               | `.user(name)`      | `impl Into<String>`        | Setter      |
+| `env`      | `Vec<(String, String)>` | `vec![]`             | `.env(key, value)` | `impl Into<String>` (both) | Accumulator |
 
 All builder methods except `.env()` are setters: each call replaces the
 previous value. `.env()` is an accumulator: each call pushes a new
@@ -101,10 +101,10 @@ ctx.notify_parent()?;
 derives `Debug` (Flock formatted as present/absent). Do not derive
 `Clone` or `PartialEq`.
 
-|Field        |Type              |Semantics                                 |
-|-------------|------------------|------------------------------------------|
-|`lockfile`   |`Option<Flock>`   |Owned lock (`nix::fcntl`); drop releases. |
-|`notify_pipe`|`Option<OwnedFd>` |Write end of notification pipe; see below. |
+| Field         | Type              | Semantics                                  |
+| ------------- | ----------------- | ------------------------------------------ |
+| `lockfile`    | `Option<Flock>`   | Owned lock (`nix::fcntl`); drop releases.  |
+| `notify_pipe` | `Option<OwnedFd>` | Write end of notification pipe; see below. |
 
 **Accessors:**
 
@@ -145,20 +145,20 @@ be `Send + Sync` (compile-time assertion in tests). Do not derive
 `Clone` or `PartialEq`; use `matches!()` in tests. `Display` messages
 are lowercase with no trailing punctuation.
 
-|Variant             |Condition                                              |
-|--------------------|-------------------------------------------------------|
-|`ValidationError`   |Bad path, bad env key, path overlap, other config error|
-|`ProgramNotFound`   |CLI-only: program path missing or not executable       |
-|`UserNotFound`      |User does not exist at runtime during user switching   |
-|`LockConflict`      |flock already held by another process                  |
-|`LockfileError`     |Lockfile cannot be opened                              |
-|`ForkFailed`        |`fork()` returns an error                              |
-|`SetsidFailed`      |`setsid()` returns an error                            |
-|`ChdirFailed`       |`chdir()` fails at runtime after fork                  |
-|`PermissionDenied`  |Non-root caller with user switch, or setuid/setgid fail|
-|`PidfileError`      |Pidfile cannot be written                              |
-|`OutputFileError`   |stdout/stderr file cannot be opened/dup2'd             |
-|`ExecFailed`        |CLI-only: exec of target program failed                |
+| Variant            | Condition                                               |
+| ------------------ | ------------------------------------------------------- |
+| `ValidationError`  | Bad path, bad env key, path overlap, other config error |
+| `ProgramNotFound`  | CLI-only: program path missing or not executable        |
+| `UserNotFound`     | User does not exist at runtime during user switching    |
+| `LockConflict`     | flock already held by another process                   |
+| `LockfileError`    | Lockfile cannot be opened                               |
+| `ForkFailed`       | `fork()` returns an error                               |
+| `SetsidFailed`     | `setsid()` returns an error                             |
+| `ChdirFailed`      | `chdir()` fails at runtime after fork                   |
+| `PermissionDenied` | Non-root caller with user switch, or setuid/setgid fail |
+| `PidfileError`     | Pidfile cannot be written                               |
+| `OutputFileError`  | stdout/stderr file cannot be opened/dup2'd              |
+| `ExecFailed`       | CLI-only: exec of target program failed                 |
 
 `ProgramNotFound` and `ExecFailed` are produced only by the CLI, never
 by the library. They are in the shared enum so the CLI can use the
@@ -201,7 +201,7 @@ on success.
 
 - Pre-fork errors (validation failure, pipe creation failure, first
   fork failure) return `Err` directly to the original caller. No
-  notification pipe is involved because the caller *is* the parent.
+  notification pipe is involved because the caller _is_ the parent.
 - Post-fork errors (steps 2–14) are written to the notification pipe
   per the notification protocol. The grandchild calls `_exit()`. The
   parent reads the error, prints it to its stderr, and calls `_exit()`
@@ -236,7 +236,7 @@ Public method on `DaemonConfig`: `fn validate(&self) -> Result<(),
 DaemonizeError>`. Calling before `daemonize()` is optional;
 `daemonize()` always re-validates.
 
------
+---
 
 ## Validation
 
@@ -293,7 +293,7 @@ Keys must be non-empty and contain no `=`. Values are unrestricted.
 > methods are infallible. Centralizing validation keeps the API
 > consistent.
 
------
+---
 
 ## Daemonization sequence
 
@@ -465,7 +465,7 @@ enumeration must not be used.
 > is not actionable. This step is last because `getpwnam()` in step 12
 > may hold cached fds.
 
------
+---
 
 ## CLI
 
@@ -475,18 +475,18 @@ for `--help` and `--version` are acceptable.
 
 ### Flags
 
-|Short|Long       |Argument         |Description                          |
-|-----|-----------|-----------------|-------------------------------------|
-|`-p` |`--pidfile`|path             |Pidfile path                         |
-|`-c` |`--chdir`  |path             |Working directory                    |
-|`-m` |`--umask`  |octal string     |Process umask (e.g. `022`)           |
-|`-o` |`--stdout` |path             |Redirect stdout to file              |
-|`-e` |`--stderr` |path             |Redirect stderr to file              |
-|`-a` |`--append` |                 |Append to stdout/stderr files        |
-|`-l` |`--lock`   |path             |Lockfile path                        |
-|`-E` |`--env`    |`name=value`     |Set environment variable             |
-|`-u` |`--user`   |username         |Run daemon as user                   |
-|`-v` |`--verbose`|                 |Diagnostic output before daemonizing |
+| Short | Long        | Argument     | Description                          |
+| ----- | ----------- | ------------ | ------------------------------------ |
+| `-p`  | `--pidfile` | path         | Pidfile path                         |
+| `-c`  | `--chdir`   | path         | Working directory                    |
+| `-m`  | `--umask`   | octal string | Process umask (e.g. `022`)           |
+| `-o`  | `--stdout`  | path         | Redirect stdout to file              |
+| `-e`  | `--stderr`  | path         | Redirect stderr to file              |
+| `-a`  | `--append`  |              | Append to stdout/stderr files        |
+| `-l`  | `--lock`    | path         | Lockfile path                        |
+| `-E`  | `--env`     | `name=value` | Set environment variable             |
+| `-u`  | `--user`    | username     | Run daemon as user                   |
+| `-v`  | `--verbose` |              | Diagnostic output before daemonizing |
 
 Assign all short flags explicitly to avoid collisions.
 
@@ -559,26 +559,26 @@ daemonization. Without `-v`: no diagnostic output.
 This table is the single authoritative source. `DaemonizeError::
 exit_code()` returns these values.
 
-|`DaemonizeError` variant|Exit code|`sysexits.h` constant|
-|------------------------|---------|---------------------|
-|`ValidationError`       |64       |`EX_USAGE`           |
-|`ProgramNotFound`       |66       |`EX_NOINPUT`         |
-|`UserNotFound`          |67       |`EX_NOUSER`          |
-|`LockConflict`          |69       |`EX_UNAVAILABLE`     |
-|`LockfileError`         |73       |`EX_CANTCREAT`       |
-|`ForkFailed`            |71       |`EX_OSERR`           |
-|`SetsidFailed`          |71       |`EX_OSERR`           |
-|`ChdirFailed`           |71       |`EX_OSERR`           |
-|`PermissionDenied`      |77       |`EX_NOPERM`          |
-|`PidfileError`          |73       |`EX_CANTCREAT`       |
-|`OutputFileError`       |73       |`EX_CANTCREAT`       |
-|`ExecFailed`            |71       |`EX_OSERR`           |
+| `DaemonizeError` variant | Exit code | `sysexits.h` constant |
+| ------------------------ | --------- | --------------------- |
+| `ValidationError`        | 64        | `EX_USAGE`            |
+| `ProgramNotFound`        | 66        | `EX_NOINPUT`          |
+| `UserNotFound`           | 67        | `EX_NOUSER`           |
+| `LockConflict`           | 69        | `EX_UNAVAILABLE`      |
+| `LockfileError`          | 73        | `EX_CANTCREAT`        |
+| `ForkFailed`             | 71        | `EX_OSERR`            |
+| `SetsidFailed`           | 71        | `EX_OSERR`            |
+| `ChdirFailed`            | 71        | `EX_OSERR`            |
+| `PermissionDenied`       | 77        | `EX_NOPERM`           |
+| `PidfileError`           | 73        | `EX_CANTCREAT`        |
+| `OutputFileError`        | 73        | `EX_CANTCREAT`        |
+| `ExecFailed`             | 71        | `EX_OSERR`            |
 
 Pre-daemonization errors: CLI prints message to stderr, exits per
 table. Post-daemonization errors: reported to the parent via the
 notification pipe.
 
------
+---
 
 ## Testing strategy
 
@@ -682,7 +682,7 @@ Spawn CLI binary, inspect /proc and files. Require Linux, /proc:
   daemonization (e.g., by racing a file delete). Assert parent exits
   with code 71 and prints error message.
 
------
+---
 
 ## Documentation
 
@@ -722,7 +722,7 @@ keywords = ["daemon", "daemonize", "fork", "unix", "linux"]
 categories = ["os::unix-apis"]
 ```
 
------
+---
 
 ## Out of scope
 
@@ -733,7 +733,7 @@ categories = ["os::unix-apis"]
 - Serde support for `DaemonConfig`
 - `.clear_env()` builder method
 
------
+---
 
 ## Requirements checklist
 
@@ -819,7 +819,7 @@ verification points.
 - R65. `daemonize()` calls `validate()` before forking.
 - R66. `daemonize()` is `pub unsafe fn`.
 - R67. `daemonize_checked()` is `pub fn`, `#[cfg(target_os = "linux")]`.
-- R68. Crate root: `#![forbid(unsafe_code)]`.
+- R68. Crate root: `#![deny(unsafe_code)]`.
 - R69. All `unsafe` blocks confined to `unsafe_ops` module.
 - R70. `daemonize()` delegates to `daemonize_inner()` with
   `&mut impl Forker`.
