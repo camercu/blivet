@@ -1,0 +1,337 @@
+//! Daemonize a process using the double-fork method.
+//!
+//! This crate provides a library and CLI tool for daemonizing processes on Unix
+//! systems. It performs a mandatory double-fork, resets signal dispositions and
+//! mask, and uses a notification pipe so the parent can wait for daemon
+//! readiness.
+//!
+//! # Example
+//!
+//! ```no_run
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! use daemonize::{DaemonConfig, daemonize};
+//!
+//! let mut config = DaemonConfig::new();
+//! config.pidfile("/var/run/foo.pid").chdir("/tmp");
+//!
+//! config.validate()?;
+//!
+//! let mut ctx = unsafe { daemonize(&config)? };
+//! // ... application initialization ...
+//! ctx.notify_parent()?;
+//! // daemon process continues here
+//! # Ok(())
+//! # }
+//! ```
+
+#![deny(unsafe_code)]
+
+pub mod config;
+pub mod context;
+pub mod error;
+pub(crate) mod forker;
+pub(crate) mod unsafe_ops;
+
+mod steps;
+
+pub use config::DaemonConfig;
+pub use context::DaemonContext;
+pub use error::DaemonizeError;
+
+use std::io::Read;
+use std::os::fd::{AsRawFd, OwnedFd};
+
+use nix::unistd::ForkResult;
+
+use forker::Forker;
+use unsafe_ops::RealForker;
+
+/// Daemonize the current process.
+///
+/// # Safety
+///
+/// No other threads may be running when this function is called.
+/// Forking a multithreaded process leaves mutexes held by other
+/// threads permanently locked in the child, causing deadlocks or
+/// undefined behavior. Call before spawning threads, async runtimes,
+/// or libraries with background threads.
+///
+/// # Errors
+///
+/// Returns `DaemonizeError` on validation failure or any syscall error
+/// during the daemonization sequence. Pre-fork errors are returned
+/// directly; post-fork errors are reported via the notification pipe.
+///
+/// # Panics
+///
+/// Panics if `/dev/null` cannot be opened, `dup2` to a standard fd fails,
+/// `sigprocmask` fails, `getrlimit` fails, or other OS-level invariants
+/// are violated (indicating a fundamentally broken environment).
+#[allow(unsafe_code)]
+pub unsafe fn daemonize(config: &DaemonConfig) -> Result<DaemonContext, DaemonizeError> {
+    config.validate()?;
+    daemonize_inner(config, &mut RealForker)
+}
+
+/// Safe wrapper for [`daemonize`] that verifies the process is single-threaded.
+///
+/// Reads `/proc/self/status` and parses the `Threads:` line. If the thread
+/// count exceeds 1, or if `/proc/self/status` cannot be read or parsed,
+/// this function panics.
+///
+/// # Panics
+///
+/// Panics if the thread count is greater than 1, or if `/proc/self/status`
+/// is unavailable or unparseable.
+#[cfg(target_os = "linux")]
+pub fn daemonize_checked(config: &DaemonConfig) -> Result<DaemonContext, DaemonizeError> {
+    let status = std::fs::read_to_string("/proc/self/status")
+        .expect("failed to read /proc/self/status: cannot verify thread count");
+    let threads = status
+        .lines()
+        .find(|line| line.starts_with("Threads:"))
+        .expect("failed to find Threads: line in /proc/self/status");
+    let count: usize = threads
+        .split_whitespace()
+        .nth(1)
+        .expect("malformed Threads: line in /proc/self/status")
+        .parse()
+        .expect("failed to parse thread count from /proc/self/status");
+    if count > 1 {
+        panic!(
+            "daemonize_checked: {} threads running (expected 1). \
+             Call daemonize before spawning threads, async runtimes, \
+             or libraries with background threads.",
+            count
+        );
+    }
+    #[allow(unsafe_code)]
+    unsafe {
+        daemonize(config)
+    }
+}
+
+/// Internal daemonization logic, generic over the Forker trait for testability.
+pub(crate) fn daemonize_inner(
+    config: &DaemonConfig,
+    forker: &mut impl Forker,
+) -> Result<DaemonContext, DaemonizeError> {
+    // Step 1: Create notification pipe and first fork
+    let pipe = forker.create_notification_pipe();
+    let (pipe_rd, pipe_wr) = match pipe {
+        Some((rd, wr)) => (Some(rd), Some(wr)),
+        None => (None, None),
+    };
+
+    match forker.fork()? {
+        ForkResult::Parent { .. } => {
+            // Parent: close write end, read from pipe, exit
+            drop(pipe_wr);
+            if let Some(rd) = pipe_rd {
+                parent_pipe_reader(rd, forker);
+            }
+            // If no pipe (NullForker), just exit
+            forker.exit(0);
+        }
+        ForkResult::Child => {
+            // Child: close read end, continue
+            drop(pipe_rd);
+        }
+    }
+
+    // Step 2: setsid
+    let pipe_wr_ref = &pipe_wr;
+    if let Err(e) = forker.setsid() {
+        write_error_to_pipe(pipe_wr_ref, &e);
+        forker.exit(e.exit_code() as i32);
+    }
+
+    // Step 3: Second fork
+    match forker.fork() {
+        Ok(ForkResult::Parent { .. }) => {
+            // Intermediate child exits
+            drop(pipe_wr);
+            forker.exit(0);
+        }
+        Ok(ForkResult::Child) => {
+            // Grandchild continues
+        }
+        Err(e) => {
+            write_error_to_pipe(pipe_wr_ref, &e);
+            forker.exit(e.exit_code() as i32);
+        }
+    }
+
+    // Macro for post-fork error handling: write to pipe + exit
+    macro_rules! post_fork_try {
+        ($result:expr) => {
+            match $result {
+                Ok(val) => val,
+                Err(e) => {
+                    write_error_to_pipe(&pipe_wr, &e);
+                    forker.exit(e.exit_code() as i32);
+                }
+            }
+        };
+    }
+
+    // Step 4: Set umask
+    steps::set_umask(config.get_umask());
+
+    // Step 5: chdir
+    post_fork_try!(steps::change_dir(config.get_chdir()));
+
+    // Step 6: Redirect stdin/stdout/stderr to /dev/null
+    steps::redirect_to_devnull();
+
+    // Step 7: Open and lock lockfile (match required: macro uses divergent control flow)
+    #[allow(clippy::manual_map)]
+    let lockfile = match config.get_lockfile() {
+        Some(path) => Some(post_fork_try!(steps::open_and_lock(path))),
+        None => None,
+    };
+
+    // Step 8: Write pidfile
+    if let Some(pidfile_path) = config.get_pidfile() {
+        post_fork_try!(steps::write_pidfile(
+            pidfile_path,
+            config.get_lockfile(),
+            lockfile.as_ref()
+        ));
+    }
+
+    // Step 9: Reset signal dispositions
+    unsafe_ops::reset_signal_dispositions();
+
+    // Step 10: Clear signal mask
+    steps::clear_signal_mask();
+
+    // Step 11: Set environment variables
+    steps::set_env_vars(config.get_env());
+
+    // Step 12: Switch user
+    if let Some(username) = config.get_user() {
+        post_fork_try!(steps::switch_user(username));
+    }
+
+    // Step 13: Redirect stdout/stderr to configured files
+    if config.get_stdout().is_some() || config.get_stderr().is_some() {
+        post_fork_try!(steps::redirect_output(
+            config.get_stdout(),
+            config.get_stderr(),
+            config.get_append(),
+        ));
+    }
+
+    // Step 14: Close inherited fds
+    let mut skip_fds: Vec<i32> = Vec::new();
+    if let Some(ref flock) = lockfile {
+        skip_fds.push(flock.as_raw_fd());
+    }
+    if let Some(ref wr) = pipe_wr {
+        skip_fds.push(wr.as_raw_fd());
+    }
+    steps::close_inherited_fds(&skip_fds);
+
+    // Step 15: Return DaemonContext
+    Ok(DaemonContext::new(lockfile, pipe_wr))
+}
+
+/// Parent-side pipe reader. Reads from the pipe and exits accordingly.
+fn parent_pipe_reader(rd: OwnedFd, forker: &impl Forker) -> ! {
+    let mut file = std::fs::File::from(rd);
+    let mut buf = Vec::new();
+    let _ = file.read_to_end(&mut buf);
+
+    if buf.is_empty() {
+        // EOF: exec succeeded (CLOEXEC closed pipe)
+        forker.exit(0);
+    }
+
+    let code = buf[0];
+    if code == 0x00 {
+        // Success byte
+        forker.exit(0);
+    }
+
+    // Error: code byte + message
+    let msg = String::from_utf8_lossy(&buf[1..]);
+    eprintln!("{msg}");
+    forker.exit(code as i32);
+}
+
+/// Write error protocol to notification pipe (best-effort).
+fn write_error_to_pipe(pipe_wr: &Option<OwnedFd>, err: &DaemonizeError) {
+    if let Some(ref fd) = pipe_wr {
+        // Write directly via borrowed fd to avoid consuming the OwnedFd
+        let msg = err.to_string();
+        let code = err.exit_code();
+        let mut buf = Vec::with_capacity(1 + msg.len());
+        buf.push(code);
+        buf.extend_from_slice(msg.as_bytes());
+        let _ = nix::unistd::write(fd, &buf);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::forker::null_forker::NullForker;
+    use std::panic::catch_unwind;
+
+    #[test]
+    fn both_forks_child_succeeds() {
+        let config = DaemonConfig::new();
+        let mut forker = NullForker::both_child();
+        let result = daemonize_inner(&config, &mut forker);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn first_fork_parent_exits() {
+        let config = DaemonConfig::new();
+        let mut forker = NullForker::first_parent();
+        let result = catch_unwind(std::panic::AssertUnwindSafe(|| {
+            daemonize_inner(&config, &mut forker)
+        }));
+        assert!(result.is_err()); // exit panics in NullForker
+    }
+
+    #[test]
+    fn second_fork_parent_exits() {
+        let config = DaemonConfig::new();
+        let mut forker = NullForker::second_parent();
+        let result = catch_unwind(std::panic::AssertUnwindSafe(|| {
+            daemonize_inner(&config, &mut forker)
+        }));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn first_fork_fails_returns_error() {
+        let config = DaemonConfig::new();
+        let mut forker = NullForker::first_fork_fails();
+        let result = daemonize_inner(&config, &mut forker);
+        assert!(matches!(result, Err(DaemonizeError::ForkFailed(_))));
+    }
+
+    #[test]
+    fn setsid_fails_exits() {
+        let config = DaemonConfig::new();
+        let mut forker = NullForker::setsid_fails();
+        let result = catch_unwind(std::panic::AssertUnwindSafe(|| {
+            daemonize_inner(&config, &mut forker)
+        }));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn second_fork_fails_exits() {
+        let config = DaemonConfig::new();
+        let mut forker = NullForker::second_fork_fails();
+        let result = catch_unwind(std::panic::AssertUnwindSafe(|| {
+            daemonize_inner(&config, &mut forker)
+        }));
+        assert!(result.is_err());
+    }
+}
