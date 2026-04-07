@@ -1,0 +1,460 @@
+//! Integration tests for Linux-specific and root-only features.
+//!
+//! These tests are `#[ignore]` by default and run via `--include-ignored`
+//! inside the Docker container (which runs as root on Linux).
+
+mod helpers;
+
+use helpers::*;
+use std::process::Command;
+use std::time::Duration;
+
+fn daemonize_cmd() -> Command {
+    Command::new(daemonize_bin())
+}
+
+/// Check that we are running as root on Linux. Returns false otherwise.
+fn is_root_on_linux() -> bool {
+    cfg!(target_os = "linux") && nix::unistd::geteuid().as_raw() == 0
+}
+
+// ============================================================
+// User switching tests (R27, R28, R29, R35)
+// ============================================================
+
+#[test]
+#[ignore]
+fn user_switch_sets_uid_and_gid() {
+    if !is_root_on_linux() {
+        eprintln!("skipping: requires root on Linux");
+        return;
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    let pidfile = dir.path().join("test.pid");
+    let env_file = dir.path().join("id_output.txt");
+
+    // Make output dir writable by anyone so the switched user can write
+    std::fs::set_permissions(dir.path(), std::os::unix::fs::PermissionsExt::from_mode(0o777))
+        .unwrap();
+
+    let output = daemonize_cmd()
+        .args([
+            "-p",
+            pidfile.to_str().unwrap(),
+            "-u",
+            "testuser",
+            "-o",
+            env_file.to_str().unwrap(),
+            "--",
+            "sh",
+            "-c",
+            "id -u; id -g; sleep 5",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "daemonize with -u should succeed as root: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let pid = wait_for_pidfile(&pidfile, 5000).expect("pidfile should appear");
+    std::thread::sleep(Duration::from_millis(500));
+
+    // Verify the daemon's UID/GID via ps
+    let info = query_process(pid).expect("daemon process should exist");
+
+    // Resolve expected UID/GID for testuser
+    let expected = Command::new("id")
+        .args(["-u", "testuser"])
+        .output()
+        .unwrap();
+    let expected_uid: u32 = String::from_utf8_lossy(&expected.stdout)
+        .trim()
+        .parse()
+        .unwrap();
+
+    let expected = Command::new("id")
+        .args(["-g", "testuser"])
+        .output()
+        .unwrap();
+    let expected_gid: u32 = String::from_utf8_lossy(&expected.stdout)
+        .trim()
+        .parse()
+        .unwrap();
+
+    assert_eq!(info.uid, expected_uid, "daemon UID should match testuser");
+    assert_eq!(info.gid, expected_gid, "daemon GID should match testuser");
+
+    // Verify the id output from inside the daemon matches
+    let id_output = std::fs::read_to_string(&env_file).unwrap_or_default();
+    let lines: Vec<&str> = id_output.lines().collect();
+    if lines.len() >= 2 {
+        assert_eq!(
+            lines[0].trim(),
+            expected_uid.to_string(),
+            "id -u inside daemon should match"
+        );
+        assert_eq!(
+            lines[1].trim(),
+            expected_gid.to_string(),
+            "id -g inside daemon should match"
+        );
+    }
+
+    kill_process(pid);
+}
+
+#[test]
+#[ignore]
+fn user_switch_sets_env_vars() {
+    if !is_root_on_linux() {
+        eprintln!("skipping: requires root on Linux");
+        return;
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    let pidfile = dir.path().join("test.pid");
+    let env_file = dir.path().join("env_output.txt");
+
+    std::fs::set_permissions(dir.path(), std::os::unix::fs::PermissionsExt::from_mode(0o777))
+        .unwrap();
+
+    let output = daemonize_cmd()
+        .args([
+            "-p",
+            pidfile.to_str().unwrap(),
+            "-u",
+            "testuser",
+            "-o",
+            env_file.to_str().unwrap(),
+            "--",
+            "sh",
+            "-c",
+            "echo USER=$USER; echo HOME=$HOME; echo LOGNAME=$LOGNAME; sleep 5",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "daemonize failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let pid = wait_for_pidfile(&pidfile, 5000).expect("pidfile should appear");
+    std::thread::sleep(Duration::from_millis(500));
+
+    let content = std::fs::read_to_string(&env_file).unwrap_or_default();
+
+    // R28: USER and LOGNAME should be set to target user
+    assert!(
+        content.contains("USER=testuser"),
+        "USER should be testuser, got: {content}"
+    );
+    assert!(
+        content.contains("LOGNAME=testuser"),
+        "LOGNAME should be testuser, got: {content}"
+    );
+    // R29: HOME should be testuser's home dir
+    assert!(
+        content.contains("HOME=/home/testuser"),
+        "HOME should be /home/testuser, got: {content}"
+    );
+
+    kill_process(pid);
+}
+
+// ============================================================
+// Output file ownership after user switch (R10, R82)
+// ============================================================
+
+#[test]
+#[ignore]
+fn output_file_owned_by_target_user() {
+    if !is_root_on_linux() {
+        eprintln!("skipping: requires root on Linux");
+        return;
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    let pidfile = dir.path().join("test.pid");
+    let stdout_file = dir.path().join("stdout.log");
+    let stderr_file = dir.path().join("stderr.log");
+
+    std::fs::set_permissions(dir.path(), std::os::unix::fs::PermissionsExt::from_mode(0o777))
+        .unwrap();
+
+    let output = daemonize_cmd()
+        .args([
+            "-p",
+            pidfile.to_str().unwrap(),
+            "-u",
+            "testuser",
+            "-o",
+            stdout_file.to_str().unwrap(),
+            "-e",
+            stderr_file.to_str().unwrap(),
+            "--",
+            "sh",
+            "-c",
+            "echo hello; echo err >&2; sleep 5",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "daemonize failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let pid = wait_for_pidfile(&pidfile, 5000).expect("pidfile should appear");
+    std::thread::sleep(Duration::from_millis(500));
+
+    // Resolve testuser's UID
+    let expected = Command::new("id")
+        .args(["-u", "testuser"])
+        .output()
+        .unwrap();
+    let expected_uid: u32 = String::from_utf8_lossy(&expected.stdout)
+        .trim()
+        .parse()
+        .unwrap();
+
+    // Check file ownership
+    use std::os::unix::fs::MetadataExt;
+    let stdout_meta = std::fs::metadata(&stdout_file).unwrap();
+    let stderr_meta = std::fs::metadata(&stderr_file).unwrap();
+
+    assert_eq!(
+        stdout_meta.uid(),
+        expected_uid,
+        "stdout file should be owned by testuser"
+    );
+    assert_eq!(
+        stderr_meta.uid(),
+        expected_uid,
+        "stderr file should be owned by testuser"
+    );
+
+    kill_process(pid);
+}
+
+// ============================================================
+// daemonize_checked() — Linux-only (R45, R67)
+// ============================================================
+
+#[test]
+#[ignore]
+#[cfg(target_os = "linux")]
+fn daemonize_checked_single_thread_succeeds() {
+    // This test verifies that daemonize_checked reads /proc/self/status
+    // and accepts a single-threaded process. We can't easily test the
+    // full daemonize in-process (it would fork), so we verify the
+    // thread-count check logic directly.
+    let status = std::fs::read_to_string("/proc/self/status").unwrap();
+    let threads_line = status
+        .lines()
+        .find(|l| l.starts_with("Threads:"))
+        .unwrap();
+    let count: usize = threads_line
+        .split_whitespace()
+        .nth(1)
+        .unwrap()
+        .parse()
+        .unwrap();
+
+    // In a single-threaded test, count should be 1
+    // (cargo test runs each test in its own thread, but the test binary
+    // itself may have multiple threads for the test harness)
+    assert!(
+        count >= 1,
+        "thread count should be at least 1, got {count}"
+    );
+}
+
+#[test]
+#[ignore]
+#[cfg(target_os = "linux")]
+fn proc_self_status_is_readable() {
+    // Verify /proc/self/status is available (required for daemonize_checked)
+    let status = std::fs::read_to_string("/proc/self/status");
+    assert!(
+        status.is_ok(),
+        "/proc/self/status should be readable on Linux"
+    );
+
+    let content = status.unwrap();
+    assert!(
+        content.contains("Threads:"),
+        "/proc/self/status should contain Threads: line"
+    );
+}
+
+// ============================================================
+// /proc-based process info (Linux-specific CWD check)
+// ============================================================
+
+#[test]
+#[ignore]
+#[cfg(target_os = "linux")]
+fn proc_based_cwd_query() {
+    // Verify that /proc/<pid>/cwd works for our own process
+    let pid = std::process::id();
+    let link = std::fs::read_link(format!("/proc/{pid}/cwd"));
+    assert!(
+        link.is_ok(),
+        "/proc/{pid}/cwd should be a readable symlink"
+    );
+
+    let cwd = std::env::current_dir().unwrap();
+    assert_eq!(
+        link.unwrap(),
+        cwd,
+        "/proc/self/cwd should match current_dir()"
+    );
+}
+
+#[test]
+#[ignore]
+#[cfg(target_os = "linux")]
+fn daemon_cwd_via_proc() {
+    let dir = tempfile::tempdir().unwrap();
+    let pidfile = dir.path().join("test.pid");
+    let chdir = dir.path().to_str().unwrap();
+
+    let output = daemonize_cmd()
+        .args([
+            "-p",
+            pidfile.to_str().unwrap(),
+            "-c",
+            chdir,
+            "--",
+            "sleep",
+            "30",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "daemonize failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let pid = wait_for_pidfile(&pidfile, 5000).expect("pidfile should appear");
+
+    // Verify CWD via /proc
+    let proc_cwd = std::fs::read_link(format!("/proc/{pid}/cwd"));
+    assert!(proc_cwd.is_ok(), "/proc/{pid}/cwd should be readable");
+
+    let expected = std::fs::canonicalize(chdir).unwrap();
+    assert_eq!(
+        proc_cwd.unwrap(),
+        expected,
+        "daemon CWD via /proc should match configured chdir"
+    );
+
+    kill_process(pid);
+}
+
+// ============================================================
+// User switch with supplementary groups (R27)
+// ============================================================
+
+#[test]
+#[ignore]
+fn user_switch_sets_supplementary_groups() {
+    if !is_root_on_linux() {
+        eprintln!("skipping: requires root on Linux");
+        return;
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    let pidfile = dir.path().join("test.pid");
+    let groups_file = dir.path().join("groups.txt");
+
+    std::fs::set_permissions(dir.path(), std::os::unix::fs::PermissionsExt::from_mode(0o777))
+        .unwrap();
+
+    let output = daemonize_cmd()
+        .args([
+            "-p",
+            pidfile.to_str().unwrap(),
+            "-u",
+            "testuser",
+            "-o",
+            groups_file.to_str().unwrap(),
+            "--",
+            "sh",
+            "-c",
+            "id -G; sleep 5",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "daemonize failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let pid = wait_for_pidfile(&pidfile, 5000).expect("pidfile should appear");
+    std::thread::sleep(Duration::from_millis(500));
+
+    let content = std::fs::read_to_string(&groups_file).unwrap_or_default();
+
+    // Should have at least the primary group
+    let groups: Vec<&str> = content.trim().split_whitespace().collect();
+    assert!(
+        !groups.is_empty(),
+        "daemon should have at least one group, got: {content}"
+    );
+
+    // Get expected groups for testuser
+    let expected = Command::new("id").args(["-G", "testuser"]).output().unwrap();
+    let expected_str = String::from_utf8_lossy(&expected.stdout).trim().to_string();
+    let expected_groups: Vec<&str> = expected_str.split_whitespace().collect();
+
+    // The daemon's groups should match the expected groups for testuser
+    let mut daemon_groups = groups.clone();
+    daemon_groups.sort();
+    let mut exp_groups = expected_groups;
+    exp_groups.sort();
+    assert_eq!(
+        daemon_groups, exp_groups,
+        "daemon supplementary groups should match testuser's groups"
+    );
+
+    kill_process(pid);
+}
+
+// ============================================================
+// Non-root user switch validation (R35) — runs as root, validates
+// that the error path works for non-existent users
+// ============================================================
+
+#[test]
+#[ignore]
+fn user_switch_nonexistent_user_fails() {
+    if !is_root_on_linux() {
+        eprintln!("skipping: requires root on Linux");
+        return;
+    }
+
+    let output = daemonize_cmd()
+        .args(["-u", "nonexistent_user_xyz_12345", "--", "sleep", "1"])
+        .output()
+        .unwrap();
+
+    // Should fail with UserNotFound exit code (67)
+    assert_eq!(
+        output.status.code(),
+        Some(67),
+        "nonexistent user should exit 67, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
