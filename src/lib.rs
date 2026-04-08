@@ -280,8 +280,31 @@ mod tests {
     use crate::forker::null_forker::NullForker;
     use std::panic::catch_unwind;
 
+    /// Runs the full `daemonize_inner` happy path in a subprocess.
+    ///
+    /// This test cannot run in the main test process because the daemonization
+    /// sequence redirects stdin/stdout/stderr to /dev/null and closes all
+    /// inherited file descriptors — both of which would destroy the test
+    /// harness. Running in a subprocess isolates these side effects.
     #[test]
     fn both_forks_child_succeeds() {
+        let exe = std::env::current_exe().unwrap();
+        let status = std::process::Command::new(exe)
+            .arg("--exact")
+            .arg("tests::both_forks_child_succeeds_subprocess")
+            .arg("--nocapture")
+            .env("__DAEMONIZE_SUBPROCESS_TEST", "1")
+            .status()
+            .unwrap();
+        assert!(status.success(), "subprocess test failed: {status}");
+    }
+
+    #[test]
+    #[ignore] // only run as subprocess from both_forks_child_succeeds
+    fn both_forks_child_succeeds_subprocess() {
+        if std::env::var("__DAEMONIZE_SUBPROCESS_TEST").is_err() {
+            return; // skip if not invoked as subprocess
+        }
         let config = DaemonConfig::new();
         let mut forker = NullForker::both_child();
         let result = daemonize_inner(&config, &mut forker);

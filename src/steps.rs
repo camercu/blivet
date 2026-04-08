@@ -258,6 +258,50 @@ mod tests {
     use super::*;
     use serial_test::serial;
 
+    /// Guard that saves file descriptors on creation and restores them on drop.
+    ///
+    /// Tests that redirect stdout/stderr (fd 1/2) corrupt the test harness
+    /// because the harness writes results to those fds. This guard `dup`s the
+    /// originals before the test body runs, then `dup2`s them back when dropped.
+    struct SavedFds {
+        saved: Vec<(i32, i32)>, // (original_fd, saved_copy)
+    }
+
+    impl SavedFds {
+        fn new(fds: &[i32]) -> Self {
+            #[allow(unsafe_code)]
+            let saved = fds
+                .iter()
+                .map(|&fd| {
+                    let copy = unsafe { libc::dup(fd) };
+                    assert!(copy >= 0, "dup({fd}) failed");
+                    (fd, copy)
+                })
+                .collect();
+            Self { saved }
+        }
+
+        /// Returns the raw fd numbers of the saved copies.
+        ///
+        /// Use this to build a skip list for `close_inherited_fds` so it
+        /// doesn't close the backup copies we need for restoration.
+        fn saved_fds(&self) -> Vec<i32> {
+            self.saved.iter().map(|&(_, copy)| copy).collect()
+        }
+    }
+
+    impl Drop for SavedFds {
+        fn drop(&mut self) {
+            #[allow(unsafe_code)]
+            for &(orig, copy) in &self.saved {
+                unsafe {
+                    libc::dup2(copy, orig);
+                    libc::close(copy);
+                }
+            }
+        }
+    }
+
     // --- Step 4: umask ---
 
     #[test]
@@ -294,8 +338,9 @@ mod tests {
     // --- Step 6: redirect to /dev/null ---
 
     #[test]
+    #[serial]
     fn redirect_to_devnull_succeeds() {
-        // Smoke test: just verify it doesn't panic
+        let _restore = SavedFds::new(&[0, 1, 2]);
         redirect_to_devnull();
     }
 
@@ -430,7 +475,9 @@ mod tests {
     // --- Step 13: redirect output ---
 
     #[test]
+    #[serial]
     fn redirect_output_creates_files() {
+        let _restore = SavedFds::new(&[1, 2]);
         let dir = tempfile::tempdir().unwrap();
         let stdout_path = dir.path().join("stdout.log");
         let stderr_path = dir.path().join("stderr.log");
@@ -441,14 +488,15 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn redirect_output_truncate_overwrites() {
+        let _restore = SavedFds::new(&[1]);
         let dir = tempfile::tempdir().unwrap();
         let stdout_path = dir.path().join("stdout.log");
         std::fs::write(&stdout_path, "old content\n").unwrap();
 
         redirect_output(Some(&stdout_path), None, false).unwrap();
 
-        // Write through fd 1 to the file
         unsafe_ops::raw_write(1, b"new content\n").unwrap();
 
         let content = std::fs::read_to_string(&stdout_path).unwrap();
@@ -457,7 +505,9 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn redirect_output_append_preserves() {
+        let _restore = SavedFds::new(&[1]);
         let dir = tempfile::tempdir().unwrap();
         let stdout_path = dir.path().join("stdout.log");
         std::fs::write(&stdout_path, "old content\n").unwrap();
@@ -474,18 +524,19 @@ mod tests {
     // --- Step 14: close inherited fds ---
 
     #[test]
+    #[serial]
     fn close_inherited_fds_preserves_skipped() {
+        // Save stdout/stderr so the test harness can still report results
+        // after we close all non-skipped fds (which includes harness-internal fds).
+        let restore = SavedFds::new(&[1, 2]);
         let (rd, wr) = nix::unistd::pipe().unwrap();
-        let skip = vec![rd.as_raw_fd(), wr.as_raw_fd()];
+        let mut skip = vec![rd.as_raw_fd(), wr.as_raw_fd()];
+        // Also skip the SavedFds backup copies so they survive for restoration.
+        skip.extend(restore.saved_fds());
         close_inherited_fds(&skip);
         // Our pipe fds should still be open
         assert!(nix::unistd::write(&wr, b"ok").is_ok());
     }
-
-    // Note: close_inherited_fds_closes_non_skipped is intentionally omitted.
-    // Closing all fds 3..rlim_cur in-process destroys the test runner's own
-    // fds (epoll, stdio duplicates, etc.), making it impossible to verify
-    // reliably. The close path is exercised by integration tests instead.
 
     #[test]
     fn write_pidfile_with_different_lockfile_path() {
@@ -502,7 +553,9 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn redirect_output_stderr_only() {
+        let _restore = SavedFds::new(&[2]);
         let dir = tempfile::tempdir().unwrap();
         let stderr_path = dir.path().join("stderr.log");
         let result = redirect_output(None, Some(&stderr_path), false);
@@ -515,7 +568,9 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn redirect_output_same_path_uses_dup2() {
+        let _restore = SavedFds::new(&[1, 2]);
         let dir = tempfile::tempdir().unwrap();
         let combined = dir.path().join("combined.log");
         let result = redirect_output(Some(&combined), Some(&combined), false);
