@@ -26,13 +26,14 @@
 
 #![deny(unsafe_code)]
 
-pub mod config;
-pub mod context;
-pub mod error;
+mod config;
+mod context;
+mod error;
 pub(crate) mod forker;
 pub(crate) mod unsafe_ops;
 
 mod steps;
+pub(crate) mod util;
 
 pub use config::DaemonConfig;
 pub use context::DaemonContext;

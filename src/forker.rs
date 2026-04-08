@@ -1,3 +1,9 @@
+//! Forker trait abstracting fork/setsid/pipe syscalls for testability.
+//!
+//! [`RealForker`](crate::unsafe_ops::RealForker) wraps real syscalls;
+//! [`NullForker`](null_forker::NullForker) (test-only) provides
+//! configurable results so `daemonize_inner` can be exercised without forking.
+
 use std::os::fd::OwnedFd;
 
 use nix::unistd::ForkResult;

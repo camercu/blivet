@@ -1,8 +1,11 @@
+//! Daemon configuration with builder pattern and pre-fork validation.
+
 use std::path::PathBuf;
 
 use nix::sys::stat::Mode;
 
 use crate::error::DaemonizeError;
+use crate::util::paths_same;
 
 /// Configuration for the daemonization process.
 ///
@@ -308,14 +311,6 @@ fn validate_parent_writable(
         Err(_) => Err(DaemonizeError::ValidationError(format!(
             "{name} parent directory is not writable"
         ))),
-    }
-}
-
-/// Compare two paths using canonicalize() with byte-equal fallback.
-pub(crate) fn paths_same(a: &std::path::Path, b: &std::path::Path) -> bool {
-    match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
-        (Ok(ca), Ok(cb)) => ca == cb,
-        _ => a == b,
     }
 }
 

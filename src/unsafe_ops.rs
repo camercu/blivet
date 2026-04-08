@@ -1,3 +1,14 @@
+//! Unsafe code containment zone.
+//!
+//! All `unsafe` blocks in the crate are confined to this module (via
+//! `#![deny(unsafe_code)]` at the crate root). Contains two things:
+//!
+//! - **[`RealForker`]**: the production [`Forker`](crate::forker::Forker)
+//!   implementation wrapping fork, setsid, pipe, and `_exit`.
+//! - **libc wrappers**: thin safe-signature functions (`raw_dup2`, `raw_close`,
+//!   etc.) used by [`steps`](crate::steps) to perform fd manipulation and
+//!   signal reset without needing `#[allow(unsafe_code)]` themselves.
+
 #![allow(unsafe_code)]
 
 use std::os::fd::{AsFd, OwnedFd};

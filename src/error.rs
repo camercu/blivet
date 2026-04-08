@@ -1,3 +1,5 @@
+//! Error types for the daemonization sequence, with `sysexits.h` exit codes.
+
 /// Errors produced during configuration validation or the daemonization sequence.
 ///
 /// Each variant maps to a `sysexits.h` exit code via [`exit_code`](DaemonizeError::exit_code).

@@ -7,6 +7,10 @@ license = "MIT OR Apache-2.0"
 keywords = ["daemon", "daemonize", "fork", "unix", "linux"]
 categories = ["os::unix-apis"]
 
+[[bin]]
+name = "daemonize"
+path = "src/main.rs"
+
 [dependencies]
 nix = { version = "0.31", features = ["fs", "signal", "process", "user", "resource"] }
 clap = { version = "4", features = ["derive"] }

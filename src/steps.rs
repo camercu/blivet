@@ -1,12 +1,19 @@
+//! Post-fork daemonization steps.
+//!
+//! Each function corresponds to one step in the 15-step daemonization sequence
+//! orchestrated by [`daemonize_inner`](crate::daemonize_inner). They are
+//! collected here rather than inlined because each is independently testable
+//! and the grouping mirrors the spec's step numbering.
+
 use std::os::fd::{AsRawFd, OwnedFd};
 use std::path::{Path, PathBuf};
 
 use nix::fcntl::{open, Flock, FlockArg, OFlag};
 use nix::sys::stat::Mode;
 
-use crate::config::paths_same;
 use crate::error::DaemonizeError;
 use crate::unsafe_ops;
+use crate::util::paths_same;
 
 /// Step 4: Set process umask.
 pub(crate) fn set_umask(mode: Mode) {

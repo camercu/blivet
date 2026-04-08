@@ -1,3 +1,5 @@
+//! Post-daemonization context: parent notification and lockfile management.
+
 use std::fmt;
 use std::io::{self, Write};
 use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
