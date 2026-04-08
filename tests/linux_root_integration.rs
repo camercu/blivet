@@ -408,7 +408,7 @@ fn user_switch_sets_supplementary_groups() {
     let content = std::fs::read_to_string(&groups_file).unwrap_or_default();
 
     // Should have at least the primary group
-    let groups: Vec<&str> = content.trim().split_whitespace().collect();
+    let groups: Vec<&str> = content.split_whitespace().collect();
     assert!(
         !groups.is_empty(),
         "daemon should have at least one group, got: {content}"

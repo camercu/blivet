@@ -109,9 +109,16 @@ pub(crate) fn clear_signal_mask() {
 }
 
 /// Step 11: Set environment variables in insertion order.
+///
+/// # Safety context
+///
+/// `std::env::set_var` is not thread-safe. This is called post-fork in a
+/// single-threaded child process, so no data race is possible.
+#[allow(unsafe_code)]
 pub(crate) fn set_env_vars(env: &[(String, String)]) {
     for (key, value) in env {
-        std::env::set_var(key, value);
+        // SAFETY: post-fork, single-threaded — no concurrent readers.
+        unsafe { std::env::set_var(key, value) };
     }
 }
 
@@ -119,6 +126,7 @@ pub(crate) fn set_env_vars(env: &[(String, String)]) {
 ///
 /// Resolves via getpwnam, then initgroups, setgid, setuid.
 /// Sets USER, HOME, LOGNAME environment variables.
+#[allow(unsafe_code)]
 pub(crate) fn switch_user(username: &str) -> Result<(), DaemonizeError> {
     use nix::unistd::User;
     use std::ffi::CString;
@@ -143,9 +151,12 @@ pub(crate) fn switch_user(username: &str) -> Result<(), DaemonizeError> {
         .map_err(|e| DaemonizeError::PermissionDenied(format!("setuid: {e}")))?;
 
     // Set USER, HOME, LOGNAME — these overwrite any .env() values
-    std::env::set_var("USER", username);
-    std::env::set_var("HOME", &user.dir);
-    std::env::set_var("LOGNAME", username);
+    // SAFETY: post-fork, single-threaded — no concurrent readers.
+    unsafe {
+        std::env::set_var("USER", username);
+        std::env::set_var("HOME", &user.dir);
+        std::env::set_var("LOGNAME", username);
+    }
 
     Ok(())
 }
@@ -185,7 +196,10 @@ pub(crate) fn redirect_output(
             )))?;
             unsafe_ops::raw_close(raw);
         }
-        std::mem::forget(fd); // fd ownership transferred via dup2
+        // Prevent OwnedFd destructor from closing the fd — ownership is
+        // transferred to the target fd slot (1) via dup2, or the fd already
+        // was 1 and must stay open.
+        std::mem::forget(fd);
     }
 
     if let Some(err_path) = stderr {
@@ -345,6 +359,7 @@ mod tests {
 
     #[test]
     #[serial]
+    #[allow(unsafe_code)]
     fn set_env_vars_applies() {
         let vars = vec![
             ("DAEMONIZE_TEST_A".into(), "1".into()),
@@ -353,12 +368,15 @@ mod tests {
         set_env_vars(&vars);
         assert_eq!(std::env::var("DAEMONIZE_TEST_A").unwrap(), "1");
         assert_eq!(std::env::var("DAEMONIZE_TEST_B").unwrap(), "2");
-        std::env::remove_var("DAEMONIZE_TEST_A");
-        std::env::remove_var("DAEMONIZE_TEST_B");
+        unsafe {
+            std::env::remove_var("DAEMONIZE_TEST_A");
+            std::env::remove_var("DAEMONIZE_TEST_B");
+        }
     }
 
     #[test]
     #[serial]
+    #[allow(unsafe_code)]
     fn set_env_vars_last_write_wins() {
         let vars = vec![
             ("DAEMONIZE_TEST_DUP".into(), "first".into()),
@@ -366,7 +384,7 @@ mod tests {
         ];
         set_env_vars(&vars);
         assert_eq!(std::env::var("DAEMONIZE_TEST_DUP").unwrap(), "second");
-        std::env::remove_var("DAEMONIZE_TEST_DUP");
+        unsafe { std::env::remove_var("DAEMONIZE_TEST_DUP") };
     }
 
     // --- Step 9: signal disposition reset ---
@@ -455,5 +473,52 @@ mod tests {
         close_inherited_fds(&skip);
         // Our pipe fds should still be open
         assert!(nix::unistd::write(&wr, b"ok").is_ok());
+    }
+
+    // Note: close_inherited_fds_closes_non_skipped is intentionally omitted.
+    // Closing all fds 3..rlim_cur in-process destroys the test runner's own
+    // fds (epoll, stdio duplicates, etc.), making it impossible to verify
+    // reliably. The close path is exercised by integration tests instead.
+
+    #[test]
+    fn write_pidfile_with_different_lockfile_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let pidfile = dir.path().join("test.pid");
+        let lockfile_path = dir.path().join("test.lock");
+        let flock = open_and_lock(&lockfile_path).unwrap();
+        // lockfile_path differs from pidfile — should use std::fs::write path
+        let result = write_pidfile(&pidfile, Some(&lockfile_path), Some(&flock));
+        assert!(result.is_ok());
+        let contents = std::fs::read_to_string(&pidfile).unwrap();
+        let pid: u32 = contents.trim().parse().unwrap();
+        assert_eq!(pid, std::process::id());
+    }
+
+    #[test]
+    fn redirect_output_stderr_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let stderr_path = dir.path().join("stderr.log");
+        let result = redirect_output(None, Some(&stderr_path), false);
+        assert!(result.is_ok());
+        assert!(stderr_path.exists());
+
+        unsafe_ops::raw_write(2, b"stderr content\n").unwrap();
+        let content = std::fs::read_to_string(&stderr_path).unwrap();
+        assert!(content.contains("stderr content"));
+    }
+
+    #[test]
+    fn redirect_output_same_path_uses_dup2() {
+        let dir = tempfile::tempdir().unwrap();
+        let combined = dir.path().join("combined.log");
+        let result = redirect_output(Some(&combined), Some(&combined), false);
+        assert!(result.is_ok());
+
+        unsafe_ops::raw_write(1, b"stdout\n").unwrap();
+        unsafe_ops::raw_write(2, b"stderr\n").unwrap();
+
+        let content = std::fs::read_to_string(&combined).unwrap();
+        assert!(content.contains("stdout"), "should have stdout");
+        assert!(content.contains("stderr"), "should have stderr");
     }
 }

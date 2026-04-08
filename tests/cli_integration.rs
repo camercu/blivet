@@ -619,3 +619,245 @@ fn no_pidfile_when_not_configured() {
     let content = std::fs::read_to_string(&stdout_file).unwrap_or_default();
     assert!(content.contains("running"));
 }
+
+// --- Umask flag (R7) ---
+
+#[test]
+fn umask_flag_sets_daemon_umask() {
+    let dir = tempfile::tempdir().unwrap();
+    let pidfile = dir.path().join("test.pid");
+    let stdout_file = dir.path().join("stdout.log");
+
+    let output = daemonize_cmd()
+        .args([
+            "-p",
+            pidfile.to_str().unwrap(),
+            "-m",
+            "077",
+            "-o",
+            stdout_file.to_str().unwrap(),
+            "--",
+            "sh",
+            "-c",
+            // Create a file; its permissions reveal the effective umask
+            &format!("touch {}/probe.txt; stat -f %Lp {}/probe.txt 2>/dev/null || stat -c %a {}/probe.txt; sleep 1",
+                dir.path().display(), dir.path().display(), dir.path().display()),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "daemonize with -m should succeed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let pid = wait_for_pidfile(&pidfile, 5000).expect("pidfile should appear");
+    std::thread::sleep(Duration::from_millis(500));
+
+    let content = std::fs::read_to_string(&stdout_file).unwrap_or_default();
+    // With umask 077, a new file should have mode 600 (0666 & ~077)
+    assert!(
+        content.contains("600"),
+        "file created with umask 077 should have mode 600, got: {content}"
+    );
+
+    kill_process(pid);
+}
+
+// --- Env without equals (R36 edge case) ---
+
+#[test]
+fn env_without_equals_sets_empty_value() {
+    let dir = tempfile::tempdir().unwrap();
+    let pidfile = dir.path().join("test.pid");
+    let env_file = dir.path().join("env.txt");
+
+    let output = daemonize_cmd()
+        .args([
+            "-p",
+            pidfile.to_str().unwrap(),
+            "-o",
+            env_file.to_str().unwrap(),
+            "-E",
+            "EMPTY_VAR",
+            "--",
+            "sh",
+            "-c",
+            "echo \"VAL=[$EMPTY_VAR]\"; sleep 1",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let pid = wait_for_pidfile(&pidfile, 5000).expect("pidfile should appear");
+    std::thread::sleep(Duration::from_millis(500));
+
+    let content = std::fs::read_to_string(&env_file).unwrap_or_default();
+    assert!(
+        content.contains("VAL=[]"),
+        "env var without = should be empty string, got: {content}"
+    );
+
+    kill_process(pid);
+}
+
+// --- Multiple env vars ---
+
+#[test]
+fn multiple_env_vars() {
+    let dir = tempfile::tempdir().unwrap();
+    let pidfile = dir.path().join("test.pid");
+    let env_file = dir.path().join("env.txt");
+
+    let output = daemonize_cmd()
+        .args([
+            "-p",
+            pidfile.to_str().unwrap(),
+            "-o",
+            env_file.to_str().unwrap(),
+            "-E",
+            "VAR_A=alpha",
+            "-E",
+            "VAR_B=beta",
+            "--",
+            "sh",
+            "-c",
+            "echo $VAR_A; echo $VAR_B; sleep 1",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let pid = wait_for_pidfile(&pidfile, 5000).expect("pidfile should appear");
+    std::thread::sleep(Duration::from_millis(500));
+
+    let content = std::fs::read_to_string(&env_file).unwrap_or_default();
+    assert!(content.contains("alpha"), "should have VAR_A, got: {content}");
+    assert!(content.contains("beta"), "should have VAR_B, got: {content}");
+
+    kill_process(pid);
+}
+
+// --- Bare program name uses PATH search ---
+
+#[test]
+fn bare_program_name_uses_path_search() {
+    let dir = tempfile::tempdir().unwrap();
+    let pidfile = dir.path().join("test.pid");
+
+    let output = daemonize_cmd()
+        .args(["-p", pidfile.to_str().unwrap(), "--", "sleep", "5"])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "bare program name should resolve via PATH: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let pid = wait_for_pidfile(&pidfile, 5000).expect("pidfile should appear");
+    kill_process(pid);
+}
+
+// --- Shared lockfile and pidfile path ---
+
+#[test]
+fn shared_lockfile_pidfile_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let shared = dir.path().join("shared.pid");
+
+    let output = daemonize_cmd()
+        .args([
+            "-p",
+            shared.to_str().unwrap(),
+            "-l",
+            shared.to_str().unwrap(),
+            "--",
+            "sleep",
+            "30",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "shared pidfile/lockfile should work: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let pid = wait_for_pidfile(&shared, 5000).expect("pidfile should appear");
+    let content = std::fs::read_to_string(&shared).unwrap();
+    assert_eq!(content.trim(), pid.to_string(), "pidfile should contain PID");
+
+    kill_process(pid);
+}
+
+// --- Hyphen arguments pass through to program ---
+
+#[test]
+fn hyphen_arguments_pass_through() {
+    let dir = tempfile::tempdir().unwrap();
+    let pidfile = dir.path().join("test.pid");
+    let stdout_file = dir.path().join("stdout.log");
+
+    let output = daemonize_cmd()
+        .args([
+            "-p",
+            pidfile.to_str().unwrap(),
+            "-o",
+            stdout_file.to_str().unwrap(),
+            "--",
+            "echo",
+            "-n",
+            "--flag",
+            "-x",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "hyphen args should pass through: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let pid = wait_for_pidfile(&pidfile, 5000);
+    std::thread::sleep(Duration::from_millis(500));
+
+    let content = std::fs::read_to_string(&stdout_file).unwrap_or_default();
+    assert!(
+        content.contains("--flag"),
+        "program should receive --flag, got: {content}"
+    );
+    assert!(
+        content.contains("-x"),
+        "program should receive -x, got: {content}"
+    );
+
+    if let Some(pid) = pid {
+        kill_process(pid);
+    }
+}
+
+// --- Error messages appear on stderr ---
+
+#[test]
+fn error_message_on_stderr() {
+    let output = daemonize_cmd()
+        .args(["-p", "relative.pid", "--", "sleep", "1"])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.is_empty(),
+        "error should produce a message on stderr"
+    );
+    assert!(
+        stderr.contains("absolute"),
+        "error message should mention 'absolute', got: {stderr}"
+    );
+}

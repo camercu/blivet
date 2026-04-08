@@ -1,6 +1,6 @@
 #![allow(unsafe_code)]
 
-use std::os::fd::OwnedFd;
+use std::os::fd::{AsFd, OwnedFd};
 
 use nix::unistd::ForkResult;
 
@@ -42,16 +42,16 @@ impl Forker for RealForker {
     }
 }
 
-use std::os::fd::AsFd;
-
 /// Reset signal dispositions from 1 through the signal ceiling to SIG_DFL.
 ///
-/// Skips SIGKILL and SIGSTOP (cannot be caught/reset). If `sigaction` returns
-/// EINVAL (e.g., NPTL-reserved signals 32-33), the signal is silently skipped.
+/// On Linux, iterates standard signals (1..32) then real-time signals
+/// (SIGRTMIN..=SIGRTMAX), skipping the NPTL-reserved range (32..SIGRTMIN).
+/// On other platforms, iterates 1..=64 and silently skips EINVAL.
+///
+/// SIGKILL and SIGSTOP are always skipped (cannot be caught/reset).
 pub(crate) fn reset_signal_dispositions() {
-    let max = signal_ceiling();
-    for sig in 1..=max {
-        // Skip SIGKILL (9) and SIGSTOP (19)
+    let signals = signal_range();
+    for sig in signals {
         if sig == libc::SIGKILL || sig == libc::SIGSTOP {
             continue;
         }
@@ -67,33 +67,31 @@ pub(crate) fn reset_signal_dispositions() {
             if err.raw_os_error() != Some(libc::EINVAL) {
                 panic!("sigaction({sig}) failed: {err}");
             }
-            // EINVAL: signal cannot be caught (e.g., NPTL-reserved), skip
+            // EINVAL: signal cannot be caught, skip
         }
     }
 }
 
-/// Returns the signal ceiling for signal reset iteration.
+/// Returns the range of signal numbers to reset.
 ///
-/// On Linux, uses `libc::SIGRTMAX()`. On other platforms, falls back to 64.
-pub(crate) fn signal_ceiling() -> i32 {
+/// On Linux, returns standard signals (1..32) chained with real-time signals
+/// (SIGRTMIN..=SIGRTMAX), deliberately skipping the NPTL-reserved range
+/// (typically 32-33) that sits between standard and real-time signals.
+///
+/// On other platforms, returns 1..=64 (EINVAL skips invalid ones).
+fn signal_range() -> Vec<i32> {
     #[cfg(target_os = "linux")]
     {
-        unsafe { libc::SIGRTMAX() }
+        let rtmin = unsafe { libc::SIGRTMIN() };
+        let rtmax = unsafe { libc::SIGRTMAX() };
+        (1..32).chain(rtmin..=rtmax).collect()
     }
     #[cfg(not(target_os = "linux"))]
     {
         // macOS and other BSDs don't have real-time signals; 31 standard signals
         // but we iterate up to 64 to be safe (EINVAL will skip invalid ones)
-        64
+        (1..=64).collect()
     }
-}
-
-/// Returns the minimum real-time signal number.
-///
-/// On Linux, uses `libc::SIGRTMIN()`. On other platforms, returns 0 (no RT signals).
-#[cfg(target_os = "linux")]
-pub(crate) fn sigrtmin() -> i32 {
-    unsafe { libc::SIGRTMIN() }
 }
 
 /// Safe wrapper around `libc::dup2`. Duplicates `oldfd` onto `newfd`.
@@ -161,4 +159,12 @@ pub(crate) fn raw_initgroups(user: &std::ffi::CStr, group: libc::gid_t) -> Resul
     } else {
         Ok(())
     }
+}
+
+/// Returns a `BorrowedFd` for `AT_FDCWD`, the sentinel that means
+/// "resolve relative paths against the current working directory."
+pub(crate) fn at_fdcwd() -> std::os::fd::BorrowedFd<'static> {
+    // SAFETY: AT_FDCWD is a well-known sentinel value (-100 on Linux, -2 on
+    // macOS) that the kernel recognises; it does not alias any real fd.
+    unsafe { std::os::fd::BorrowedFd::borrow_raw(libc::AT_FDCWD) }
 }

@@ -149,6 +149,10 @@ impl DaemonConfig {
 
     /// Validates the configuration.
     ///
+    /// Performs minimal I/O: checks path existence, directory writability
+    /// (via `faccessat(AT_EACCESS)`), and queries the effective UID when a
+    /// user switch is configured. No files are created or modified.
+    ///
     /// # Errors
     ///
     /// Returns `DaemonizeError::ValidationError` if:
@@ -281,6 +285,9 @@ fn validate_parent_writable(
     path: &std::path::Path,
     name: &str,
 ) -> Result<(), DaemonizeError> {
+    use nix::fcntl::AtFlags;
+    use nix::unistd::AccessFlags;
+
     let parent = path.parent().ok_or_else(|| {
         DaemonizeError::ValidationError(format!("{name} path has no parent directory"))
     })?;
@@ -289,8 +296,14 @@ fn validate_parent_writable(
             "{name} parent directory does not exist"
         )));
     }
-    // Check writability using access(2)
-    match nix::unistd::access(parent, nix::unistd::AccessFlags::W_OK) {
+    // Check writability using faccessat(AT_EACCESS) which tests against the
+    // effective UID/GID rather than the real UID (important for setuid binaries).
+    match nix::unistd::faccessat(
+        crate::unsafe_ops::at_fdcwd(),
+        parent,
+        AccessFlags::W_OK,
+        AtFlags::AT_EACCESS,
+    ) {
         Ok(()) => Ok(()),
         Err(_) => Err(DaemonizeError::ValidationError(format!(
             "{name} parent directory is not writable"
@@ -509,5 +522,103 @@ mod tests {
         assert_send_sync::<DaemonConfig>();
         assert_send_sync::<crate::DaemonContext>();
         assert_send_sync::<DaemonizeError>();
+    }
+
+    #[test]
+    fn validate_chdir_must_be_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("not_a_dir");
+        std::fs::write(&file, "").unwrap();
+        let mut config = DaemonConfig::new();
+        config.chdir(&file);
+        assert!(matches!(
+            config.validate(),
+            Err(DaemonizeError::ValidationError(msg)) if msg.contains("not a directory")
+        ));
+    }
+
+    #[test]
+    fn validate_lockfile_stderr_overlap_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("file.log");
+        let path_str = path.to_str().unwrap();
+        let mut config = DaemonConfig::new();
+        config.lockfile(path_str).stderr(path_str);
+        assert!(matches!(
+            config.validate(),
+            Err(DaemonizeError::ValidationError(_))
+        ));
+    }
+
+    #[test]
+    fn validate_pidfile_stdout_overlap_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("file.log");
+        let path_str = path.to_str().unwrap();
+        let mut config = DaemonConfig::new();
+        config.pidfile(path_str).stdout(path_str);
+        assert!(matches!(
+            config.validate(),
+            Err(DaemonizeError::ValidationError(_))
+        ));
+    }
+
+    #[test]
+    fn validate_pidfile_parent_nonwritable() {
+        let mut config = DaemonConfig::new();
+        config.pidfile("/nonexistent_parent_dir_xyz/test.pid");
+        assert!(matches!(
+            config.validate(),
+            Err(DaemonizeError::ValidationError(msg)) if msg.contains("parent")
+        ));
+    }
+
+    #[test]
+    fn validate_stdout_parent_nonwritable() {
+        let mut config = DaemonConfig::new();
+        config.stdout("/nonexistent_parent_dir_xyz/test.log");
+        assert!(matches!(
+            config.validate(),
+            Err(DaemonizeError::ValidationError(msg)) if msg.contains("parent")
+        ));
+    }
+
+    #[test]
+    fn validate_stderr_parent_nonwritable() {
+        let mut config = DaemonConfig::new();
+        config.stderr("/nonexistent_parent_dir_xyz/test.log");
+        assert!(matches!(
+            config.validate(),
+            Err(DaemonizeError::ValidationError(msg)) if msg.contains("parent")
+        ));
+    }
+
+    #[test]
+    fn paths_same_canonicalize_fallback() {
+        // Paths that don't exist — canonicalize will fail, should fall back to byte comparison
+        assert!(paths_same(
+            std::path::Path::new("/nonexistent/a"),
+            std::path::Path::new("/nonexistent/a"),
+        ));
+        assert!(!paths_same(
+            std::path::Path::new("/nonexistent/a"),
+            std::path::Path::new("/nonexistent/b"),
+        ));
+    }
+
+    #[test]
+    fn display_preserves_message() {
+        let err = DaemonizeError::ValidationError("test message".into());
+        assert_eq!(err.to_string(), "test message");
+    }
+
+    #[test]
+    fn validate_rejects_invalid_config_before_fork() {
+        // Verify validate() catches errors that would otherwise only surface post-fork
+        let mut config = DaemonConfig::new();
+        config.pidfile("relative.pid");
+        let result = config.validate();
+        assert!(result.is_err());
+        // The important thing: this was checked without forking
     }
 }

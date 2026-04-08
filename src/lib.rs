@@ -334,4 +334,44 @@ mod tests {
         }));
         assert!(result.is_err());
     }
+
+    #[test]
+    fn exit_panic_contains_code() {
+        let config = DaemonConfig::new();
+        let mut forker = NullForker::first_parent();
+        let result = catch_unwind(std::panic::AssertUnwindSafe(|| {
+            daemonize_inner(&config, &mut forker)
+        }));
+        let panic_msg = result
+            .unwrap_err()
+            .downcast_ref::<String>()
+            .cloned()
+            .unwrap();
+        assert!(
+            panic_msg.contains("NullForker::exit(0)"),
+            "panic message should contain exit code, got: {panic_msg}"
+        );
+    }
+
+    #[test]
+    fn write_error_to_pipe_noop_with_none() {
+        // Should not panic or do anything
+        write_error_to_pipe(&None, &DaemonizeError::ForkFailed("test".into()));
+    }
+
+    #[test]
+    fn write_error_to_pipe_writes_protocol() {
+        let (rd, wr) = nix::unistd::pipe().unwrap();
+        let pipe_wr = Some(wr);
+        let err = DaemonizeError::ForkFailed("test error".into());
+        write_error_to_pipe(&pipe_wr, &err);
+        drop(pipe_wr);
+
+        let mut file = std::fs::File::from(rd);
+        let mut buf = Vec::new();
+        file.read_to_end(&mut buf).unwrap();
+
+        assert_eq!(buf[0], 71); // EX_OSERR
+        assert_eq!(std::str::from_utf8(&buf[1..]).unwrap(), "test error");
+    }
 }

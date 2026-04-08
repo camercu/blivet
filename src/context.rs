@@ -1,6 +1,6 @@
 use std::fmt;
 use std::io::{self, Write};
-use std::os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd};
+use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
 
 use nix::fcntl::Flock;
 
@@ -84,9 +84,13 @@ impl DaemonContext {
     /// Writes the error's exit code byte followed by the `Display` message to
     /// the notification pipe, then calls `_exit()`. The parent reads this,
     /// prints the message to stderr, and exits with the code.
+    ///
+    /// Uses `libc::_exit` rather than `std::process::exit` to avoid running
+    /// atexit handlers or flushing stdio buffers inherited from the pre-fork
+    /// parent, which could cause double-flush corruption or deadlocks.
+    #[allow(unsafe_code)]
     pub fn report_error(&mut self, err: &DaemonizeError) -> ! {
         if let Some(fd) = self.notify_pipe.take() {
-            let raw_fd = fd.as_raw_fd();
             let mut file = io::BufWriter::new(fd_to_file(fd));
             let msg = err.to_string();
             let code = err.exit_code();
@@ -95,10 +99,8 @@ impl DaemonContext {
             buf.extend_from_slice(msg.as_bytes());
             let _ = file.write_all(&buf);
             let _ = file.flush();
-            drop(file);
-            let _ = nix::unistd::close(raw_fd);
         }
-        std::process::exit(err.exit_code() as i32)
+        unsafe { libc::_exit(err.exit_code() as i32) }
     }
 }
 
@@ -182,5 +184,35 @@ mod tests {
         let ctx = DaemonContext::new(None, None);
         let debug = format!("{:?}", ctx);
         assert!(debug.contains("absent"));
+    }
+
+    #[test]
+    fn notify_parent_noop_without_pipe() {
+        let mut ctx = DaemonContext::new(None, None);
+        assert!(ctx.notify_parent().is_ok());
+    }
+
+    #[test]
+    fn lockfile_fd_returns_some_with_lockfile() {
+        use nix::fcntl::{open, Flock, FlockArg, OFlag};
+        use nix::sys::stat::Mode;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.lock");
+        let fd = open(
+            &path,
+            OFlag::O_WRONLY | OFlag::O_CREAT | OFlag::O_CLOEXEC,
+            Mode::from_bits_truncate(0o644),
+        )
+        .unwrap();
+        let flock = Flock::lock(fd, FlockArg::LockExclusiveNonblock).unwrap();
+        let ctx = DaemonContext::new(Some(flock), None);
+        assert!(ctx.lockfile_fd().is_some());
+    }
+
+    #[test]
+    fn lockfile_fd_returns_none_without_lockfile() {
+        let ctx = DaemonContext::new(None, None);
+        assert!(ctx.lockfile_fd().is_none());
     }
 }
