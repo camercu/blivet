@@ -13,14 +13,14 @@ WORKDIR /src
 # Cache dependencies by copying manifests first
 COPY Cargo.toml Cargo.lock ./
 RUN mkdir src && echo '' > src/lib.rs && echo 'fn main() {}' > src/main.rs \
-    && cargo build --tests 2>/dev/null || true \
+    && cargo build --locked --tests 2>/dev/null || true \
     && rm -rf src
 
 # Copy full source
 COPY . .
 
 # Build tests (this layer is cached as long as source doesn't change)
-RUN cargo build --tests
+RUN cargo build --locked --tests
 
 # Run all tests including root-only and Linux-specific
-CMD ["cargo", "test", "--", "--include-ignored"]
+CMD ["cargo", "test", "--locked", "--", "--include-ignored"]

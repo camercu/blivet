@@ -14,7 +14,10 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  CARGO_LOCKED: --locked
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+# ── Fast tier ──────────────────────────────────────────────
 
 jobs:
   ci:
@@ -29,6 +32,7 @@ jobs:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@just
+      - uses: taiki-e/install-action@cargo-deny
       - name: CI
         run: just ci
 
@@ -50,15 +54,111 @@ jobs:
       - name: Docker test
         run: just docker-test
 
-  stable-advisory:
+  commitlint:
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt, clippy
-      - uses: Swatinem/rust-cache@v2
-      - uses: taiki-e/install-action@just
-      - name: CI (advisory)
-        run: just ci
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: npm ci
+      - name: Validate PR commits
+        run: >-
+          npx commitlint
+          --from ${{ github.event.pull_request.base.sha }}
+          --to ${{ github.event.pull_request.head.sha }}
+          --verbose
+
+  # ── Slow tier (VM-based smoke tests) ──────────────────────
+
+  bsd-smoke:
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - name: freebsd
+            version: '14.2'
+          - name: openbsd
+            version: '7.6'
+          - name: netbsd
+            version: '10.1'
+    runs-on: ubuntu-latest
+    name: smoke (${{ matrix.os.name }})
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cross-platform-actions/action@v0.27.0
+        with:
+          operating_system: ${{ matrix.os.name }}
+          version: ${{ matrix.os.version }}
+          shell: bash
+          run: |
+            set -euo pipefail
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
+            . "$HOME/.cargo/env"
+            cargo build --locked
+            PIDFILE="/tmp/daemonize-smoke-$$.pid"
+            ./target/debug/daemonize -p "$PIDFILE" -- sleep 30
+            for i in $(seq 1 10); do
+              [ -f "$PIDFILE" ] && break
+              sleep 1
+            done
+            test -f "$PIDFILE" || { echo "FAIL: pidfile not created"; exit 1; }
+            PID=$(cat "$PIDFILE")
+            kill -0 "$PID" || { echo "FAIL: daemon not running"; exit 1; }
+            kill "$PID"
+            echo "PASS: smoke test on ${{ matrix.os.name }}"
+
+  omnios-smoke:
+    runs-on: ubuntu-latest
+    name: smoke (omnios)
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cross-platform-actions/action@v0.27.0
+        with:
+          operating_system: omnios
+          version: 'r151052'
+          shell: bash
+          run: |
+            set -euo pipefail
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
+            . "$HOME/.cargo/env"
+            cargo build --locked
+            PIDFILE="/tmp/daemonize-smoke-$$.pid"
+            ./target/debug/daemonize -p "$PIDFILE" -- sleep 30
+            for i in $(seq 1 10); do
+              [ -f "$PIDFILE" ] && break
+              sleep 1
+            done
+            test -f "$PIDFILE" || { echo "FAIL: pidfile not created"; exit 1; }
+            PID=$(cat "$PIDFILE")
+            kill -0 "$PID" || { echo "FAIL: daemon not running"; exit 1; }
+            kill "$PID"
+            echo "PASS: smoke test on omnios"
+
+  # ── Gate (single required status check) ───────────────────
+
+  gate:
+    if: always()
+    needs: [ci, msrv, docker-test, commitlint, bsd-smoke, omnios-smoke]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check results
+        run: |
+          results=(
+            "${{ needs.ci.result }}"
+            "${{ needs.msrv.result }}"
+            "${{ needs.docker-test.result }}"
+            "${{ needs.commitlint.result }}"
+            "${{ needs.bsd-smoke.result }}"
+            "${{ needs.omnios-smoke.result }}"
+          )
+          for r in "${results[@]}"; do
+            case "$r" in
+              success|skipped) ;;
+              *) echo "FAIL: job result=$r"; exit 1 ;;
+            esac
+          done
+          echo "All jobs passed."

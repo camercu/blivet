@@ -13,5 +13,6 @@ pkgs.mkShell {
     docker-client
     nodejs
     pandoc
+    cargo-deny
   ];
 }
