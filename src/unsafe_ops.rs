@@ -92,8 +92,8 @@ pub(crate) fn reset_signal_dispositions() {
 fn signal_range() -> Vec<i32> {
     #[cfg(target_os = "linux")]
     {
-        let rtmin = unsafe { libc::SIGRTMIN() };
-        let rtmax = unsafe { libc::SIGRTMAX() };
+        let rtmin = libc::SIGRTMIN();
+        let rtmax = libc::SIGRTMAX();
         (1..32).chain(rtmin..=rtmax).collect()
     }
     #[cfg(not(target_os = "linux"))]
