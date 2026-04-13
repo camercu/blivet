@@ -10,7 +10,7 @@ repos:
     hooks:
       - id: just-check
         name: just check
-        entry: just check
+        entry: nix-shell --run 'just check'
         language: system
         pass_filenames: false
         stages: [pre-commit]

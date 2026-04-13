@@ -46,19 +46,15 @@ pub(crate) mod null_forker {
 
         /// Both forks return Child.
         pub(crate) fn both_child() -> Self {
-            Self::new(
-                vec![
-                    Ok(ForkResult::Child),
-                    Ok(ForkResult::Child),
-                ],
-                Ok(()),
-            )
+            Self::new(vec![Ok(ForkResult::Child), Ok(ForkResult::Child)], Ok(()))
         }
 
         /// First fork returns Parent.
         pub(crate) fn first_parent() -> Self {
             Self::new(
-                vec![Ok(ForkResult::Parent { child: Pid::from_raw(42) })],
+                vec![Ok(ForkResult::Parent {
+                    child: Pid::from_raw(42),
+                })],
                 Ok(()),
             )
         }
@@ -68,7 +64,9 @@ pub(crate) mod null_forker {
             Self::new(
                 vec![
                     Ok(ForkResult::Child),
-                    Ok(ForkResult::Parent { child: Pid::from_raw(43) }),
+                    Ok(ForkResult::Parent {
+                        child: Pid::from_raw(43),
+                    }),
                 ],
                 Ok(()),
             )

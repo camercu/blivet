@@ -210,6 +210,8 @@ mod tests {
         let flock = Flock::lock(fd, FlockArg::LockExclusiveNonblock).unwrap();
         let ctx = DaemonContext::new(Some(flock), None);
         assert!(ctx.lockfile_fd().is_some());
+        // Drop ctx explicitly to release the lock before tempdir cleanup
+        drop(ctx);
     }
 
     #[test]

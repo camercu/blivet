@@ -110,7 +110,11 @@ pub fn wait_for_pidfile(path: &Path, timeout_ms: u64) -> Option<u32> {
 pub fn wait_for_exit(pid: u32, timeout_ms: u64) -> bool {
     retry(|_| {
         let ret = unsafe { libc::kill(pid as i32, 0) };
-        if ret != 0 { Ok(()) } else { Err(()) }
+        if ret != 0 {
+            Ok(())
+        } else {
+            Err(())
+        }
     })
     .wait(wait::fixed(Duration::from_millis(50)))
     .stop(stop::elapsed(Duration::from_millis(timeout_ms)))

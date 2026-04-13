@@ -15,6 +15,30 @@ use crate::error::DaemonizeError;
 use crate::unsafe_ops;
 use crate::util::paths_same;
 
+// ---- Plan/Execute types for redirect_output ----
+
+/// Describes what to do with a single output stream (stdout or stderr).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum StreamAction {
+    /// Leave the stream as-is (already redirected to /dev/null).
+    None,
+    /// Open a file and redirect the target fd to it.
+    OpenAndRedirect {
+        path: PathBuf,
+        flags: OFlag,
+        target_fd: i32,
+    },
+    /// Dup an already-open fd to the target fd.
+    DupFrom { source_fd: i32, target_fd: i32 },
+}
+
+/// Plan for redirecting stdout and stderr.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct OutputRedirectPlan {
+    pub(crate) stdout: StreamAction,
+    pub(crate) stderr: StreamAction,
+}
+
 /// Step 4: Set process umask.
 pub(crate) fn set_umask(mode: Mode) {
     nix::sys::stat::umask(mode);
@@ -33,13 +57,12 @@ pub(crate) fn change_dir(path: &Path) -> Result<(), DaemonizeError> {
 /// Panics if /dev/null cannot be opened or dup2 fails.
 pub(crate) fn redirect_to_devnull() {
     let devnull_path = c"/dev/null";
-    let devnull_raw = unsafe_ops::raw_open(devnull_path, libc::O_RDWR, 0)
-        .expect("failed to open /dev/null");
+    let devnull_raw =
+        unsafe_ops::raw_open(devnull_path, libc::O_RDWR, 0).expect("failed to open /dev/null");
 
     for &target_fd in &[0, 1, 2] {
         if devnull_raw != target_fd {
-            unsafe_ops::raw_dup2(devnull_raw, target_fd)
-                .expect("failed to dup2 /dev/null");
+            unsafe_ops::raw_dup2(devnull_raw, target_fd).expect("failed to dup2 /dev/null");
         }
     }
     if devnull_raw > 2 {
@@ -54,7 +77,9 @@ pub(crate) fn open_and_lock(path: &Path) -> Result<Flock<OwnedFd>, DaemonizeErro
         OFlag::O_WRONLY | OFlag::O_CREAT | OFlag::O_CLOEXEC,
         Mode::from_bits_truncate(0o644),
     )
-    .map_err(|e| DaemonizeError::LockfileError(format!("cannot open lockfile {}: {e}", path.display())))?;
+    .map_err(|e| {
+        DaemonizeError::LockfileError(format!("cannot open lockfile {}: {e}", path.display()))
+    })?;
 
     Flock::lock(fd, FlockArg::LockExclusiveNonblock).map_err(|(_fd, e)| {
         if e == nix::errno::Errno::EWOULDBLOCK {
@@ -97,8 +122,9 @@ pub(crate) fn write_pidfile(
             .map_err(|e| DaemonizeError::PidfileError(format!("write pidfile: {e}")))?;
     } else {
         // Open, write, close
-        std::fs::write(pidfile_path, content.as_bytes())
-            .map_err(|e| DaemonizeError::PidfileError(format!("write pidfile {}: {e}", pidfile_path.display())))?;
+        std::fs::write(pidfile_path, content.as_bytes()).map_err(|e| {
+            DaemonizeError::PidfileError(format!("write pidfile {}: {e}", pidfile_path.display()))
+        })?;
     }
 
     Ok(())
@@ -168,6 +194,106 @@ pub(crate) fn switch_user(username: &str) -> Result<(), DaemonizeError> {
     Ok(())
 }
 
+/// Build an [`OutputRedirectPlan`] describing how to redirect stdout/stderr.
+///
+/// This is pure logic with no side effects — it decides *what* to do based on
+/// the configured paths and append flag, without touching any file descriptors.
+pub(crate) fn plan_output_redirect(
+    stdout: Option<&PathBuf>,
+    stderr: Option<&PathBuf>,
+    append: bool,
+) -> OutputRedirectPlan {
+    let mut flags = OFlag::O_WRONLY | OFlag::O_CREAT;
+    if append {
+        flags |= OFlag::O_APPEND;
+    } else {
+        flags |= OFlag::O_TRUNC;
+    }
+
+    let same_path = match (stdout, stderr) {
+        (Some(out), Some(err)) => paths_same(out, err),
+        _ => false,
+    };
+
+    let stdout_action = match stdout {
+        Some(path) => StreamAction::OpenAndRedirect {
+            path: path.clone(),
+            flags,
+            target_fd: 1,
+        },
+        None => StreamAction::None,
+    };
+
+    let stderr_action = if same_path {
+        StreamAction::DupFrom {
+            source_fd: 1,
+            target_fd: 2,
+        }
+    } else {
+        match stderr {
+            Some(path) => StreamAction::OpenAndRedirect {
+                path: path.clone(),
+                flags,
+                target_fd: 2,
+            },
+            None => StreamAction::None,
+        }
+    };
+
+    OutputRedirectPlan {
+        stdout: stdout_action,
+        stderr: stderr_action,
+    }
+}
+
+/// Execute a single [`StreamAction`], performing the actual fd operations.
+fn execute_stream_action(action: &StreamAction) -> Result<(), DaemonizeError> {
+    match action {
+        StreamAction::None => Ok(()),
+        StreamAction::OpenAndRedirect {
+            path,
+            flags,
+            target_fd,
+        } => {
+            let mode = Mode::from_bits_truncate(0o644);
+            let fd = open(path, *flags, mode).map_err(|e| {
+                DaemonizeError::OutputFileError(format!(
+                    "cannot open output file {}: {e}",
+                    path.display()
+                ))
+            })?;
+            let raw = fd.as_raw_fd();
+            if raw != *target_fd {
+                unsafe_ops::raw_dup2(raw, *target_fd).map_err(|e| {
+                    DaemonizeError::OutputFileError(format!("dup2 fd {target_fd}: {e}"))
+                })?;
+                unsafe_ops::raw_close(raw);
+            }
+            // Prevent OwnedFd destructor from closing the fd — ownership is
+            // transferred to the target fd slot via dup2, or the fd already
+            // was the target and must stay open.
+            std::mem::forget(fd);
+            Ok(())
+        }
+        StreamAction::DupFrom {
+            source_fd,
+            target_fd,
+        } => {
+            unsafe_ops::raw_dup2(*source_fd, *target_fd).map_err(|e| {
+                DaemonizeError::OutputFileError(format!("dup2 fd {source_fd} -> {target_fd}: {e}"))
+            })?;
+            Ok(())
+        }
+    }
+}
+
+/// Execute an [`OutputRedirectPlan`], performing all fd operations.
+pub(crate) fn execute_output_redirect(plan: &OutputRedirectPlan) -> Result<(), DaemonizeError> {
+    execute_stream_action(&plan.stdout)?;
+    execute_stream_action(&plan.stderr)?;
+    Ok(())
+}
+
 /// Step 13: Redirect stdout/stderr to configured files.
 ///
 /// Opened after user switching so files have correct ownership.
@@ -178,59 +304,26 @@ pub(crate) fn redirect_output(
     stderr: Option<&PathBuf>,
     append: bool,
 ) -> Result<(), DaemonizeError> {
-    let mut flags = OFlag::O_WRONLY | OFlag::O_CREAT;
-    if append {
-        flags |= OFlag::O_APPEND;
-    } else {
-        flags |= OFlag::O_TRUNC;
-    }
-    let mode = Mode::from_bits_truncate(0o644);
+    let plan = plan_output_redirect(stdout, stderr, append);
+    execute_output_redirect(&plan)
+}
 
-    let same_path = match (stdout, stderr) {
-        (Some(out), Some(err)) => paths_same(out, err),
-        _ => false,
-    };
+/// Query the process fd limit via getrlimit.
+///
+/// # Panics
+///
+/// Panics if getrlimit fails.
+pub(crate) fn get_max_fd() -> i32 {
+    let limit = nix::sys::resource::getrlimit(nix::sys::resource::Resource::RLIMIT_NOFILE)
+        .expect("getrlimit(RLIMIT_NOFILE) failed");
+    limit.0 as i32
+}
 
-    if let Some(out_path) = stdout {
-        let fd = open(out_path, flags, mode)
-            .map_err(|e| DaemonizeError::OutputFileError(format!(
-                "cannot open stdout file {}: {e}", out_path.display()
-            )))?;
-        let raw = fd.as_raw_fd();
-        if raw != 1 {
-            unsafe_ops::raw_dup2(raw, 1).map_err(|e| DaemonizeError::OutputFileError(format!(
-                "dup2 stdout: {e}"
-            )))?;
-            unsafe_ops::raw_close(raw);
-        }
-        // Prevent OwnedFd destructor from closing the fd — ownership is
-        // transferred to the target fd slot (1) via dup2, or the fd already
-        // was 1 and must stay open.
-        std::mem::forget(fd);
-    }
-
-    if let Some(err_path) = stderr {
-        if same_path {
-            unsafe_ops::raw_dup2(1, 2).map_err(|e| DaemonizeError::OutputFileError(format!(
-                "dup2 stderr (same path): {e}"
-            )))?;
-        } else {
-            let fd = open(err_path, flags, mode)
-                .map_err(|e| DaemonizeError::OutputFileError(format!(
-                    "cannot open stderr file {}: {e}", err_path.display()
-                )))?;
-            let raw = fd.as_raw_fd();
-            if raw != 2 {
-                unsafe_ops::raw_dup2(raw, 2).map_err(|e| DaemonizeError::OutputFileError(format!(
-                    "dup2 stderr: {e}"
-                )))?;
-                unsafe_ops::raw_close(raw);
-            }
-            std::mem::forget(fd);
-        }
-    }
-
-    Ok(())
+/// Return an iterator of fd numbers to close, filtering out skip_fds.
+///
+/// Pure logic — no side effects.
+pub(crate) fn fds_to_close(max_fd: i32, skip_fds: &[i32]) -> impl Iterator<Item = i32> + '_ {
+    (3..max_fd).filter(move |fd| !skip_fds.contains(fd))
 }
 
 /// Step 14: Close inherited file descriptors.
@@ -241,14 +334,8 @@ pub(crate) fn redirect_output(
 ///
 /// Panics if getrlimit fails.
 pub(crate) fn close_inherited_fds(skip_fds: &[i32]) {
-    let limit = nix::sys::resource::getrlimit(nix::sys::resource::Resource::RLIMIT_NOFILE)
-        .expect("getrlimit(RLIMIT_NOFILE) failed");
-    let max_fd = limit.0 as i32; // rlim_cur
-
-    for fd in 3..max_fd {
-        if skip_fds.contains(&fd) {
-            continue;
-        }
+    let max_fd = get_max_fd();
+    for fd in fds_to_close(max_fd, skip_fds) {
         unsafe_ops::raw_close(fd);
     }
 }
@@ -472,16 +559,112 @@ mod tests {
         let _ = unsafe { sigaction(Signal::SIGUSR1, &old) };
     }
 
-    // --- Step 13: redirect output ---
+    // --- Step 13: redirect output (pure plan tests) ---
+
+    #[test]
+    fn plan_stdout_only_truncate() {
+        let path = PathBuf::from("/tmp/out.log");
+        let plan = plan_output_redirect(Some(&path), None, false);
+        assert_eq!(
+            plan.stdout,
+            StreamAction::OpenAndRedirect {
+                path: path.clone(),
+                flags: OFlag::O_WRONLY | OFlag::O_CREAT | OFlag::O_TRUNC,
+                target_fd: 1,
+            }
+        );
+        assert_eq!(plan.stderr, StreamAction::None);
+    }
+
+    #[test]
+    fn plan_stderr_only() {
+        let path = PathBuf::from("/tmp/err.log");
+        let plan = plan_output_redirect(None, Some(&path), false);
+        assert_eq!(plan.stdout, StreamAction::None);
+        assert_eq!(
+            plan.stderr,
+            StreamAction::OpenAndRedirect {
+                path: path.clone(),
+                flags: OFlag::O_WRONLY | OFlag::O_CREAT | OFlag::O_TRUNC,
+                target_fd: 2,
+            }
+        );
+    }
+
+    #[test]
+    fn plan_both_different_paths() {
+        let out = PathBuf::from("/tmp/out.log");
+        let err = PathBuf::from("/tmp/err.log");
+        let plan = plan_output_redirect(Some(&out), Some(&err), false);
+        assert!(matches!(
+            plan.stdout,
+            StreamAction::OpenAndRedirect { target_fd: 1, .. }
+        ));
+        assert!(matches!(
+            plan.stderr,
+            StreamAction::OpenAndRedirect { target_fd: 2, .. }
+        ));
+    }
+
+    #[test]
+    fn plan_both_same_path() {
+        let path = PathBuf::from("/tmp/combined.log");
+        let plan = plan_output_redirect(Some(&path), Some(&path), false);
+        assert!(matches!(
+            plan.stdout,
+            StreamAction::OpenAndRedirect { target_fd: 1, .. }
+        ));
+        assert_eq!(
+            plan.stderr,
+            StreamAction::DupFrom {
+                source_fd: 1,
+                target_fd: 2,
+            }
+        );
+    }
+
+    #[test]
+    fn plan_append_flag() {
+        let path = PathBuf::from("/tmp/out.log");
+        let plan = plan_output_redirect(Some(&path), None, true);
+        if let StreamAction::OpenAndRedirect { flags, .. } = plan.stdout {
+            assert!(flags.contains(OFlag::O_APPEND));
+            assert!(!flags.contains(OFlag::O_TRUNC));
+        } else {
+            panic!("expected OpenAndRedirect");
+        }
+    }
+
+    #[test]
+    fn plan_truncate_flag() {
+        let path = PathBuf::from("/tmp/out.log");
+        let plan = plan_output_redirect(Some(&path), None, false);
+        if let StreamAction::OpenAndRedirect { flags, .. } = plan.stdout {
+            assert!(flags.contains(OFlag::O_TRUNC));
+            assert!(!flags.contains(OFlag::O_APPEND));
+        } else {
+            panic!("expected OpenAndRedirect");
+        }
+    }
+
+    #[test]
+    fn plan_neither() {
+        let plan = plan_output_redirect(None, None, false);
+        assert_eq!(plan.stdout, StreamAction::None);
+        assert_eq!(plan.stderr, StreamAction::None);
+    }
+
+    // --- Step 13: redirect output (executor smoke tests, serial) ---
 
     #[test]
     #[serial]
-    fn redirect_output_creates_files() {
+    fn execute_redirect_creates_files() {
         let _restore = SavedFds::new(&[1, 2]);
         let dir = tempfile::tempdir().unwrap();
         let stdout_path = dir.path().join("stdout.log");
         let stderr_path = dir.path().join("stderr.log");
-        let result = redirect_output(Some(&stdout_path), Some(&stderr_path), false);
+        let plan = plan_output_redirect(Some(&stdout_path), Some(&stderr_path), false);
+        let result = execute_output_redirect(&plan);
         assert!(result.is_ok());
         assert!(stdout_path.exists());
         assert!(stderr_path.exists());
@@ -489,39 +672,86 @@ mod tests {
 
     #[test]
     #[serial]
-    fn redirect_output_truncate_overwrites() {
+    fn execute_redirect_truncate_vs_append() {
         let _restore = SavedFds::new(&[1]);
         let dir = tempfile::tempdir().unwrap();
         let stdout_path = dir.path().join("stdout.log");
+
+        // Truncate mode
         std::fs::write(&stdout_path, "old content\n").unwrap();
-
         redirect_output(Some(&stdout_path), None, false).unwrap();
-
         unsafe_ops::raw_write(1, b"new content\n").unwrap();
-
         let content = std::fs::read_to_string(&stdout_path).unwrap();
         assert!(!content.contains("old content"), "should have truncated");
-        assert!(content.contains("new content"), "should have new content");
+        assert!(content.contains("new content"));
+
+        // Append mode
+        redirect_output(Some(&stdout_path), None, true).unwrap();
+        unsafe_ops::raw_write(1, b"appended\n").unwrap();
+        let content = std::fs::read_to_string(&stdout_path).unwrap();
+        assert!(content.contains("new content"), "should preserve existing");
+        assert!(content.contains("appended"));
     }
 
     #[test]
     #[serial]
-    fn redirect_output_append_preserves() {
-        let _restore = SavedFds::new(&[1]);
+    fn execute_redirect_dup_from() {
+        let _restore = SavedFds::new(&[1, 2]);
         let dir = tempfile::tempdir().unwrap();
-        let stdout_path = dir.path().join("stdout.log");
-        std::fs::write(&stdout_path, "old content\n").unwrap();
+        let combined = dir.path().join("combined.log");
+        let plan = plan_output_redirect(Some(&combined), Some(&combined), false);
+        execute_output_redirect(&plan).unwrap();
 
-        redirect_output(Some(&stdout_path), None, true).unwrap();
+        unsafe_ops::raw_write(1, b"stdout\n").unwrap();
+        unsafe_ops::raw_write(2, b"stderr\n").unwrap();
 
-        unsafe_ops::raw_write(1, b"new content\n").unwrap();
-
-        let content = std::fs::read_to_string(&stdout_path).unwrap();
-        assert!(content.contains("old content"), "should preserve old content");
-        assert!(content.contains("new content"), "should have new content");
+        let content = std::fs::read_to_string(&combined).unwrap();
+        assert!(content.contains("stdout"));
+        assert!(content.contains("stderr"));
     }
 
-    // --- Step 14: close inherited fds ---
+    #[test]
+    #[serial]
+    fn execute_redirect_stderr_only() {
+        let _restore = SavedFds::new(&[2]);
+        let dir = tempfile::tempdir().unwrap();
+        let stderr_path = dir.path().join("stderr.log");
+        let plan = plan_output_redirect(None, Some(&stderr_path), false);
+        execute_output_redirect(&plan).unwrap();
+        assert!(stderr_path.exists());
+
+        unsafe_ops::raw_write(2, b"stderr content\n").unwrap();
+        let content = std::fs::read_to_string(&stderr_path).unwrap();
+        assert!(content.contains("stderr content"));
+    }
+
+    // --- Step 14: close inherited fds (pure plan tests) ---
+
+    #[test]
+    fn fds_to_close_skips_correctly() {
+        let result: Vec<i32> = fds_to_close(10, &[4, 7]).collect();
+        assert_eq!(result, vec![3, 5, 6, 8, 9]);
+    }
+
+    #[test]
+    fn fds_to_close_empty_skip() {
+        let result: Vec<i32> = fds_to_close(6, &[]).collect();
+        assert_eq!(result, vec![3, 4, 5]);
+    }
+
+    #[test]
+    fn fds_to_close_all_skipped() {
+        let result: Vec<i32> = fds_to_close(6, &[3, 4, 5]).collect();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn fds_to_close_max_below_3() {
+        let result: Vec<i32> = fds_to_close(2, &[]).collect();
+        assert!(result.is_empty());
+    }
+
+    // --- Step 14: close inherited fds (executor smoke test, serial) ---
 
     #[test]
     #[serial]
@@ -550,37 +780,5 @@ mod tests {
         let contents = std::fs::read_to_string(&pidfile).unwrap();
         let pid: u32 = contents.trim().parse().unwrap();
         assert_eq!(pid, std::process::id());
-    }
-
-    #[test]
-    #[serial]
-    fn redirect_output_stderr_only() {
-        let _restore = SavedFds::new(&[2]);
-        let dir = tempfile::tempdir().unwrap();
-        let stderr_path = dir.path().join("stderr.log");
-        let result = redirect_output(None, Some(&stderr_path), false);
-        assert!(result.is_ok());
-        assert!(stderr_path.exists());
-
-        unsafe_ops::raw_write(2, b"stderr content\n").unwrap();
-        let content = std::fs::read_to_string(&stderr_path).unwrap();
-        assert!(content.contains("stderr content"));
-    }
-
-    #[test]
-    #[serial]
-    fn redirect_output_same_path_uses_dup2() {
-        let _restore = SavedFds::new(&[1, 2]);
-        let dir = tempfile::tempdir().unwrap();
-        let combined = dir.path().join("combined.log");
-        let result = redirect_output(Some(&combined), Some(&combined), false);
-        assert!(result.is_ok());
-
-        unsafe_ops::raw_write(1, b"stdout\n").unwrap();
-        unsafe_ops::raw_write(2, b"stderr\n").unwrap();
-
-        let content = std::fs::read_to_string(&combined).unwrap();
-        assert!(content.contains("stdout"), "should have stdout");
-        assert!(content.contains("stderr"), "should have stderr");
     }
 }

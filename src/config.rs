@@ -272,10 +272,7 @@ impl DaemonConfig {
     }
 }
 
-fn validate_absolute(
-    path: &std::path::Path,
-    name: &str,
-) -> Result<(), DaemonizeError> {
+fn validate_absolute(path: &std::path::Path, name: &str) -> Result<(), DaemonizeError> {
     if !path.is_absolute() {
         return Err(DaemonizeError::ValidationError(format!(
             "{name} path must be absolute"
@@ -284,10 +281,7 @@ fn validate_absolute(
     Ok(())
 }
 
-fn validate_parent_writable(
-    path: &std::path::Path,
-    name: &str,
-) -> Result<(), DaemonizeError> {
+fn validate_parent_writable(path: &std::path::Path, name: &str) -> Result<(), DaemonizeError> {
     use nix::fcntl::AtFlags;
     use nix::unistd::AccessFlags;
 
@@ -497,17 +491,29 @@ mod tests {
 
     #[test]
     fn exit_codes() {
-        assert_eq!(DaemonizeError::ValidationError(String::new()).exit_code(), 64);
-        assert_eq!(DaemonizeError::ProgramNotFound(String::new()).exit_code(), 66);
+        assert_eq!(
+            DaemonizeError::ValidationError(String::new()).exit_code(),
+            64
+        );
+        assert_eq!(
+            DaemonizeError::ProgramNotFound(String::new()).exit_code(),
+            66
+        );
         assert_eq!(DaemonizeError::UserNotFound(String::new()).exit_code(), 67);
         assert_eq!(DaemonizeError::LockConflict(String::new()).exit_code(), 69);
         assert_eq!(DaemonizeError::LockfileError(String::new()).exit_code(), 73);
         assert_eq!(DaemonizeError::ForkFailed(String::new()).exit_code(), 71);
         assert_eq!(DaemonizeError::SetsidFailed(String::new()).exit_code(), 71);
         assert_eq!(DaemonizeError::ChdirFailed(String::new()).exit_code(), 71);
-        assert_eq!(DaemonizeError::PermissionDenied(String::new()).exit_code(), 77);
+        assert_eq!(
+            DaemonizeError::PermissionDenied(String::new()).exit_code(),
+            77
+        );
         assert_eq!(DaemonizeError::PidfileError(String::new()).exit_code(), 73);
-        assert_eq!(DaemonizeError::OutputFileError(String::new()).exit_code(), 73);
+        assert_eq!(
+            DaemonizeError::OutputFileError(String::new()).exit_code(),
+            73
+        );
         assert_eq!(DaemonizeError::ExecFailed(String::new()).exit_code(), 71);
     }
 

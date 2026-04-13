@@ -25,8 +25,7 @@ impl Forker for RealForker {
     fn create_notification_pipe(&mut self) -> Option<(OwnedFd, OwnedFd)> {
         use nix::fcntl::{fcntl, FcntlArg, FdFlag};
 
-        let (rd, wr) = nix::unistd::pipe()
-            .expect("failed to create notification pipe");
+        let (rd, wr) = nix::unistd::pipe().expect("failed to create notification pipe");
         // Set O_CLOEXEC on both ends
         fcntl(rd.as_fd(), FcntlArg::F_SETFD(FdFlag::FD_CLOEXEC))
             .expect("failed to set CLOEXEC on pipe read end");
@@ -123,7 +122,11 @@ pub(crate) fn raw_close(fd: i32) {
 }
 
 /// Safe wrapper around `libc::open`.
-pub(crate) fn raw_open(path: &std::ffi::CStr, flags: i32, mode: libc::mode_t) -> Result<i32, nix::errno::Errno> {
+pub(crate) fn raw_open(
+    path: &std::ffi::CStr,
+    flags: i32,
+    mode: libc::mode_t,
+) -> Result<i32, nix::errno::Errno> {
     let ret = unsafe { libc::open(path.as_ptr(), flags, mode as libc::c_uint) };
     if ret < 0 {
         Err(nix::errno::Errno::last())
@@ -163,7 +166,10 @@ pub(crate) fn raw_write(fd: i32, buf: &[u8]) -> Result<usize, nix::errno::Errno>
 }
 
 /// Safe wrapper around `libc::initgroups`.
-pub(crate) fn raw_initgroups(user: &std::ffi::CStr, group: libc::gid_t) -> Result<(), nix::errno::Errno> {
+pub(crate) fn raw_initgroups(
+    user: &std::ffi::CStr,
+    group: libc::gid_t,
+) -> Result<(), nix::errno::Errno> {
     let ret = unsafe { libc::initgroups(user.as_ptr(), group as _) };
     if ret < 0 {
         Err(nix::errno::Errno::last())

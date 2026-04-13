@@ -186,7 +186,10 @@ fn append_mode_preserves_existing_content() {
     std::thread::sleep(std::time::Duration::from_millis(500));
 
     let content = std::fs::read_to_string(&stdout_file).unwrap();
-    assert!(content.contains("existing"), "should preserve existing content");
+    assert!(
+        content.contains("existing"),
+        "should preserve existing content"
+    );
     assert!(content.contains("appended"), "should append new content");
 
     kill_process(pid);
@@ -217,13 +220,7 @@ fn lockfile_exclusion_second_instance_fails() {
 
     // Second instance with same lockfile should fail
     let output2 = daemonize_cmd()
-        .args([
-            "-l",
-            lockfile.to_str().unwrap(),
-            "--",
-            "sleep",
-            "30",
-        ])
+        .args(["-l", lockfile.to_str().unwrap(), "--", "sleep", "30"])
         .output()
         .unwrap();
 
@@ -270,14 +267,7 @@ fn verbose_mode_prints_diagnostics() {
     let pidfile = dir.path().join("test.pid");
 
     let output = daemonize_cmd()
-        .args([
-            "-v",
-            "-p",
-            pidfile.to_str().unwrap(),
-            "--",
-            "sleep",
-            "5",
-        ])
+        .args(["-v", "-p", pidfile.to_str().unwrap(), "--", "sleep", "5"])
         .output()
         .unwrap();
 
@@ -460,10 +450,7 @@ fn truncate_mode_overwrites_existing() {
         !content.contains("old_content_should_be_gone"),
         "truncate should remove old content"
     );
-    assert!(
-        content.contains("new_content"),
-        "should have new content"
-    );
+    assert!(content.contains("new_content"), "should have new content");
 
     kill_process(pid);
 }
@@ -479,13 +466,7 @@ fn parent_waits_for_exec_before_exiting() {
     // exec succeeds (EOF on pipe) or the daemon signals readiness.
     let start = Instant::now();
     let output = daemonize_cmd()
-        .args([
-            "-p",
-            pidfile.to_str().unwrap(),
-            "--",
-            "sleep",
-            "30",
-        ])
+        .args(["-p", pidfile.to_str().unwrap(), "--", "sleep", "30"])
         .output()
         .unwrap();
     let elapsed = start.elapsed();
@@ -567,7 +548,13 @@ fn permission_denied_user_switch_without_root_exits_77() {
 #[test]
 fn lockfile_nonwritable_parent_exits_73_or_64() {
     let output = daemonize_cmd()
-        .args(["-l", "/nonexistent_parent_dir/test.lock", "--", "sleep", "1"])
+        .args([
+            "-l",
+            "/nonexistent_parent_dir/test.lock",
+            "--",
+            "sleep",
+            "1",
+        ])
         .output()
         .unwrap();
 
@@ -733,8 +720,14 @@ fn multiple_env_vars() {
     std::thread::sleep(Duration::from_millis(500));
 
     let content = std::fs::read_to_string(&env_file).unwrap_or_default();
-    assert!(content.contains("alpha"), "should have VAR_A, got: {content}");
-    assert!(content.contains("beta"), "should have VAR_B, got: {content}");
+    assert!(
+        content.contains("alpha"),
+        "should have VAR_A, got: {content}"
+    );
+    assert!(
+        content.contains("beta"),
+        "should have VAR_B, got: {content}"
+    );
 
     kill_process(pid);
 }
@@ -789,7 +782,11 @@ fn shared_lockfile_pidfile_path() {
 
     let pid = wait_for_pidfile(&shared, 5000).expect("pidfile should appear");
     let content = std::fs::read_to_string(&shared).unwrap();
-    assert_eq!(content.trim(), pid.to_string(), "pidfile should contain PID");
+    assert_eq!(
+        content.trim(),
+        pid.to_string(),
+        "pidfile should contain PID"
+    );
 
     kill_process(pid);
 }

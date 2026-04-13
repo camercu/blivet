@@ -35,8 +35,11 @@ fn user_switch_sets_uid_and_gid() {
     let env_file = dir.path().join("id_output.txt");
 
     // Make output dir writable by anyone so the switched user can write
-    std::fs::set_permissions(dir.path(), std::os::unix::fs::PermissionsExt::from_mode(0o777))
-        .unwrap();
+    std::fs::set_permissions(
+        dir.path(),
+        std::os::unix::fs::PermissionsExt::from_mode(0o777),
+    )
+    .unwrap();
 
     let output = daemonize_cmd()
         .args([
@@ -119,8 +122,11 @@ fn user_switch_sets_env_vars() {
     let pidfile = dir.path().join("test.pid");
     let env_file = dir.path().join("env_output.txt");
 
-    std::fs::set_permissions(dir.path(), std::os::unix::fs::PermissionsExt::from_mode(0o777))
-        .unwrap();
+    std::fs::set_permissions(
+        dir.path(),
+        std::os::unix::fs::PermissionsExt::from_mode(0o777),
+    )
+    .unwrap();
 
     let output = daemonize_cmd()
         .args([
@@ -184,8 +190,11 @@ fn output_file_owned_by_target_user() {
     let stdout_file = dir.path().join("stdout.log");
     let stderr_file = dir.path().join("stderr.log");
 
-    std::fs::set_permissions(dir.path(), std::os::unix::fs::PermissionsExt::from_mode(0o777))
-        .unwrap();
+    std::fs::set_permissions(
+        dir.path(),
+        std::os::unix::fs::PermissionsExt::from_mode(0o777),
+    )
+    .unwrap();
 
     let output = daemonize_cmd()
         .args([
@@ -256,10 +265,7 @@ fn daemonize_checked_single_thread_succeeds() {
     // full daemonize in-process (it would fork), so we verify the
     // thread-count check logic directly.
     let status = std::fs::read_to_string("/proc/self/status").unwrap();
-    let threads_line = status
-        .lines()
-        .find(|l| l.starts_with("Threads:"))
-        .unwrap();
+    let threads_line = status.lines().find(|l| l.starts_with("Threads:")).unwrap();
     let count: usize = threads_line
         .split_whitespace()
         .nth(1)
@@ -270,10 +276,7 @@ fn daemonize_checked_single_thread_succeeds() {
     // In a single-threaded test, count should be 1
     // (cargo test runs each test in its own thread, but the test binary
     // itself may have multiple threads for the test harness)
-    assert!(
-        count >= 1,
-        "thread count should be at least 1, got {count}"
-    );
+    assert!(count >= 1, "thread count should be at least 1, got {count}");
 }
 
 #[test]
@@ -305,10 +308,7 @@ fn proc_based_cwd_query() {
     // Verify that /proc/<pid>/cwd works for our own process
     let pid = std::process::id();
     let link = std::fs::read_link(format!("/proc/{pid}/cwd"));
-    assert!(
-        link.is_ok(),
-        "/proc/{pid}/cwd should be a readable symlink"
-    );
+    assert!(link.is_ok(), "/proc/{pid}/cwd should be a readable symlink");
 
     let cwd = std::env::current_dir().unwrap();
     assert_eq!(
@@ -377,8 +377,11 @@ fn user_switch_sets_supplementary_groups() {
     let pidfile = dir.path().join("test.pid");
     let groups_file = dir.path().join("groups.txt");
 
-    std::fs::set_permissions(dir.path(), std::os::unix::fs::PermissionsExt::from_mode(0o777))
-        .unwrap();
+    std::fs::set_permissions(
+        dir.path(),
+        std::os::unix::fs::PermissionsExt::from_mode(0o777),
+    )
+    .unwrap();
 
     let output = daemonize_cmd()
         .args([
@@ -415,7 +418,10 @@ fn user_switch_sets_supplementary_groups() {
     );
 
     // Get expected groups for testuser
-    let expected = Command::new("id").args(["-G", "testuser"]).output().unwrap();
+    let expected = Command::new("id")
+        .args(["-G", "testuser"])
+        .output()
+        .unwrap();
     let expected_str = String::from_utf8_lossy(&expected.stdout).trim().to_string();
     let expected_groups: Vec<&str> = expected_str.split_whitespace().collect();
 

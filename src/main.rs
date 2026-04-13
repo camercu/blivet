@@ -177,9 +177,7 @@ fn resolve_program_path(program: &str) -> Result<String, DaemonizeError> {
     if program.contains('/') {
         // Relative or absolute path with /: canonicalize
         let canonical = std::fs::canonicalize(program).map_err(|e| {
-            DaemonizeError::ProgramNotFound(format!(
-                "cannot resolve program path {program}: {e}"
-            ))
+            DaemonizeError::ProgramNotFound(format!("cannot resolve program path {program}: {e}"))
         })?;
         let path_str = canonical.to_str().ok_or_else(|| {
             DaemonizeError::ProgramNotFound("program path is not valid UTF-8".into())

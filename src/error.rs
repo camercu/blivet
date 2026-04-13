@@ -60,17 +60,17 @@ impl DaemonizeError {
     pub fn exit_code(&self) -> u8 {
         match self {
             DaemonizeError::ValidationError(_) => 64,  // EX_USAGE
-            DaemonizeError::ProgramNotFound(_) => 66,   // EX_NOINPUT
-            DaemonizeError::UserNotFound(_) => 67,      // EX_NOUSER
-            DaemonizeError::LockConflict(_) => 69,      // EX_UNAVAILABLE
-            DaemonizeError::LockfileError(_) => 73,     // EX_CANTCREAT
-            DaemonizeError::ForkFailed(_) => 71,        // EX_OSERR
-            DaemonizeError::SetsidFailed(_) => 71,      // EX_OSERR
-            DaemonizeError::ChdirFailed(_) => 71,       // EX_OSERR
-            DaemonizeError::PermissionDenied(_) => 77,  // EX_NOPERM
-            DaemonizeError::PidfileError(_) => 73,      // EX_CANTCREAT
-            DaemonizeError::OutputFileError(_) => 73,   // EX_CANTCREAT
-            DaemonizeError::ExecFailed(_) => 71,        // EX_OSERR
+            DaemonizeError::ProgramNotFound(_) => 66,  // EX_NOINPUT
+            DaemonizeError::UserNotFound(_) => 67,     // EX_NOUSER
+            DaemonizeError::LockConflict(_) => 69,     // EX_UNAVAILABLE
+            DaemonizeError::LockfileError(_) => 73,    // EX_CANTCREAT
+            DaemonizeError::ForkFailed(_) => 71,       // EX_OSERR
+            DaemonizeError::SetsidFailed(_) => 71,     // EX_OSERR
+            DaemonizeError::ChdirFailed(_) => 71,      // EX_OSERR
+            DaemonizeError::PermissionDenied(_) => 77, // EX_NOPERM
+            DaemonizeError::PidfileError(_) => 73,     // EX_CANTCREAT
+            DaemonizeError::OutputFileError(_) => 73,  // EX_CANTCREAT
+            DaemonizeError::ExecFailed(_) => 71,       // EX_OSERR
         }
     }
 }
