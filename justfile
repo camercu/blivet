@@ -1,3 +1,7 @@
+# Set up development environment (pre-commit hooks, node deps)
+setup:
+    ./scripts/setup-dev.sh
+
 # Build all targets including tests
 build:
     cargo build --tests
