@@ -1,5 +1,11 @@
 # daemonize
 
+[![CI](https://github.com/camercu/daemonize-rs/actions/workflows/ci.yml/badge.svg)](https://github.com/camercu/daemonize-rs/actions/workflows/ci.yml)
+[![crates.io](https://img.shields.io/crates/v/daemonize.svg)](https://crates.io/crates/daemonize)
+[![docs.rs](https://docs.rs/daemonize/badge.svg)](https://docs.rs/daemonize)
+[![MSRV](https://img.shields.io/badge/MSRV-1.85-blue)](https://doc.rust-lang.org/cargo/reference/manifest.html#the-rust-version-field)
+[![License](https://img.shields.io/crates/l/daemonize.svg)](LICENSE-MIT)
+
 A correct, minimal Unix daemon library and CLI for Rust.
 
 `daemonize` implements the full double-fork daemonization sequence with a
