@@ -65,7 +65,7 @@ daemonize \
 # Run as a different user and group (requires root)
 daemonize -u www-data -g www-data -- /usr/bin/my-server
 
-# Run in foreground (useful for systemd, containers, debugging)
+# Run in foreground with supervisor-passed fds kept open
 daemonize --foreground --no-close-fds -p /var/run/myapp.pid -- /usr/bin/my-server
 
 # Set environment variables
@@ -75,6 +75,10 @@ daemonize -E RUST_LOG=info -E PORT=8080 -- /usr/bin/my-server
 The parent process blocks until the daemon successfully calls `exec`, then
 exits 0. If anything fails (lockfile conflict, permission denied, exec error),
 the parent prints the error to stderr and exits with a `sysexits.h` code.
+
+When `-u`/`-g` are specified, the CLI transfers ownership of the pidfile,
+lockfile, and log files to the target user/group before dropping privileges,
+so the daemon can continue to write to them after the switch.
 
 ### CLI flags
 
@@ -89,8 +93,8 @@ the parent prints the error to stderr and exits with a `sysexits.h` code.
 | `-a` | `--append` | Append to stdout/stderr files instead of truncating |
 | `-u` | `--user NAME\|UID` | Switch to user after daemonizing (requires root) |
 | `-g` | `--group NAME\|GID` | Switch to group after daemonizing (requires root) |
-| `-f` | `--foreground` | Stay in foreground (no fork/setsid) |
-|      | `--no-close-fds` | Do not close inherited file descriptors |
+| `-f` | `--foreground` | Stay in foreground (no fork/setsid); consider `--no-close-fds` |
+|      | `--no-close-fds` | Keep inherited fds open (useful with `-f` for supervisor-passed fds) |
 | `-E` | `--env NAME=VAL` | Set environment variable (repeatable) |
 | `-v` | `--verbose` | Print diagnostic info before daemonizing |
 

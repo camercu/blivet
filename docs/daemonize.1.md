@@ -43,6 +43,10 @@ The parent exits 0 only after the daemon has successfully exec'd *program*.
 If any step fails, the parent exits with a non-zero status and prints a
 diagnostic to stderr.
 
+When **-u** or **-g** is specified, ownership of the PID file, lock file, and
+output files is transferred to the target user/group before privileges are
+dropped, so the daemon can continue to write to them after the switch.
+
 # OPTIONS
 
 **-p**, **--pidfile** *path*
@@ -95,10 +99,13 @@ diagnostic to stderr.
 :   Stay in the foreground instead of daemonizing. Skips the double-fork
     and **setsid**(2), but still applies all other setup steps (umask, chdir,
     signal reset, etc.). Useful for systemd, containers, and debugging.
+    Consider combining with **--no-close-fds** to preserve supervisor-passed
+    file descriptors.
 
 **--no-close-fds**
-:   Do not close inherited file descriptors (3 and above). By default, all
-    inherited descriptors except the lock file are closed.
+:   Keep inherited file descriptors (3 and above) open. By default, all
+    inherited descriptors except the lock file are closed. Useful with
+    **-f** to preserve supervisor-passed file descriptors.
 
 **-v**, **--verbose**
 :   Print diagnostic information to stderr before daemonizing.

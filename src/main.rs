@@ -53,11 +53,11 @@ struct Args {
     #[arg(short = 'g', long = "group")]
     group: Option<String>,
 
-    /// Stay in foreground (no fork)
+    /// Stay in foreground (no fork); consider --no-close-fds to keep supervisor-passed fds
     #[arg(short = 'f', long = "foreground")]
     foreground: bool,
 
-    /// Do not close inherited file descriptors
+    /// Keep inherited file descriptors open (useful with --foreground for supervisor-passed fds)
     #[arg(long = "no-close-fds")]
     no_close_fds: bool,
 

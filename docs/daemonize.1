@@ -53,6 +53,11 @@ The parent exits 0 only after the daemon has successfully exec\(cqd
 \f[I]program\f[R].
 If any step fails, the parent exits with a non\-zero status and prints a
 diagnostic to stderr.
+.PP
+When \f[B]\-u\f[R] or \f[B]\-g\f[R] is specified, ownership of the PID
+file, lock file, and output files is transferred to the target
+user/group before privileges are dropped, so the daemon can continue to
+write to them after the switch.
 .SH OPTIONS
 .TP
 \f[B]\-p\f[R], \f[B]\(enpidfile\f[R] \f[I]path\f[R]
@@ -119,10 +124,14 @@ Stay in the foreground instead of daemonizing.
 Skips the double\-fork and \f[B]setsid\f[R](2), but still applies all
 other setup steps (umask, chdir, signal reset, etc.).
 Useful for systemd, containers, and debugging.
+Consider combining with \f[B]\(enno\-close\-fds\f[R] to preserve
+supervisor\-passed file descriptors.
 .TP
 \f[B]\(enno\-close\-fds\f[R]
-Do not close inherited file descriptors (3 and above).
+Keep inherited file descriptors (3 and above) open.
 By default, all inherited descriptors except the lock file are closed.
+Useful with \f[B]\-f\f[R] to preserve supervisor\-passed file
+descriptors.
 .TP
 \f[B]\-v\f[R], \f[B]\(enverbose\f[R]
 Print diagnostic information to stderr before daemonizing.
