@@ -45,9 +45,21 @@ struct Args {
     #[arg(short = 'E', long = "env")]
     env: Vec<String>,
 
-    /// Run daemon as user
+    /// Run daemon as user (name or numeric UID)
     #[arg(short = 'u', long = "user")]
     user: Option<String>,
+
+    /// Run daemon as group (name or numeric GID)
+    #[arg(short = 'g', long = "group")]
+    group: Option<String>,
+
+    /// Stay in foreground (no fork)
+    #[arg(short = 'f', long = "foreground")]
+    foreground: bool,
+
+    /// Do not close inherited file descriptors
+    #[arg(long = "no-close-fds")]
+    no_close_fds: bool,
 
     /// Diagnostic output before daemonizing
     #[arg(short = 'v', long = "verbose")]
@@ -101,6 +113,11 @@ fn main() -> ExitCode {
     if let Some(ref u) = args.user {
         config.user(u);
     }
+    if let Some(ref g) = args.group {
+        config.group(g);
+    }
+    config.foreground(args.foreground);
+    config.close_fds(!args.no_close_fds);
 
     // Resolve program path before daemonization
     let program_path = resolve_program_path(&args.program[0]);
@@ -133,6 +150,16 @@ fn main() -> ExitCode {
             return ExitCode::from(e.exit_code());
         }
     };
+
+    // Drop privileges if user or group is configured
+    if args.user.is_some() || args.group.is_some() {
+        if let Err(e) = ctx.chown_paths() {
+            ctx.report_error(&e);
+        }
+        if let Err(e) = ctx.drop_privileges() {
+            ctx.report_error(&e);
+        }
+    }
 
     // Clear CLOEXEC on lockfile fd so the lock survives exec
     if let Some(lockfile_fd) = ctx.lockfile_fd() {

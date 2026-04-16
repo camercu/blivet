@@ -18,6 +18,10 @@ pub enum DaemonizeError {
     #[error("{0}")]
     UserNotFound(String),
 
+    /// Group does not exist at runtime during group switching.
+    #[error("{0}")]
+    GroupNotFound(String),
+
     /// flock already held by another process.
     #[error("{0}")]
     LockConflict(String),
@@ -50,6 +54,10 @@ pub enum DaemonizeError {
     #[error("{0}")]
     OutputFileError(String),
 
+    /// chown of pidfile/lockfile/output file failed.
+    #[error("{0}")]
+    ChownError(String),
+
     /// CLI-only: exec of target program failed.
     #[error("{0}")]
     ExecFailed(String),
@@ -62,6 +70,7 @@ impl DaemonizeError {
             DaemonizeError::ValidationError(_) => 64,  // EX_USAGE
             DaemonizeError::ProgramNotFound(_) => 66,  // EX_NOINPUT
             DaemonizeError::UserNotFound(_) => 67,     // EX_NOUSER
+            DaemonizeError::GroupNotFound(_) => 67,    // EX_NOUSER
             DaemonizeError::LockConflict(_) => 69,     // EX_UNAVAILABLE
             DaemonizeError::LockfileError(_) => 73,    // EX_CANTCREAT
             DaemonizeError::ForkFailed(_) => 71,       // EX_OSERR
@@ -70,6 +79,7 @@ impl DaemonizeError {
             DaemonizeError::PermissionDenied(_) => 77, // EX_NOPERM
             DaemonizeError::PidfileError(_) => 73,     // EX_CANTCREAT
             DaemonizeError::OutputFileError(_) => 73,  // EX_CANTCREAT
+            DaemonizeError::ChownError(_) => 73,       // EX_CANTCREAT
             DaemonizeError::ExecFailed(_) => 71,       // EX_OSERR
         }
     }

@@ -26,11 +26,18 @@ The daemonization sequence:
    stdin/stdout/stderr to */dev/null*.
 5. Writes the PID file and acquires the lock file (if configured).
 6. Resets all signal dispositions to **SIG_DFL** and clears the signal mask.
-7. Applies environment variables and switches user (if configured).
-8. Redirects stdout/stderr to files (if configured), after the user switch
-   so files have correct ownership.
-9. Closes all inherited file descriptors (except the lock file).
-10. Exec's *program*.
+7. Applies environment variables.
+8. Transfers ownership of pidfile, lockfile, and output files to the target
+   user/group (if configured) via **chown**(2).
+9. Switches user and group (if configured) via **setuid**(2), **setgid**(2),
+   and **initgroups**(3).
+10. Redirects stdout/stderr to files (if configured).
+11. Closes all inherited file descriptors (except the lock file), unless
+    **--no-close-fds** is given.
+12. Exec's *program*.
+
+In foreground mode (**-f**), steps 1-3 are skipped: no fork or setsid occurs,
+and the notification pipe is not created. All other steps still apply.
 
 The parent exits 0 only after the daemon has successfully exec'd *program*.
 If any step fails, the parent exits with a non-zero status and prints a
@@ -71,10 +78,27 @@ diagnostic to stderr.
     specified multiple times. If *value* is omitted (no **=**), the
     variable is set to an empty string.
 
-**-u**, **--user** *username*
-:   Run the daemon as *username*. Calls **setuid**(2), **setgid**(2), and
-    **initgroups**(3), and sets the **USER**, **HOME**, and **LOGNAME**
-    environment variables. Requires root privileges.
+**-u**, **--user** *name*|*uid*
+:   Run the daemon as *name* (or numeric *uid*). Calls **setuid**(2),
+    **setgid**(2), and **initgroups**(3), and sets the **USER**, **HOME**,
+    and **LOGNAME** environment variables. If a numeric string is given, it
+    is treated as a UID. When **--group** is not specified, the user's
+    primary group is used. Requires root privileges.
+
+**-g**, **--group** *name*|*gid*
+:   Run the daemon as group *name* (or numeric *gid*). Calls **setgid**(2)
+    to set the effective group. If a numeric string is given, it is treated
+    as a GID. May be combined with **-u** to set user and group independently.
+    Requires root privileges.
+
+**-f**, **--foreground**
+:   Stay in the foreground instead of daemonizing. Skips the double-fork
+    and **setsid**(2), but still applies all other setup steps (umask, chdir,
+    signal reset, etc.). Useful for systemd, containers, and debugging.
+
+**--no-close-fds**
+:   Do not close inherited file descriptors (3 and above). By default, all
+    inherited descriptors except the lock file are closed.
 
 **-v**, **--verbose**
 :   Print diagnostic information to stderr before daemonizing.
@@ -99,7 +123,7 @@ Exit codes follow the **sysexits.h** conventions:
 :   Program not found or not executable.
 
 **67** (EX_NOUSER)
-:   User not found.
+:   User or group not found.
 
 **69** (EX_UNAVAILABLE)
 :   Lock file held by another process.
@@ -108,10 +132,11 @@ Exit codes follow the **sysexits.h** conventions:
 :   OS error: fork, setsid, chdir, or exec failed.
 
 **73** (EX_CANTCREAT)
-:   Cannot create lock file, PID file, or output file.
+:   Cannot create lock file, PID file, or output file; or **chown**(2)
+    of those files failed.
 
 **77** (EX_NOPERM)
-:   Permission denied for user switch.
+:   Permission denied for user or group switch.
 
 # EXAMPLES
 
@@ -133,6 +158,16 @@ Prevent duplicate instances with a lock file:
     daemonize -p /var/run/myapp.pid \
               -l /var/run/myapp.lock \
               -- /usr/bin/myapp
+
+Run as a specific user and group:
+
+    daemonize -u www-data -g www-data \
+              -p /var/run/myapp.pid \
+              -- /usr/bin/myapp
+
+Run in foreground mode (useful for systemd or containers):
+
+    daemonize --foreground --no-close-fds -p /var/run/myapp.pid -- /usr/bin/myapp
 
 Set environment variables and working directory:
 

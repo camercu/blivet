@@ -3,7 +3,9 @@
 //! This crate provides a library and CLI tool for daemonizing processes on Unix
 //! systems. It performs a mandatory double-fork, resets signal dispositions and
 //! mask, and uses a notification pipe so the parent can wait for daemon
-//! readiness.
+//! readiness. Privilege dropping is split-phase: `daemonize()` returns a
+//! context while still privileged, and the caller explicitly calls
+//! `drop_privileges()` when ready.
 //!
 //! # Example
 //!
@@ -20,6 +22,24 @@
 //! // ... application initialization ...
 //! ctx.notify_parent()?;
 //! // daemon process continues here
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! # Split-phase privilege dropping
+//!
+//! ```no_run
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! use daemonize::{DaemonConfig, daemonize};
+//!
+//! let mut config = DaemonConfig::new();
+//! config.pidfile("/var/run/foo.pid").user("nobody").group("nogroup");
+//!
+//! let mut ctx = unsafe { daemonize(&config)? };
+//! // ... privileged work (e.g., bind port 80) ...
+//! ctx.chown_paths()?;       // transfer file ownership while still root
+//! ctx.drop_privileges()?;   // setgid + setuid
+//! ctx.notify_parent()?;
 //! # Ok(())
 //! # }
 //! ```
@@ -117,51 +137,60 @@ pub(crate) fn daemonize_inner(
     config: &DaemonConfig,
     forker: &mut impl Forker,
 ) -> Result<DaemonContext, DaemonizeError> {
-    // Step 1: Create notification pipe and first fork
-    let pipe = forker.create_notification_pipe();
-    let (pipe_rd, pipe_wr) = match pipe {
-        Some((rd, wr)) => (Some(rd), Some(wr)),
-        None => (None, None),
-    };
+    let foreground = config.get_foreground();
 
-    match forker.fork()? {
-        ForkResult::Parent { .. } => {
-            // Parent: close write end, read from pipe, exit
-            drop(pipe_wr);
-            if let Some(rd) = pipe_rd {
-                parent_pipe_reader(rd, forker);
+    // Steps 1–3: Fork sequence (skipped in foreground mode)
+    let pipe_wr = if foreground {
+        None
+    } else {
+        // Step 1: Create notification pipe and first fork
+        let pipe = forker.create_notification_pipe();
+        let (pipe_rd, pipe_wr) = match pipe {
+            Some((rd, wr)) => (Some(rd), Some(wr)),
+            None => (None, None),
+        };
+
+        match forker.fork()? {
+            ForkResult::Parent { .. } => {
+                // Parent: close write end, read from pipe, exit
+                drop(pipe_wr);
+                if let Some(rd) = pipe_rd {
+                    parent_pipe_reader(rd, forker);
+                }
+                // If no pipe (NullForker), just exit
+                forker.exit(0);
             }
-            // If no pipe (NullForker), just exit
-            forker.exit(0);
+            ForkResult::Child => {
+                // Child: close read end, continue
+                drop(pipe_rd);
+            }
         }
-        ForkResult::Child => {
-            // Child: close read end, continue
-            drop(pipe_rd);
-        }
-    }
 
-    // Step 2: setsid
-    let pipe_wr_ref = &pipe_wr;
-    if let Err(e) = forker.setsid() {
-        write_error_to_pipe(pipe_wr_ref, &e);
-        forker.exit(e.exit_code() as i32);
-    }
-
-    // Step 3: Second fork
-    match forker.fork() {
-        Ok(ForkResult::Parent { .. }) => {
-            // Intermediate child exits
-            drop(pipe_wr);
-            forker.exit(0);
-        }
-        Ok(ForkResult::Child) => {
-            // Grandchild continues
-        }
-        Err(e) => {
+        // Step 2: setsid
+        let pipe_wr_ref = &pipe_wr;
+        if let Err(e) = forker.setsid() {
             write_error_to_pipe(pipe_wr_ref, &e);
             forker.exit(e.exit_code() as i32);
         }
-    }
+
+        // Step 3: Second fork
+        match forker.fork() {
+            Ok(ForkResult::Parent { .. }) => {
+                // Intermediate child exits
+                drop(pipe_wr);
+                forker.exit(0);
+            }
+            Ok(ForkResult::Child) => {
+                // Grandchild continues
+            }
+            Err(e) => {
+                write_error_to_pipe(pipe_wr_ref, &e);
+                forker.exit(e.exit_code() as i32);
+            }
+        }
+
+        pipe_wr
+    };
 
     // Macro for post-fork error handling: write to pipe + exit
     macro_rules! post_fork_try {
@@ -210,12 +239,7 @@ pub(crate) fn daemonize_inner(
     // Step 11: Set environment variables
     steps::set_env_vars(config.get_env());
 
-    // Step 12: Switch user
-    if let Some(username) = config.get_user() {
-        post_fork_try!(steps::switch_user(username));
-    }
-
-    // Step 13: Redirect stdout/stderr to configured files
+    // Step 12: Redirect stdout/stderr to configured files
     if config.get_stdout().is_some() || config.get_stderr().is_some() {
         post_fork_try!(steps::redirect_output(
             config.get_stdout(),
@@ -224,18 +248,29 @@ pub(crate) fn daemonize_inner(
         ));
     }
 
-    // Step 14: Close inherited fds
-    let mut skip_fds: Vec<i32> = Vec::new();
-    if let Some(ref flock) = lockfile {
-        skip_fds.push(flock.as_raw_fd());
+    // Step 13: Close inherited fds (if enabled)
+    if config.get_close_fds() {
+        let mut skip_fds: Vec<i32> = Vec::new();
+        if let Some(ref flock) = lockfile {
+            skip_fds.push(flock.as_raw_fd());
+        }
+        if let Some(ref wr) = pipe_wr {
+            skip_fds.push(wr.as_raw_fd());
+        }
+        steps::close_inherited_fds(&skip_fds);
     }
-    if let Some(ref wr) = pipe_wr {
-        skip_fds.push(wr.as_raw_fd());
-    }
-    steps::close_inherited_fds(&skip_fds);
 
-    // Step 15: Return DaemonContext
-    Ok(DaemonContext::new(lockfile, pipe_wr))
+    // Step 14: Return DaemonContext with cloned config fields
+    Ok(DaemonContext::new(
+        lockfile,
+        pipe_wr,
+        config.get_pidfile().cloned(),
+        config.get_lockfile().cloned(),
+        config.get_stdout().cloned(),
+        config.get_stderr().cloned(),
+        config.get_user().map(String::from),
+        config.get_group().map(String::from),
+    ))
 }
 
 /// Parent-side pipe reader. Reads from the pipe and exits accordingly.
@@ -397,5 +432,152 @@ mod tests {
 
         assert_eq!(buf[0], 71); // EX_OSERR
         assert_eq!(std::str::from_utf8(&buf[1..]).unwrap(), "test error");
+    }
+
+    /// Foreground mode: forker is never called, result has no notify pipe.
+    /// Runs in a subprocess because daemonize_inner still redirects fds.
+    #[test]
+    fn foreground_mode_skips_fork() {
+        let exe = std::env::current_exe().unwrap();
+        let status = std::process::Command::new(exe)
+            .arg("--exact")
+            .arg("tests::foreground_mode_skips_fork_subprocess")
+            .arg("--nocapture")
+            .env("__DAEMONIZE_SUBPROCESS_TEST", "1")
+            .status()
+            .unwrap();
+        assert!(status.success(), "subprocess test failed: {status}");
+    }
+
+    #[test]
+    #[ignore]
+    fn foreground_mode_skips_fork_subprocess() {
+        if std::env::var("__DAEMONIZE_SUBPROCESS_TEST").is_err() {
+            return;
+        }
+        let mut config = DaemonConfig::new();
+        config.foreground(true);
+        // NullForker with no fork results — if fork is called, it panics
+        let mut forker = NullForker::new(vec![], Ok(()));
+        let result = daemonize_inner(&config, &mut forker);
+        let ctx = result.expect("foreground daemonize_inner should succeed");
+        // notify_pipe should be None in foreground mode
+        assert!(ctx.lockfile_fd().is_none());
+    }
+
+    /// Foreground mode: notify_parent is a no-op (no pipe).
+    #[test]
+    fn foreground_mode_notify_parent_noop() {
+        let exe = std::env::current_exe().unwrap();
+        let status = std::process::Command::new(exe)
+            .arg("--exact")
+            .arg("tests::foreground_mode_notify_parent_noop_subprocess")
+            .arg("--nocapture")
+            .env("__DAEMONIZE_SUBPROCESS_TEST", "1")
+            .status()
+            .unwrap();
+        assert!(status.success(), "subprocess test failed: {status}");
+    }
+
+    #[test]
+    #[ignore]
+    fn foreground_mode_notify_parent_noop_subprocess() {
+        if std::env::var("__DAEMONIZE_SUBPROCESS_TEST").is_err() {
+            return;
+        }
+        let mut config = DaemonConfig::new();
+        config.foreground(true);
+        let mut forker = NullForker::new(vec![], Ok(()));
+        let mut ctx = daemonize_inner(&config, &mut forker).unwrap();
+        // notify_parent should be a no-op without error
+        assert!(ctx.notify_parent().is_ok());
+    }
+
+    /// close_fds=false: inherited fds survive daemonization.
+    #[test]
+    fn close_fds_false_preserves_fds() {
+        let exe = std::env::current_exe().unwrap();
+        let status = std::process::Command::new(exe)
+            .arg("--exact")
+            .arg("tests::close_fds_false_preserves_fds_subprocess")
+            .arg("--nocapture")
+            .env("__DAEMONIZE_SUBPROCESS_TEST", "1")
+            .status()
+            .unwrap();
+        assert!(status.success(), "subprocess test failed: {status}");
+    }
+
+    #[test]
+    #[ignore]
+    fn close_fds_false_preserves_fds_subprocess() {
+        if std::env::var("__DAEMONIZE_SUBPROCESS_TEST").is_err() {
+            return;
+        }
+        // Open a pipe to create an fd > 2 that we can check survives
+        let (rd, wr) = nix::unistd::pipe().unwrap();
+
+        let mut config = DaemonConfig::new();
+        config.close_fds(false);
+        let mut forker = NullForker::both_child();
+        let _ctx = daemonize_inner(&config, &mut forker).unwrap();
+
+        // Fds should still be open
+        assert!(
+            nix::unistd::write(&wr, b"alive").is_ok(),
+            "write fd should still be open with close_fds=false"
+        );
+        let mut buf = [0u8; 5];
+        assert!(
+            nix::unistd::read(&rd, &mut buf).is_ok(),
+            "read fd should still be open with close_fds=false"
+        );
+    }
+
+    /// DaemonContext stores config fields correctly.
+    #[test]
+    fn context_carries_config_fields() {
+        let exe = std::env::current_exe().unwrap();
+        let status = std::process::Command::new(exe)
+            .arg("--exact")
+            .arg("tests::context_carries_config_fields_subprocess")
+            .arg("--nocapture")
+            .env("__DAEMONIZE_SUBPROCESS_TEST", "1")
+            .status()
+            .unwrap();
+        assert!(status.success(), "subprocess test failed: {status}");
+    }
+
+    #[test]
+    #[ignore]
+    fn context_carries_config_fields_subprocess() {
+        if std::env::var("__DAEMONIZE_SUBPROCESS_TEST").is_err() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let pidfile = dir.path().join("test.pid");
+        let stdout = dir.path().join("out.log");
+
+        let mut config = DaemonConfig::new();
+        config
+            .pidfile(&pidfile)
+            .stdout(&stdout)
+            .user("nobody")
+            .group("nogroup")
+            .foreground(true);
+
+        let mut forker = NullForker::new(vec![], Ok(()));
+        let ctx = daemonize_inner(&config, &mut forker).unwrap();
+
+        let debug = format!("{:?}", ctx);
+        assert!(
+            debug.contains("test.pid"),
+            "context should contain pidfile path"
+        );
+        assert!(
+            debug.contains("out.log"),
+            "context should contain stdout path"
+        );
+        assert!(debug.contains("nobody"), "context should contain user");
+        assert!(debug.contains("nogroup"), "context should contain group");
     }
 }

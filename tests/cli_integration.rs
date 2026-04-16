@@ -858,3 +858,123 @@ fn error_message_on_stderr() {
         "error message should mention 'absolute', got: {stderr}"
     );
 }
+
+// --- Foreground mode ---
+
+#[test]
+fn foreground_mode_runs_program() {
+    let dir = tempfile::tempdir().unwrap();
+    let pidfile = dir.path().join("test.pid");
+    let stdout_file = dir.path().join("out.log");
+
+    let output = daemonize_cmd()
+        .args([
+            "-f",
+            "-p",
+            pidfile.to_str().unwrap(),
+            "-o",
+            stdout_file.to_str().unwrap(),
+            "--",
+            "echo",
+            "foreground_test",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "foreground daemonize should succeed, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // R66/R68: pidfile should be written even in foreground mode
+    assert!(pidfile.exists(), "pidfile should exist in foreground mode");
+}
+
+#[test]
+fn foreground_mode_no_orphan() {
+    let dir = tempfile::tempdir().unwrap();
+    let pidfile = dir.path().join("test.pid");
+
+    // In foreground mode, the process should NOT be orphaned (PPID != 1)
+    // We use a short-lived command and check it ran successfully
+    let output = daemonize_cmd()
+        .args(["-f", "-p", pidfile.to_str().unwrap(), "--", "true"])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "foreground should succeed, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+// --- close_fds flag ---
+
+#[test]
+fn no_close_fds_flag_accepted() {
+    let dir = tempfile::tempdir().unwrap();
+    let pidfile = dir.path().join("test.pid");
+
+    let output = daemonize_cmd()
+        .args([
+            "-f",
+            "--no-close-fds",
+            "-p",
+            pidfile.to_str().unwrap(),
+            "--",
+            "true",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "--no-close-fds should be accepted, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+// --- Group flag ---
+
+#[test]
+fn permission_denied_group_switch_without_root_exits_77() {
+    // Skip if running as root
+    if nix::unistd::geteuid().as_raw() == 0 {
+        return;
+    }
+
+    let output = daemonize_cmd()
+        .args(["-g", "wheel", "--", "sleep", "1"])
+        .output()
+        .unwrap();
+
+    assert_eq!(
+        output.status.code(),
+        Some(77),
+        "non-root group switch should exit 77, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn permission_denied_group_only_without_root_exits_77() {
+    // Skip if running as root
+    if nix::unistd::geteuid().as_raw() == 0 {
+        return;
+    }
+
+    // Group-only (no -u) should also require root
+    let output = daemonize_cmd()
+        .args(["-g", "nogroup", "--", "sleep", "1"])
+        .output()
+        .unwrap();
+
+    assert_eq!(
+        output.status.code(),
+        Some(77),
+        "non-root group-only switch should exit 77, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}

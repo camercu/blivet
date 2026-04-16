@@ -155,45 +155,6 @@ pub(crate) fn set_env_vars(env: &[(String, String)]) {
     }
 }
 
-/// Step 12: Switch to the specified user.
-///
-/// Resolves via getpwnam, then initgroups, setgid, setuid.
-/// Sets USER, HOME, LOGNAME environment variables.
-#[allow(unsafe_code)]
-pub(crate) fn switch_user(username: &str) -> Result<(), DaemonizeError> {
-    use nix::unistd::User;
-    use std::ffi::CString;
-
-    let user = User::from_name(username)
-        .map_err(|e| DaemonizeError::UserNotFound(format!("getpwnam({username}): {e}")))?
-        .ok_or_else(|| DaemonizeError::UserNotFound(format!("user not found: {username}")))?;
-
-    let cname = CString::new(username)
-        .map_err(|e| DaemonizeError::UserNotFound(format!("invalid username: {e}")))?;
-
-    // initgroups (use libc directly — nix doesn't provide this on all platforms)
-    unsafe_ops::raw_initgroups(&cname, user.gid.as_raw())
-        .map_err(|e| DaemonizeError::PermissionDenied(format!("initgroups: {e}")))?;
-
-    // setgid
-    nix::unistd::setgid(user.gid)
-        .map_err(|e| DaemonizeError::PermissionDenied(format!("setgid: {e}")))?;
-
-    // setuid
-    nix::unistd::setuid(user.uid)
-        .map_err(|e| DaemonizeError::PermissionDenied(format!("setuid: {e}")))?;
-
-    // Set USER, HOME, LOGNAME — these overwrite any .env() values
-    // SAFETY: post-fork, single-threaded — no concurrent readers.
-    unsafe {
-        std::env::set_var("USER", username);
-        std::env::set_var("HOME", &user.dir);
-        std::env::set_var("LOGNAME", username);
-    }
-
-    Ok(())
-}
-
 /// Build an [`OutputRedirectPlan`] describing how to redirect stdout/stderr.
 ///
 /// This is pure logic with no side effects — it decides *what* to do based on

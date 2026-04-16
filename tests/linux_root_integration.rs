@@ -464,3 +464,174 @@ fn user_switch_nonexistent_user_fails() {
         String::from_utf8_lossy(&output.stderr)
     );
 }
+
+// ============================================================
+// Group switching tests (R61, R70)
+// ============================================================
+
+#[test]
+#[ignore]
+fn group_only_switch_sets_gid() {
+    if !is_root_on_linux() {
+        eprintln!("skipping: requires root on Linux");
+        return;
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    let pidfile = dir.path().join("test.pid");
+
+    let output = daemonize_cmd()
+        .args([
+            "-g",
+            "nobody",
+            "-p",
+            pidfile.to_str().unwrap(),
+            "--",
+            "sleep",
+            "30",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "group-only switch should succeed, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let pid = wait_for_pidfile(&pidfile, 5000).expect("pidfile should appear");
+
+    let info = query_process(pid).expect("daemon process should exist");
+
+    // R61: group-only should set GID but keep UID as root
+    assert_eq!(info.uid, 0, "UID should remain root for group-only switch");
+    // GID should be nobody's GID (varies by system, but should not be 0)
+    assert_ne!(info.gid, 0, "GID should be nobody's GID, not root");
+
+    kill_process(pid);
+}
+
+#[test]
+#[ignore]
+fn user_and_group_switch_sets_independent_gid() {
+    if !is_root_on_linux() {
+        eprintln!("skipping: requires root on Linux");
+        return;
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    let pidfile = dir.path().join("test.pid");
+
+    // Switch user to nobody but group to daemon (independent group)
+    let output = daemonize_cmd()
+        .args([
+            "-u",
+            "nobody",
+            "-g",
+            "daemon",
+            "-p",
+            pidfile.to_str().unwrap(),
+            "--",
+            "sleep",
+            "30",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "user+group switch should succeed, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let pid = wait_for_pidfile(&pidfile, 5000).expect("pidfile should appear");
+
+    let info = query_process(pid).expect("daemon process should exist");
+
+    // R60/R70: UID should be nobody, GID should be daemon's GID
+    assert_ne!(info.uid, 0, "UID should be nobody, not root");
+
+    // Get daemon group's GID for comparison
+    let daemon_gid_output = Command::new("id").args(["-g", "daemon"]).output().unwrap();
+    if daemon_gid_output.status.success() {
+        let daemon_gid: u32 = String::from_utf8_lossy(&daemon_gid_output.stdout)
+            .trim()
+            .parse()
+            .unwrap();
+        assert_eq!(
+            info.gid, daemon_gid,
+            "GID should be daemon's GID, not nobody's primary group"
+        );
+    }
+
+    kill_process(pid);
+}
+
+#[test]
+#[ignore]
+fn nonexistent_group_fails_with_exit_67() {
+    if !is_root_on_linux() {
+        eprintln!("skipping: requires root on Linux");
+        return;
+    }
+
+    let output = daemonize_cmd()
+        .args(["-g", "nonexistent_group_xyz_12345", "--", "sleep", "1"])
+        .output()
+        .unwrap();
+
+    assert_eq!(
+        output.status.code(),
+        Some(67),
+        "nonexistent group should exit 67, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+#[ignore]
+fn numeric_uid_switch() {
+    if !is_root_on_linux() {
+        eprintln!("skipping: requires root on Linux");
+        return;
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    let pidfile = dir.path().join("test.pid");
+
+    // Get nobody's UID
+    let nobody_uid_output = Command::new("id").args(["-u", "nobody"]).output().unwrap();
+    let nobody_uid = String::from_utf8_lossy(&nobody_uid_output.stdout)
+        .trim()
+        .to_string();
+
+    let output = daemonize_cmd()
+        .args([
+            "-u",
+            &nobody_uid,
+            "-p",
+            pidfile.to_str().unwrap(),
+            "--",
+            "sleep",
+            "30",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "numeric UID switch should succeed, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let pid = wait_for_pidfile(&pidfile, 5000).expect("pidfile should appear");
+
+    let info = query_process(pid).expect("daemon process should exist");
+    assert_eq!(
+        info.uid,
+        nobody_uid.parse::<u32>().unwrap(),
+        "UID should match numeric UID"
+    );
+
+    kill_process(pid);
+}

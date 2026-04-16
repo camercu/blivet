@@ -2,9 +2,11 @@
 
 Rust library and CLI tool for daemonizing processes. Mirrors Debian's
 daemonize(1) with improvements: double-fork is mandatory (not delegated
-to `daemon(3)`), signal dispositions and mask are reset, output files
-are opened after user switching for correct ownership, and a
-notification pipe lets the parent wait for daemon readiness.
+to `daemon(3)`), signal dispositions and mask are reset, and a
+notification pipe lets the parent wait for daemon readiness. Privilege
+dropping is split-phase: `daemonize()` returns a context while still
+privileged, and the caller explicitly calls `drop_privileges()` when
+ready.
 
 Latest stable Rust, edition 2021. Crate name is `daemonize` (not
 `daemonize-rs`). License: `MIT OR Apache-2.0`; include both
@@ -60,17 +62,20 @@ It derives `Default`, `Debug`, `Clone`, `Eq`, and `PartialEq`.
 
 All fields are private; callers use builder methods.
 
-| Field      | Type                    | Default              | Builder method     | Builder input type         | Semantics   |
-| ---------- | ----------------------- | -------------------- | ------------------ | -------------------------- | ----------- |
-| `pidfile`  | `Option<PathBuf>`       | `None`               | `.pidfile(path)`   | `impl Into<PathBuf>`       | Setter      |
-| `chdir`    | `PathBuf`               | `PathBuf::from("/")` | `.chdir(path)`     | `impl Into<PathBuf>`       | Setter      |
-| `umask`    | `nix::sys::stat::Mode`  | `Mode::empty()` (0)  | `.umask(mode)`     | `nix::sys::stat::Mode`     | Setter      |
-| `stdout`   | `Option<PathBuf>`       | `None`               | `.stdout(path)`    | `impl Into<PathBuf>`       | Setter      |
-| `stderr`   | `Option<PathBuf>`       | `None`               | `.stderr(path)`    | `impl Into<PathBuf>`       | Setter      |
-| `append`   | `bool`                  | `false`              | `.append(bool)`    | `bool`                     | Setter      |
-| `lockfile` | `Option<PathBuf>`       | `None`               | `.lockfile(path)`  | `impl Into<PathBuf>`       | Setter      |
-| `user`     | `Option<String>`        | `None`               | `.user(name)`      | `impl Into<String>`        | Setter      |
-| `env`      | `Vec<(String, String)>` | `vec![]`             | `.env(key, value)` | `impl Into<String>` (both) | Accumulator |
+| Field        | Type                    | Default              | Builder method       | Builder input type         | Semantics   |
+| ------------ | ----------------------- | -------------------- | -------------------- | -------------------------- | ----------- |
+| `pidfile`    | `Option<PathBuf>`       | `None`               | `.pidfile(path)`     | `impl Into<PathBuf>`       | Setter      |
+| `chdir`      | `PathBuf`               | `PathBuf::from("/")` | `.chdir(path)`       | `impl Into<PathBuf>`       | Setter      |
+| `umask`      | `nix::sys::stat::Mode`  | `Mode::empty()` (0)  | `.umask(mode)`       | `nix::sys::stat::Mode`     | Setter      |
+| `stdout`     | `Option<PathBuf>`       | `None`               | `.stdout(path)`      | `impl Into<PathBuf>`       | Setter      |
+| `stderr`     | `Option<PathBuf>`       | `None`               | `.stderr(path)`      | `impl Into<PathBuf>`       | Setter      |
+| `append`     | `bool`                  | `false`              | `.append(bool)`      | `bool`                     | Setter      |
+| `lockfile`   | `Option<PathBuf>`       | `None`               | `.lockfile(path)`    | `impl Into<PathBuf>`       | Setter      |
+| `user`       | `Option<String>`        | `None`               | `.user(name)`        | `impl Into<String>`        | Setter      |
+| `group`      | `Option<String>`        | `None`               | `.group(name)`       | `impl Into<String>`        | Setter      |
+| `foreground` | `bool`                  | `false`              | `.foreground(bool)`  | `bool`                     | Setter      |
+| `close_fds`  | `bool`                  | `true`               | `.close_fds(bool)`   | `bool`                     | Setter      |
+| `env`        | `Vec<(String, String)>` | `vec![]`             | `.env(key, value)`   | `impl Into<String>` (both) | Accumulator |
 
 All builder methods except `.env()` are setters: each call replaces the
 previous value. `.env()` is an accumulator: each call pushes a new
@@ -89,9 +94,22 @@ config.pidfile("/var/run/foo.pid").chdir("/tmp");
 config.validate()?;                     // optional early check
 
 let mut ctx = unsafe { daemonize(&config)? };
-// ... application initialization ...
+// ... application initialization (still privileged if run as root) ...
 ctx.notify_parent()?;
 // daemon process continues here
+```
+
+**Split-phase privilege dropping** (when user/group switching is needed):
+
+```rust
+let mut config = DaemonConfig::new();
+config.pidfile("/var/run/foo.pid").user("nobody").group("nogroup");
+
+let mut ctx = unsafe { daemonize(&config)? };
+// privileged work here (e.g., bind port 80)
+ctx.chown_paths()?;                     // chown pidfile/lockfile/logs to target user
+ctx.drop_privileges()?;                 // setgid + setuid
+ctx.notify_parent()?;
 ```
 
 ### DaemonContext
@@ -101,15 +119,47 @@ ctx.notify_parent()?;
 derives `Debug` (Flock formatted as present/absent). Do not derive
 `Clone` or `PartialEq`.
 
-| Field         | Type              | Semantics                                  |
-| ------------- | ----------------- | ------------------------------------------ |
-| `lockfile`    | `Option<Flock>`   | Owned lock (`nix::fcntl`); drop releases.  |
-| `notify_pipe` | `Option<OwnedFd>` | Write end of notification pipe; see below. |
+| Field           | Type               | Semantics                                          |
+| --------------- | ------------------ | -------------------------------------------------- |
+| `lockfile`      | `Option<Flock>`    | Owned lock (`nix::fcntl`); drop releases.          |
+| `notify_pipe`   | `Option<OwnedFd>`  | Write end of notification pipe; see below.         |
+| `pidfile`       | `Option<PathBuf>`  | Cloned from config; used by `chown_paths()`.       |
+| `lockfile_path` | `Option<PathBuf>`  | Cloned from config; used by `chown_paths()`.       |
+| `stdout`        | `Option<PathBuf>`  | Cloned from config; used by `chown_paths()`.       |
+| `stderr`        | `Option<PathBuf>`  | Cloned from config; used by `chown_paths()`.       |
+| `user`          | `Option<String>`   | Cloned from config; used by `drop_privileges()`.   |
+| `group`         | `Option<String>`   | Cloned from config; used by `drop_privileges()`.   |
 
 **Accessors:**
 
 `lockfile_fd()` returns `Option<BorrowedFd<'_>>` (lifetime tied to the
 context). Returns `None` when no lockfile was configured.
+
+**Privilege methods:**
+
+`chown_paths(&mut self) -> Result<(), DaemonizeError>` changes
+ownership of pidfile, lockfile, stdout, and stderr files to the
+resolved target user/group. Skips files that are not configured. Must
+be called while still privileged (before `drop_privileges()`). No-op
+if neither user nor group is configured. User/group resolution uses
+the same string-parsing strategy as `drop_privileges()` (see below).
+
+`drop_privileges(&mut self) -> Result<(), DaemonizeError>` performs
+user/group switching. Resolution: if the string parses as a `u32`,
+treat it as a numeric UID/GID; otherwise resolve via `getpwnam()`/
+`getgrnam()`. Four combinations:
+
+- Neither user nor group: no-op.
+- User only: resolve user via `getpwnam()`, `initgroups(username,
+  primary_gid)`, `setgid(primary_gid)`, `setuid(uid)`.
+- Both user and group: resolve user via `getpwnam()`, resolve group
+  via `getgrnam()`, `initgroups(username, user_primary_gid)`,
+  `setgid(group_gid)`, `setuid(uid)`.
+- Group only: resolve group via `getgrnam()`, `setgid(group_gid)`.
+
+After user switching, sets `USER`, `HOME`, `LOGNAME` environment
+variables. These unconditionally overwrite any `.env()` values from
+the daemonization sequence.
 
 **Notification methods:**
 
@@ -150,14 +200,16 @@ are lowercase with no trailing punctuation.
 | `ValidationError`  | Bad path, bad env key, path overlap, other config error |
 | `ProgramNotFound`  | CLI-only: program path missing or not executable        |
 | `UserNotFound`     | User does not exist at runtime during user switching    |
+| `GroupNotFound`    | Group does not exist at runtime during group switching  |
 | `LockConflict`     | flock already held by another process                   |
 | `LockfileError`    | Lockfile cannot be opened                               |
 | `ForkFailed`       | `fork()` returns an error                               |
 | `SetsidFailed`     | `setsid()` returns an error                             |
 | `ChdirFailed`      | `chdir()` fails at runtime after fork                   |
-| `PermissionDenied` | Non-root caller with user switch, or setuid/setgid fail |
+| `PermissionDenied` | Non-root caller with user/group switch, or setuid/setgid/chown fail |
 | `PidfileError`     | Pidfile cannot be written                               |
 | `OutputFileError`  | stdout/stderr file cannot be opened/dup2'd              |
+| `ChownError`       | chown of pidfile/lockfile/output file failed             |
 | `ExecFailed`       | CLI-only: exec of target program failed                 |
 
 `ProgramNotFound` and `ExecFailed` are produced only by the CLI, never
@@ -195,7 +247,13 @@ pub unsafe fn daemonize(
 
 Takes `&DaemonConfig`, calls `validate()` internally, then performs the
 daemonization sequence. Returns `Ok(DaemonContext)` in the grandchild
-on success.
+on success (or in the current process when `foreground` is true).
+
+In foreground mode, the function skips both forks, `setsid`, and the
+notification pipe. All other steps (umask, chdir, redirect, signal
+reset, env vars, lockfile, pidfile) still execute. The returned
+`DaemonContext` has `notify_pipe: None`, making `notify_parent()` a
+no-op.
 
 **Error paths:**
 
@@ -275,15 +333,15 @@ only when both paths in a pair are `Some`.
 > independent file descriptions. Overlap would cause one open to
 > interfere with the other.
 
-### User validation
+### User/group validation
 
-`validate()` checks only that euid is 0 when a user is configured. It
-does not call `getpwnam()`.
+`validate()` checks only that euid is 0 when either a user or group is
+configured. It does not call `getpwnam()` or `getgrnam()`.
 
-> User lookups can trigger NSS/LDAP/NIS network calls with
-> unpredictable latency and failure modes. User resolution is a runtime
-> concern (step 12). Consumers who want early validation should call
-> `getpwnam()` themselves.
+> User/group lookups can trigger NSS/LDAP/NIS network calls with
+> unpredictable latency and failure modes. Resolution is a runtime
+> concern handled by `drop_privileges()`. Consumers who want early
+> validation should call `getpwnam()`/`getgrnam()` themselves.
 
 ### Environment key validation
 
@@ -300,18 +358,26 @@ Keys must be non-empty and contain no `=`. Values are unrestricted.
 After `validate()` passes, `daemonize()` performs these steps in this
 exact order. The ordering is load-bearing.
 
+### Foreground mode
+
+When `foreground` is true, steps 1–3 (pipe creation, both forks,
+setsid) are skipped entirely. Execution continues from step 4 in the
+current process. The returned `DaemonContext` has `notify_pipe: None`.
+
 ### Steps
 
-1. **Create notification pipe, first fork.** Create a pipe with
-   `O_CLOEXEC` on both ends (`pipe_rd`, `pipe_wr`). Fork. If fork
-   fails, close both pipe ends and return `Err(ForkFailed)` to the
-   caller — no pipe protocol is involved. On success: parent closes
-   `pipe_wr` and enters the parent-side pipe reader (see notification
-   protocol); child closes `pipe_rd` and continues with `pipe_wr`.
-2. **setsid.** Failure: write `SetsidFailed` to pipe, `_exit()`.
-3. **Second fork.** If fork fails: write `ForkFailed` to pipe,
-   `_exit()`. On success: intermediate child calls `_exit(0)`;
-   grandchild continues with `pipe_wr`.
+1. **Create notification pipe, first fork.** *(Skipped in foreground
+   mode.)* Create a pipe with `O_CLOEXEC` on both ends (`pipe_rd`,
+   `pipe_wr`). Fork. If fork fails, close both pipe ends and return
+   `Err(ForkFailed)` to the caller — no pipe protocol is involved.
+   On success: parent closes `pipe_wr` and enters the parent-side
+   pipe reader (see notification protocol); child closes `pipe_rd`
+   and continues with `pipe_wr`.
+2. **setsid.** *(Skipped in foreground mode.)* Failure: write
+   `SetsidFailed` to pipe, `_exit()`.
+3. **Second fork.** *(Skipped in foreground mode.)* If fork fails:
+   write `ForkFailed` to pipe, `_exit()`. On success: intermediate
+   child calls `_exit(0)`; grandchild continues with `pipe_wr`.
 4. **Set umask.**
 5. **chdir.** Failure: write `ChdirFailed` to pipe, `_exit()`.
 6. **Redirect stdin, stdout, stderr to `/dev/null`.** See
@@ -319,28 +385,36 @@ exact order. The ordering is load-bearing.
 7. **Open and lock lockfile** (if configured). Open with
    `O_WRONLY | O_CREAT | O_CLOEXEC`, mode 0644, then
    `flock(LOCK_EX | LOCK_NB)`. Open failure: `LockfileError`.
-   Flock failure: `LockConflict`. Fd is retained through step 14.
+   Flock failure: `LockConflict`. Fd is retained through step 13.
 8. **Write pidfile** (if configured). See pidfile mechanics.
 9. **Reset signal dispositions.** See signal reset.
 10. **Clear signal mask** via `sigprocmask(SIG_SETMASK, empty_set)`.
 11. **Set environment variables.** Sequential `setenv` in insertion
     order; last-write-wins for duplicate keys. Inherited environment
     is preserved.
-12. **Switch user** (if configured). See user switching.
-13. **Redirect stdout/stderr to configured files** (if configured).
+12. **Redirect stdout/stderr to configured files** (if configured).
     See output file redirect.
-14. **Close inherited fds.** Iterate 3..`rlim_cur`, skipping lockfile
-    fd and notification pipe fd. See fd closing.
-15. **Return `DaemonContext`** owning lockfile `Option<Flock>` and
-    `pipe_wr` as `Option<OwnedFd>`.
+13. **Close inherited fds** (if `close_fds` is true). Iterate
+    3..`rlim_cur`, skipping lockfile fd and notification pipe fd.
+    See fd closing.
+14. **Return `DaemonContext`** owning lockfile `Option<Flock>`,
+    `pipe_wr` as `Option<OwnedFd>`, and cloned path/user/group
+    fields from config.
+
+> User/group switching (formerly step 12) is no longer performed by
+> `daemonize()`. It is the caller's responsibility to call
+> `ctx.drop_privileges()` after daemonization. This split-phase
+> design gives the caller a privileged window between `daemonize()`
+> and `drop_privileges()` for operations like binding privileged
+> ports. See `DaemonContext::drop_privileges()` above.
 
 ### Post-fork error policy
 
-Post-fork errors in steps 2–14 that have a named `DaemonizeError`
+Post-fork errors in steps 2–13 that have a named `DaemonizeError`
 variant are written to the notification pipe per the error protocol
 and the process calls `_exit()` with the mapped exit code. Unspecified
 syscall failures (e.g., `sigprocmask`, `setenv`) panic with a
-descriptive message. Individual `close()` errors in step 14 are
+descriptive message. Individual `close()` errors in step 13 are
 silently ignored.
 
 > Panics for unspecified failures indicate a broken OS environment
@@ -386,9 +460,11 @@ open `/dev/null` or `dup2` to it panics.
 
 ### Output file redirect
 
-Step 13 opens configured stdout/stderr files and redirects the
-corresponding fds. This step occurs **after user switching** (step 12)
-so that files are created with the target user's ownership.
+Step 12 opens configured stdout/stderr files and redirects the
+corresponding fds. Since user switching is now the caller's
+responsibility (via `drop_privileges()`), files are created as the
+current user (typically root). Use `chown_paths()` before
+`drop_privileges()` to transfer ownership to the target user.
 
 Open with `O_WRONLY | O_CREAT` and `O_TRUNC` or `O_APPEND` per the
 append flag. Mode 0644 (subject to umask from step 4). `dup2` to the
@@ -404,10 +480,10 @@ share the same file description and write offset. `dup2` failure
 returns `OutputFileError`.
 
 > Opening all three fds as `/dev/null` in step 6, then reopening
-> configured files in step 13, fixes a regression from daemonize(1)
-> 1.7.8: the original opens output files after user switching so
-> they're owned by the target user. The previous spec opened them
-> before user switching (as root), causing ownership mismatch.
+> configured files in step 12, ensures output is captured from the
+> start. Since user switching is now the caller's responsibility,
+> output files are created as the current user. Use `chown_paths()`
+> to transfer ownership before `drop_privileges()`.
 
 ### Pidfile mechanics
 
@@ -431,20 +507,46 @@ only accepts the `Signal` enum which cannot represent real-time signal
 numbers. `libc::SIGRTMAX()` is a function; if a future `libc` version
 removes it, 64 is an acceptable ceiling.
 
-### User switching
+### User/group switching (DaemonContext::drop_privileges)
 
-Resolve user via `getpwnam()`, then `initgroups(username, primary_gid)`,
-`setgid(primary_gid)`, `setuid(uid)`. Set `USER`, `HOME`, `LOGNAME` —
+User/group switching is performed by `DaemonContext::drop_privileges()`,
+not during the daemonization sequence. The caller controls when
+privilege dropping occurs.
+
+**Numeric ID resolution:** if the user or group string parses as a
+`u32`, it is treated as a numeric UID/GID. Otherwise, resolve via
+`getpwnam()` / `getgrnam()`. This matches standard Unix tool behavior
+(`chown`, `su`, etc.).
+
+**Four combinations:**
+
+- Neither user nor group configured: no-op.
+- User only: `getpwnam()` → `initgroups(username, primary_gid)` →
+  `setgid(primary_gid)` → `setuid(uid)`.
+- User and group: `getpwnam()` → `getgrnam()` →
+  `initgroups(username, user_primary_gid)` → `setgid(group_gid)` →
+  `setuid(uid)`.
+- Group only: `getgrnam()` → `setgid(group_gid)`.
+
+After switching, set `USER`, `HOME`, `LOGNAME` environment variables —
 these unconditionally overwrite any `.env()` values from step 11.
-`getpwnam()` failure returns `UserNotFound`. `initgroups`/`setgid`/
-`setuid` failure returns `PermissionDenied`.
+
+`getpwnam()` failure returns `UserNotFound`. `getgrnam()` failure
+returns `GroupNotFound`. `initgroups`/`setgid`/`setuid` failure returns
+`PermissionDenied`.
 
 > `initgroups()` (not bare `setgroups()`) is needed because
 > `getpwnam()` only returns the primary GID; `initgroups()` consults
-> the group database for supplementary groups. User switching is a
-> library feature; the CLI merely exposes it via `-u`. This step
-> precedes fd closing because `getpwnam()` may open fds internally
-> (NSS modules, LDAP, NIS).
+> the group database for supplementary groups.
+
+### Path ownership (DaemonContext::chown_paths)
+
+`chown_paths()` changes ownership of all configured path-based
+resources (pidfile, lockfile, stdout, stderr) to the resolved target
+user/group. Must be called while still privileged. Resolves user/group
+using the same string-parsing strategy as `drop_privileges()`.
+
+`chown()` failure returns `ChownError`.
 
 ### Mode and umask interaction
 
@@ -454,16 +556,22 @@ temporarily override umask.
 
 ### Fd closing
 
-Iterate 3..`rlimit(RLIMIT_NOFILE).rlim_cur` by brute force. Skip the
-lockfile fd (from step 7, identified via `AsRawFd::as_raw_fd()` on the
-`Flock`) and the notification pipe write fd. If `getrlimit` fails,
-panic. Individual `close()` errors are silently ignored. `/proc/self/fd`
+When `close_fds` is true (the default), iterate
+3..`rlimit(RLIMIT_NOFILE).rlim_cur` by brute force. Skip the lockfile
+fd (from step 7, identified via `AsRawFd::as_raw_fd()` on the `Flock`)
+and the notification pipe write fd. If `getrlimit` fails, panic.
+Individual `close()` errors are silently ignored. `/proc/self/fd`
 enumeration must not be used.
+
+When `close_fds` is false, this step is skipped entirely.
 
 > Brute-force is the required strategy for portability across Unix
 > systems. `EBADF` is expected for most fds; `EIO` on an inherited fd
-> is not actionable. This step is last because `getpwnam()` in step 12
-> may hold cached fds.
+> is not actionable.
+>
+> Setting `close_fds` to false is useful in foreground mode where the
+> caller is running under a supervisor (systemd, launchd) that passes
+> file descriptors the daemon needs to keep.
 
 ---
 
@@ -475,18 +583,21 @@ for `--help` and `--version` are acceptable.
 
 ### Flags
 
-| Short | Long        | Argument     | Description                          |
-| ----- | ----------- | ------------ | ------------------------------------ |
-| `-p`  | `--pidfile` | path         | Pidfile path                         |
-| `-c`  | `--chdir`   | path         | Working directory                    |
-| `-m`  | `--umask`   | octal string | Process umask (e.g. `022`)           |
-| `-o`  | `--stdout`  | path         | Redirect stdout to file              |
-| `-e`  | `--stderr`  | path         | Redirect stderr to file              |
-| `-a`  | `--append`  |              | Append to stdout/stderr files        |
-| `-l`  | `--lock`    | path         | Lockfile path                        |
-| `-E`  | `--env`     | `name=value` | Set environment variable             |
-| `-u`  | `--user`    | username     | Run daemon as user                   |
-| `-v`  | `--verbose` |              | Diagnostic output before daemonizing |
+| Short | Long              | Argument     | Description                          |
+| ----- | ----------------- | ------------ | ------------------------------------ |
+| `-p`  | `--pidfile`       | path         | Pidfile path                         |
+| `-c`  | `--chdir`         | path         | Working directory                    |
+| `-m`  | `--umask`         | octal string | Process umask (e.g. `022`)           |
+| `-o`  | `--stdout`        | path         | Redirect stdout to file              |
+| `-e`  | `--stderr`        | path         | Redirect stderr to file              |
+| `-a`  | `--append`        |              | Append to stdout/stderr files        |
+| `-l`  | `--lock`          | path         | Lockfile path                        |
+| `-E`  | `--env`           | `name=value` | Set environment variable             |
+| `-u`  | `--user`          | name or uid  | Run daemon as user                   |
+| `-g`  | `--group`         | name or gid  | Run daemon as group                  |
+| `-f`  | `--foreground`    |              | Stay in foreground (no fork)         |
+|       | `--no-close-fds`  |              | Do not close inherited fds           |
+| `-v`  | `--verbose`       |              | Diagnostic output before daemonizing |
 
 Assign all short flags explicitly to avoid collisions.
 
@@ -527,10 +638,13 @@ All CLI validation occurs before daemonization.
 
 ### Program execution
 
-The CLI calls `unsafe { daemonize(&config) }`, then clears `CLOEXEC`
-on the lockfile fd (so the lock survives exec), and execs via `execvp`.
-argv[0] is the (possibly canonicalized) program path; subsequent
-elements are trailing arguments in order.
+The CLI calls `unsafe { daemonize(&config) }`, then:
+
+1. If user or group is configured: calls `ctx.chown_paths()` then
+   `ctx.drop_privileges()`.
+2. Clears `CLOEXEC` on the lockfile fd (so the lock survives exec).
+3. Execs via `execvp`. argv[0] is the (possibly canonicalized) program
+   path; subsequent elements are trailing arguments in order.
 
 The CLI does **not** call `notify_parent()`. Instead, it relies on the
 notification pipe's `O_CLOEXEC` flag: successful `execvp` replaces the
@@ -564,6 +678,7 @@ exit_code()` returns these values.
 | `ValidationError`        | 64        | `EX_USAGE`            |
 | `ProgramNotFound`        | 66        | `EX_NOINPUT`          |
 | `UserNotFound`           | 67        | `EX_NOUSER`           |
+| `GroupNotFound`          | 67        | `EX_NOUSER`           |
 | `LockConflict`           | 69        | `EX_UNAVAILABLE`      |
 | `LockfileError`          | 73        | `EX_CANTCREAT`        |
 | `ForkFailed`             | 71        | `EX_OSERR`            |
@@ -572,6 +687,7 @@ exit_code()` returns these values.
 | `PermissionDenied`       | 77        | `EX_NOPERM`           |
 | `PidfileError`           | 73        | `EX_CANTCREAT`        |
 | `OutputFileError`        | 73        | `EX_CANTCREAT`        |
+| `ChownError`             | 73        | `EX_CANTCREAT`        |
 | `ExecFailed`             | 71        | `EX_OSERR`            |
 
 Pre-daemonization errors: CLI prints message to stderr, exits per
@@ -672,8 +788,15 @@ Spawn CLI binary, inspect /proc and files. Require Linux, /proc:
 - **Same-path stdout/stderr:** assert no interleaving.
 - **Lockfile exclusion:** two instances, assert second exits 69.
 - **User switching (root-only, skip in CI):** assert UID/GID.
+- **Group switching (root-only, skip in CI):** assert GID with
+  independent group.
 - **Output file ownership (root-only, skip in CI):** with `-u`,
-  assert stdout/stderr files are owned by the target user.
+  assert stdout/stderr files are owned by the target user (via
+  `chown_paths()`).
+- **Foreground mode:** with `-f`, assert daemon runs in same
+  process group; no fork occurs.
+- **No-close-fds:** with `--no-close-fds`, assert inherited fds
+  survive daemonization.
 - **Error exit codes:** one test per exit code table row.
 - **Verbose mode:** with/without `-v`, assert stderr content.
 - **Parent notification:** assert parent does not exit until daemon
@@ -688,18 +811,24 @@ Spawn CLI binary, inspect /proc and files. Require Linux, /proc:
 
 ### Crate-level docs
 
-Module-level doc in `lib.rs` with usage example showing builder →
-`unsafe { daemonize() }` → `notify_parent()` → daemon continues.
-Use `?` (not `unwrap` or `try!`); hidden `fn main()` wrapper.
+Module-level doc in `lib.rs` with two usage examples: (1) simple
+builder → `unsafe { daemonize() }` → `notify_parent()` → daemon
+continues; (2) split-phase with `chown_paths()` → `drop_privileges()`
+→ `notify_parent()`. Use `?` (not `unwrap` or `try!`); hidden
+`fn main()` wrapper.
 
 ### Public item docs
 
 - `daemonize()`: `# Safety` (threading), `# Errors` (all variants),
-  `# Panics` (broken-OS conditions).
+  `# Panics` (broken-OS conditions). Document foreground mode behavior.
 - `daemonize_checked()`: `# Panics` (thread count > 1, /proc
   unavailable).
 - `validate()`: `# Errors`.
 - `lockfile_fd()`: CLOEXEC clearing use case, lifetime semantics.
+- `chown_paths()`: must be called while privileged, no-op without
+  user/group.
+- `drop_privileges()`: numeric ID resolution, four user/group
+  combinations, env var side effects. Document recommended call order.
 - `notify_parent()`: parent exit behavior, Drop semantics.
 - `report_error()`: writes error protocol and calls `_exit()`.
 - All builder methods: what the field controls, default value.
@@ -729,6 +858,9 @@ categories = ["os::unix-apis"]
 - `systemd` sd_notify protocol
 - POSIX capability manipulation
 - Linux namespace handling
+- Chroot support
+- PID file cleanup on exit
+- Privileged action callbacks (use split-phase `drop_privileges()` instead)
 - Any form of `exec` within the library (exec is CLI-only)
 - Serde support for `DaemonConfig`
 - `.clear_env()` builder method
@@ -744,7 +876,7 @@ verification points.
 
 - R1. `DaemonConfig::new()` == `Default::default()`.
 - R2. Default: chdir `/`, umask 0, options `None`, append `false`,
-  env empty.
+  foreground `false`, close_fds `true`, env empty.
 - R3. `.env()` accumulates; other builders are setters.
 - R4. Daemon runs in a new session (SID differs from caller's).
 - R5. Daemon is not the session leader (PID != SID).
@@ -753,7 +885,7 @@ verification points.
 - R8. Stdout/stderr are `/dev/null` when not configured.
 - R9. Configured stdout/stderr files contain expected output.
 - R10. Configured output files are owned by the target user when `-u`
-  is used.
+  is used (via `chown_paths()`).
 - R11. Files are truncated when append is off.
 - R12. Files are appended when append is on.
 - R13. Append flag applies uniformly to both stdout and stderr.
@@ -779,9 +911,10 @@ verification points.
   directory.
 - R33. Validation rejects lockfile/pidfile == stdout/stderr overlap.
 - R34. Validation permits lockfile == pidfile.
-- R35. Validation rejects non-root caller when user is configured.
+- R35. Validation rejects non-root caller when user or group is
+  configured.
 - R36. Validation rejects empty env key or key containing `=`.
-- R37. Validation does not call `getpwnam()`.
+- R37. Validation does not call `getpwnam()` or `getgrnam()`.
 - R38. Validation errors returned before any fork.
 - R39. Parent waits for daemon readiness before exiting.
 - R40. Parent exits 0 after `notify_parent()` is called.
@@ -805,54 +938,80 @@ verification points.
 - R56. Bare program names (no `/`) are resolved via PATH at exec time.
 - R57. First fork failure returns `Err` directly, not via pipe.
 - R58. Second fork failure is reported via notification pipe.
+- R59. `drop_privileges()` with user only: sets UID, GID, and
+  supplementary groups via user's primary GID.
+- R60. `drop_privileges()` with user and group: sets UID via user,
+  GID via independent group, supplementary groups via user.
+- R61. `drop_privileges()` with group only: sets GID, no setuid.
+- R62. `drop_privileges()` with neither: no-op.
+- R63. Numeric string user/group (e.g. "1000") resolved as UID/GID.
+- R64. `chown_paths()` chowns pidfile, lockfile, stdout, stderr to
+  target user/group.
+- R65. `chown_paths()` is a no-op when neither user nor group is set.
+- R66. Foreground mode: daemon runs in current process (no fork).
+- R67. Foreground mode: `notify_parent()` is a no-op.
+- R68. Foreground mode: all non-fork steps still execute.
+- R69. `close_fds` false: inherited fds are not closed.
+- R70. Group switching sets GID independently from user's primary GID.
+- R71. CLI calls `chown_paths()` then `drop_privileges()` when user
+  or group is configured.
 
 ### Implementation constraints (verifiable by code review)
 
-- R59. `DaemonConfig` derives `Default`, `Debug`, `Clone`, `Eq`,
+- R72. `DaemonConfig` derives `Default`, `Debug`, `Clone`, `Eq`,
   `PartialEq`.
-- R60. `DaemonContext` is `#[non_exhaustive]`, all fields private.
-- R61. `DaemonContext` derives `Debug`; not `Clone` or `PartialEq`.
-- R62. `DaemonizeError` derives `Debug`, `thiserror::Error`; not
+- R73. `DaemonContext` is `#[non_exhaustive]`, all fields private.
+- R74. `DaemonContext` derives `Debug`; not `Clone` or `PartialEq`.
+- R75. `DaemonizeError` derives `Debug`, `thiserror::Error`; not
   `Clone` or `PartialEq`.
-- R63. `Display` messages are lowercase, no trailing punctuation.
-- R64. All builder methods: `&mut self` → `&mut Self`, infallible.
-- R65. `daemonize()` calls `validate()` before forking.
-- R66. `daemonize()` is `pub unsafe fn`.
-- R67. `daemonize_checked()` is `pub fn`, `#[cfg(target_os = "linux")]`.
-- R68. Crate root: `#![deny(unsafe_code)]`.
-- R69. All `unsafe` blocks confined to `unsafe_ops` module.
-- R70. `daemonize()` delegates to `daemonize_inner()` with
+- R76. `Display` messages are lowercase, no trailing punctuation.
+- R77. All builder methods: `&mut self` → `&mut Self`, infallible.
+- R78. `daemonize()` calls `validate()` before forking.
+- R79. `daemonize()` is `pub unsafe fn`.
+- R80. `daemonize_checked()` is `pub fn`, `#[cfg(target_os = "linux")]`.
+- R81. Crate root: `#![deny(unsafe_code)]`.
+- R82. All `unsafe` blocks confined to `unsafe_ops` module.
+- R83. `daemonize()` delegates to `daemonize_inner()` with
   `&mut impl Forker`.
-- R71. `Forker` is `pub(crate)`, invisible to consumers.
-- R72. `NullForker` exists only under `#[cfg(test)]`.
-- R73. `Cargo.toml`: no `panic = "abort"` in dev/test profiles.
-- R74. Steps execute in specified order; ordering is load-bearing.
-- R75. `/dev/null` open or `dup2` failure panics.
-- R76. Lockfile opened with `O_WRONLY | O_CREAT | O_CLOEXEC`, 0644.
-- R77. Shared lockfile/pidfile: lock first, then seek/truncate/write.
-- R78. File-creating opens use mode 0644, subject to process umask.
-- R79. Signal reset: 1..SIGRTMAX, skip SIGKILL/SIGSTOP, EINVAL → skip.
-- R80. Signal reset uses `libc::sigaction()` directly.
-- R81. User switch order: `getpwnam` → `initgroups` → `setgid` →
-  `setuid`.
-- R82. Output files opened after user switching (step 13, not step 6).
-- R83. Fd closing: brute-force 3..rlim_cur, not `/proc/self/fd`.
-- R84. Fd closing skips lockfile fd and notification pipe fd.
-- R85. `getrlimit` failure panics.
-- R86. Individual `close()` errors silently ignored.
-- R87. Notification pipe both ends created with `O_CLOEXEC`.
-- R88. CLI does not call `notify_parent()`; relies on CLOEXEC + exec.
-- R89. CLI calls `report_error()` on exec failure.
-- R90. CLI clears CLOEXEC on lockfile fd before exec.
-- R91. `execvp` argv[0] is the program path as provided by user
+- R84. `Forker` is `pub(crate)`, invisible to consumers.
+- R85. `NullForker` exists only under `#[cfg(test)]`.
+- R86. `Cargo.toml`: no `panic = "abort"` in dev/test profiles.
+- R87. Steps execute in specified order; ordering is load-bearing.
+- R88. `/dev/null` open or `dup2` failure panics.
+- R89. Lockfile opened with `O_WRONLY | O_CREAT | O_CLOEXEC`, 0644.
+- R90. Shared lockfile/pidfile: lock first, then seek/truncate/write.
+- R91. File-creating opens use mode 0644, subject to process umask.
+- R92. Signal reset: 1..SIGRTMAX, skip SIGKILL/SIGSTOP, EINVAL → skip.
+- R93. Signal reset uses `libc::sigaction()` directly.
+- R94. `drop_privileges()` user switch order: `getpwnam` →
+  `initgroups` → `setgid` → `setuid`.
+- R95. Output files opened in daemonization step 12 (before caller's
+  privilege drop).
+- R96. Fd closing: brute-force 3..rlim_cur, not `/proc/self/fd`.
+- R97. Fd closing skips lockfile fd and notification pipe fd.
+- R98. `getrlimit` failure panics.
+- R99. Individual `close()` errors silently ignored.
+- R100. Notification pipe both ends created with `O_CLOEXEC`.
+- R101. CLI does not call `notify_parent()`; relies on CLOEXEC + exec.
+- R102. CLI calls `report_error()` on exec failure.
+- R103. CLI clears CLOEXEC on lockfile fd before exec.
+- R104. `execvp` argv[0] is the program path as provided by user
   (possibly canonicalized).
-- R92. Trailing args parsed with `trailing_var_arg` +
+- R105. Trailing args parsed with `trailing_var_arg` +
   `allow_hyphen_values`.
-- R93. All CLI validation occurs before daemonization.
-- R94. Library does not accept a program path or call exec.
-- R95. Path comparison: `canonicalize()` with byte-equality fallback.
-- R96. `ProgramNotFound` and `ExecFailed` are produced only by CLI.
-- R97. `DaemonContext::Drop` writes exit code `1` and failure message
+- R106. All CLI validation occurs before daemonization.
+- R107. Library does not accept a program path or call exec.
+- R108. Path comparison: `canonicalize()` with byte-equality fallback.
+- R109. `ProgramNotFound` and `ExecFailed` are produced only by CLI.
+- R110. `DaemonContext::Drop` writes exit code `1` and failure message
   to pipe if `notify_pipe` is still `Some`.
-- R98. Parent-side pipe reader is implemented inside `daemonize()`'s
+- R111. Parent-side pipe reader is implemented inside `daemonize()`'s
   parent branch (step 1).
+- R112. `DaemonContext` stores cloned path/user/group fields from
+  config (not a config reference or full clone).
+- R113. Foreground mode skips steps 1–3 (pipe, forks, setsid).
+- R114. `close_fds` false skips step 13 (fd closing).
+- R115. `chown_paths()` resolves user/group using same string-parsing
+  strategy as `drop_privileges()`.
+- R116. CLI calls `chown_paths()` then `drop_privileges()` when
+  user or group is configured, between `daemonize()` and exec.

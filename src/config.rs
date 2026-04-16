@@ -30,6 +30,9 @@ pub struct DaemonConfig {
     append: bool,
     lockfile: Option<PathBuf>,
     user: Option<String>,
+    group: Option<String>,
+    foreground: bool,
+    close_fds: bool,
     env: Vec<(String, String)>,
 }
 
@@ -44,6 +47,9 @@ impl Default for DaemonConfig {
             append: false,
             lockfile: None,
             user: None,
+            group: None,
+            foreground: false,
+            close_fds: true,
             env: Vec::new(),
         }
     }
@@ -100,8 +106,40 @@ impl DaemonConfig {
     }
 
     /// Sets the user to run the daemon as. Default: none (no user switch).
+    ///
+    /// Accepts a username string or a numeric UID (as a string, e.g. `"1000"`).
+    /// Resolution happens at runtime in [`DaemonContext::drop_privileges`](crate::DaemonContext::drop_privileges).
     pub fn user(&mut self, name: impl Into<String>) -> &mut Self {
         self.user = Some(name.into());
+        self
+    }
+
+    /// Sets the group to run the daemon as. Default: none (use user's primary group).
+    ///
+    /// Accepts a group name string or a numeric GID (as a string, e.g. `"1000"`).
+    /// Resolution happens at runtime in [`DaemonContext::drop_privileges`](crate::DaemonContext::drop_privileges).
+    pub fn group(&mut self, name: impl Into<String>) -> &mut Self {
+        self.group = Some(name.into());
+        self
+    }
+
+    /// Sets foreground mode. Default: `false`.
+    ///
+    /// When `true`, daemonization skips both forks, `setsid`, and the
+    /// notification pipe. All other steps (umask, chdir, redirect, signal
+    /// reset, etc.) still execute.
+    pub fn foreground(&mut self, foreground: bool) -> &mut Self {
+        self.foreground = foreground;
+        self
+    }
+
+    /// Sets whether to close inherited file descriptors. Default: `true`.
+    ///
+    /// When `false`, file descriptors 3+ are left open. Useful in
+    /// foreground mode when running under a supervisor that passes
+    /// file descriptors.
+    pub fn close_fds(&mut self, close_fds: bool) -> &mut Self {
+        self.close_fds = close_fds;
         self
     }
 
@@ -144,6 +182,18 @@ impl DaemonConfig {
 
     pub(crate) fn get_user(&self) -> Option<&str> {
         self.user.as_deref()
+    }
+
+    pub(crate) fn get_group(&self) -> Option<&str> {
+        self.group.as_deref()
+    }
+
+    pub(crate) fn get_foreground(&self) -> bool {
+        self.foreground
+    }
+
+    pub(crate) fn get_close_fds(&self) -> bool {
+        self.close_fds
     }
 
     pub(crate) fn get_env(&self) -> &[(String, String)] {
@@ -261,10 +311,10 @@ impl DaemonConfig {
             }
         }
 
-        // User validation: must be root to switch users
-        if self.user.is_some() && nix::unistd::geteuid().as_raw() != 0 {
+        // User/group validation: must be root to switch users or groups
+        if (self.user.is_some() || self.group.is_some()) && nix::unistd::geteuid().as_raw() != 0 {
             return Err(DaemonizeError::PermissionDenied(
-                "must be root to switch users".into(),
+                "must be root to switch users or groups".into(),
             ));
         }
 
@@ -328,6 +378,9 @@ mod tests {
         assert!(!config.append);
         assert_eq!(config.lockfile, None);
         assert_eq!(config.user, None);
+        assert_eq!(config.group, None);
+        assert!(!config.foreground);
+        assert!(config.close_fds);
         assert!(config.env.is_empty());
     }
 
@@ -500,6 +553,7 @@ mod tests {
             66
         );
         assert_eq!(DaemonizeError::UserNotFound(String::new()).exit_code(), 67);
+        assert_eq!(DaemonizeError::GroupNotFound(String::new()).exit_code(), 67);
         assert_eq!(DaemonizeError::LockConflict(String::new()).exit_code(), 69);
         assert_eq!(DaemonizeError::LockfileError(String::new()).exit_code(), 73);
         assert_eq!(DaemonizeError::ForkFailed(String::new()).exit_code(), 71);
@@ -514,6 +568,7 @@ mod tests {
             DaemonizeError::OutputFileError(String::new()).exit_code(),
             73
         );
+        assert_eq!(DaemonizeError::ChownError(String::new()).exit_code(), 73);
         assert_eq!(DaemonizeError::ExecFailed(String::new()).exit_code(), 71);
     }
 
@@ -621,5 +676,52 @@ mod tests {
         let result = config.validate();
         assert!(result.is_err());
         // The important thing: this was checked without forking
+    }
+
+    #[test]
+    fn group_builder_sets_field() {
+        let mut config = DaemonConfig::new();
+        config.group("wheel");
+        assert_eq!(config.group, Some("wheel".into()));
+    }
+
+    #[test]
+    fn foreground_builder_sets_field() {
+        let mut config = DaemonConfig::new();
+        config.foreground(true);
+        assert!(config.foreground);
+    }
+
+    #[test]
+    fn close_fds_builder_sets_field() {
+        let mut config = DaemonConfig::new();
+        config.close_fds(false);
+        assert!(!config.close_fds);
+    }
+
+    #[test]
+    fn validate_group_requires_root() {
+        // Non-root with group should fail validation
+        if nix::unistd::geteuid().as_raw() != 0 {
+            let mut config = DaemonConfig::new();
+            config.group("wheel");
+            assert!(matches!(
+                config.validate(),
+                Err(DaemonizeError::PermissionDenied(_))
+            ));
+        }
+    }
+
+    #[test]
+    fn validate_user_or_group_requires_root() {
+        // Non-root with user should fail validation (existing behavior)
+        if nix::unistd::geteuid().as_raw() != 0 {
+            let mut config = DaemonConfig::new();
+            config.user("nobody");
+            assert!(matches!(
+                config.validate(),
+                Err(DaemonizeError::PermissionDenied(_))
+            ));
+        }
     }
 }
