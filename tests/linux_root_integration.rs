@@ -483,7 +483,7 @@ fn group_only_switch_sets_gid() {
     let output = daemonize_cmd()
         .args([
             "-g",
-            "nobody",
+            "testgroup",
             "-p",
             pidfile.to_str().unwrap(),
             "--",
@@ -505,8 +505,8 @@ fn group_only_switch_sets_gid() {
 
     // R61: group-only should set GID but keep UID as root
     assert_eq!(info.uid, 0, "UID should remain root for group-only switch");
-    // GID should be nobody's GID (varies by system, but should not be 0)
-    assert_ne!(info.gid, 0, "GID should be nobody's GID, not root");
+    // GID should be testgroup's GID (not 0/root)
+    assert_ne!(info.gid, 0, "GID should be testgroup's GID, not root");
 
     kill_process(pid);
 }
@@ -522,13 +522,13 @@ fn user_and_group_switch_sets_independent_gid() {
     let dir = tempfile::tempdir().unwrap();
     let pidfile = dir.path().join("test.pid");
 
-    // Switch user to nobody but group to daemon (independent group)
+    // Switch user to testuser but group to testgroup (independent group)
     let output = daemonize_cmd()
         .args([
             "-u",
-            "nobody",
+            "testuser",
             "-g",
-            "daemon",
+            "testgroup",
             "-p",
             pidfile.to_str().unwrap(),
             "--",
@@ -548,19 +548,20 @@ fn user_and_group_switch_sets_independent_gid() {
 
     let info = query_process(pid).expect("daemon process should exist");
 
-    // R60/R70: UID should be nobody, GID should be daemon's GID
-    assert_ne!(info.uid, 0, "UID should be nobody, not root");
+    // R60/R70: UID should be testuser, GID should be testgroup's GID
+    assert_ne!(info.uid, 0, "UID should be testuser, not root");
 
-    // Get daemon group's GID for comparison
-    let daemon_gid_output = Command::new("id").args(["-g", "daemon"]).output().unwrap();
-    if daemon_gid_output.status.success() {
-        let daemon_gid: u32 = String::from_utf8_lossy(&daemon_gid_output.stdout)
-            .trim()
-            .parse()
-            .unwrap();
+    // Get testgroup's GID for comparison
+    let testgroup_gid_output = Command::new("getent")
+        .args(["group", "testgroup"])
+        .output()
+        .unwrap();
+    if testgroup_gid_output.status.success() {
+        let fields = String::from_utf8_lossy(&testgroup_gid_output.stdout);
+        let testgroup_gid: u32 = fields.trim().split(':').nth(2).unwrap().parse().unwrap();
         assert_eq!(
-            info.gid, daemon_gid,
-            "GID should be daemon's GID, not nobody's primary group"
+            info.gid, testgroup_gid,
+            "GID should be testgroup's GID, not testuser's primary group"
         );
     }
 
@@ -599,16 +600,19 @@ fn numeric_uid_switch() {
     let dir = tempfile::tempdir().unwrap();
     let pidfile = dir.path().join("test.pid");
 
-    // Get nobody's UID
-    let nobody_uid_output = Command::new("id").args(["-u", "nobody"]).output().unwrap();
-    let nobody_uid = String::from_utf8_lossy(&nobody_uid_output.stdout)
+    // Get testuser's UID
+    let testuser_uid_output = Command::new("id")
+        .args(["-u", "testuser"])
+        .output()
+        .unwrap();
+    let testuser_uid = String::from_utf8_lossy(&testuser_uid_output.stdout)
         .trim()
         .to_string();
 
     let output = daemonize_cmd()
         .args([
             "-u",
-            &nobody_uid,
+            &testuser_uid,
             "-p",
             pidfile.to_str().unwrap(),
             "--",
@@ -629,7 +633,7 @@ fn numeric_uid_switch() {
     let info = query_process(pid).expect("daemon process should exist");
     assert_eq!(
         info.uid,
-        nobody_uid.parse::<u32>().unwrap(),
+        testuser_uid.parse::<u32>().unwrap(),
         "UID should match numeric UID"
     );
 

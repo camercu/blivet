@@ -5,8 +5,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     lsof procps \
     && rm -rf /var/lib/apt/lists/*
 
-# Create a non-root user for user-switching tests
-RUN useradd --create-home --shell /bin/bash testuser
+# Create a non-root user and extra group for user/group-switching tests
+RUN useradd --create-home --shell /bin/bash testuser \
+    && groupadd testgroup
 
 WORKDIR /src
 
