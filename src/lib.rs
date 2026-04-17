@@ -24,7 +24,34 @@
 //! # }
 //! ```
 //!
-//! # Split-phase privilege dropping
+//! # Split-phase design
+//!
+//! Many daemons need root privileges during startup — binding to a
+//! privileged port, writing a pidfile to `/var/run`, opening log files
+//! owned by root — but should run as an unprivileged user afterward.
+//!
+//! Rather than coupling privilege dropping into the daemonization call
+//! (which would force callers to choose between "drop before init" and
+//! "never drop at all"), `daemonize()` returns a [`DaemonContext`] while
+//! the process is still running as the original user.  The caller
+//! performs any privileged work, then explicitly calls
+//! [`chown_paths()`](DaemonContext::chown_paths) and
+//! [`drop_privileges()`](DaemonContext::drop_privileges) when ready.
+//! Finally, [`notify_parent()`](DaemonContext::notify_parent) signals
+//! the original parent that the daemon is up, allowing the parent to
+//! exit with a meaningful status.
+//!
+//! This split gives full control over ordering:
+//!
+//! 1. **Privileged init** — bind sockets, open devices, acquire
+//!    resources that require elevated permissions.
+//! 2. **Ownership transfer** — `chown_paths()` hands pidfile, lockfile,
+//!    and log files to the target user/group while still root.
+//! 3. **Privilege drop** — `drop_privileges()` calls `initgroups`,
+//!    `setgid`, and `setuid`.  After this point the process runs as the
+//!    configured unprivileged user.
+//! 4. **Readiness signal** — `notify_parent()` writes a success byte to
+//!    the notification pipe; the parent reads it and exits 0.
 //!
 //! ```no_run
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -34,10 +61,18 @@
 //! config.pidfile("/var/run/foo.pid").user("nobody").group("nogroup");
 //!
 //! let mut ctx = unsafe { daemonize(&config)? };
-//! // ... privileged work (e.g., bind port 80) ...
-//! ctx.chown_paths()?;       // transfer file ownership while still root
-//! ctx.drop_privileges()?;   // setgid + setuid
+//!
+//! // 1. Privileged work while still root
+//! let _listener = std::net::TcpListener::bind("0.0.0.0:80")?;
+//!
+//! // 2–3. Transfer file ownership, then drop to unprivileged user
+//! ctx.chown_paths()?;
+//! ctx.drop_privileges()?;
+//!
+//! // 4. Tell the parent we're ready
 //! ctx.notify_parent()?;
+//!
+//! // Daemon continues as "nobody" with the socket still open
 //! # Ok(())
 //! # }
 //! ```

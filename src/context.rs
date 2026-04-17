@@ -12,9 +12,15 @@ use crate::error::DaemonizeError;
 
 /// Context returned by a successful daemonization.
 ///
-/// Holds the lockfile (if configured), the notification pipe write end, and
-/// cloned configuration fields needed for post-daemonization operations like
-/// privilege dropping and path ownership changes.
+/// Returned by [`daemonize()`](crate::daemonize) while the process still
+/// has its original privileges. This split-phase design lets callers
+/// perform privileged work (bind low ports, open devices) *after*
+/// daemonizing but *before* dropping to an unprivileged user.  See the
+/// [crate-level docs](crate#split-phase-design) for the full rationale.
+///
+/// Holds the lockfile (if configured), the notification pipe write end,
+/// and cloned configuration fields needed for post-daemonization
+/// operations like privilege dropping and path ownership changes.
 ///
 /// Dropping this without calling [`notify_parent`](DaemonContext::notify_parent)
 /// writes a failure message to the notification pipe, causing the parent to
