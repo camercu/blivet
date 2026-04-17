@@ -82,9 +82,7 @@ jobs:
           - name: freebsd
             version: '14.2'
           - name: openbsd
-            version: '7.6'
-          - name: netbsd
-            version: '10.1'
+            version: '7.8'
     runs-on: ubuntu-latest
     name: smoke (${{ matrix.os.name }})
     steps:
@@ -97,14 +95,11 @@ jobs:
           run: |
             set -eu
 
-            # Install Rust: OpenBSD/NetBSD use system packages (Tier 3, no rustup binaries);
+            # Install Rust: OpenBSD uses system packages (Tier 3, no rustup binaries);
             # FreeBSD has rustup support.
             case "$(uname)" in
               OpenBSD)
                 sudo pkg_add rust
-                ;;
-              NetBSD)
-                sudo pkgin -y install rust
                 ;;
               *)
                 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
@@ -126,6 +121,53 @@ jobs:
             kill -0 "$PID" || { echo "FAIL: daemon not running"; exit 1; }
             kill "$PID"
             echo "PASS: smoke test on ${{ matrix.os.name }}"
+
+  # NetBSD 10.1 ships Rust 1.82, below our MSRV (1.85). Cross-compile on the
+  # Ubuntu host and run the binary inside the VM.
+  netbsd-smoke:
+    runs-on: ubuntu-latest
+    name: smoke (netbsd)
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-netbsd
+      - name: Download NetBSD sysroot
+        run: |
+          mkdir -p /tmp/netbsd-sysroot
+          for set in base comp; do
+            curl -fL "https://cdn.netbsd.org/pub/NetBSD/NetBSD-10.1/amd64/binary/sets/${set}.tar.xz" \
+              | sudo tar xJf - -C /tmp/netbsd-sysroot ./usr/lib ./usr/include ./lib
+          done
+      - name: Cross-compile for NetBSD
+        env:
+          CARGO_TARGET_X86_64_UNKNOWN_NETBSD_LINKER: clang
+          CARGO_TARGET_X86_64_UNKNOWN_NETBSD_RUSTFLAGS: >-
+            -C link-arg=--target=x86_64-unknown-netbsd
+            -C link-arg=--sysroot=/tmp/netbsd-sysroot
+            -C link-arg=-fuse-ld=lld
+        run: cargo build --locked --target x86_64-unknown-netbsd
+      - name: Run smoke test in NetBSD VM
+        uses: cross-platform-actions/action@v1.0.0
+        with:
+          operating_system: netbsd
+          version: '10.1'
+          shell: sh
+          run: |
+            set -eu
+            PIDFILE="/tmp/daemonize-smoke-$$.pid"
+            ./target/x86_64-unknown-netbsd/debug/daemonize -p "$PIDFILE" -- sleep 30
+            i=0
+            while [ "$i" -lt 10 ]; do
+              [ -f "$PIDFILE" ] && break
+              sleep 1
+              i=$((i + 1))
+            done
+            test -f "$PIDFILE" || { echo "FAIL: pidfile not created"; exit 1; }
+            PID=$(cat "$PIDFILE")
+            kill -0 "$PID" || { echo "FAIL: daemon not running"; exit 1; }
+            kill "$PID"
+            echo "PASS: smoke test on netbsd"
 
   omnios-smoke:
     runs-on: ubuntu-latest
@@ -158,7 +200,7 @@ jobs:
 
   gate:
     if: always()
-    needs: [ci, msrv, docker-test, commitlint, bsd-smoke, omnios-smoke]
+    needs: [ci, msrv, docker-test, commitlint, bsd-smoke, netbsd-smoke, omnios-smoke]
     runs-on: ubuntu-latest
     steps:
       - name: Check results
@@ -169,6 +211,7 @@ jobs:
             "${{ needs.docker-test.result }}"
             "${{ needs.commitlint.result }}"
             "${{ needs.bsd-smoke.result }}"
+            "${{ needs.netbsd-smoke.result }}"
             "${{ needs.omnios-smoke.result }}"
           )
           for r in "${results[@]}"; do
