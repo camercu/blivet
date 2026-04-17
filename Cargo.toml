@@ -5,8 +5,26 @@ edition = "2021"
 rust-version = "1.85"
 description = "Daemonize a process using the double-fork method"
 license = "MIT OR Apache-2.0"
+repository = "https://github.com/camercu/daemonize-rs"
+readme = "README.md"
 keywords = ["daemon", "daemonize", "fork", "unix", "linux"]
 categories = ["os::unix-apis"]
+exclude = [
+    ".github/",
+    "Dockerfile",
+    ".dockerignore",
+    ".pre-commit-config.yaml",
+    ".releaserc.json",
+    "commitlint.config.js",
+    "deny.toml",
+    "docs/",
+    "justfile",
+    "package.json",
+    "package-lock.json",
+    "scripts/",
+    "shell.nix",
+    ".envrc",
+]
 
 [[bin]]
 name = "daemonize"
