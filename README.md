@@ -112,9 +112,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .stderr("/var/log/myapp.err")
         .chdir("/var/lib/myapp");
 
-    config.validate()?;
-
     // SAFETY: must be called before spawning any threads.
+    // daemonize() validates the config internally before forking.
     let mut ctx = unsafe { daemonize(&config)? };
 
     // Application initialization goes here (open sockets, load config, etc.)

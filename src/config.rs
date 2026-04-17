@@ -216,6 +216,7 @@ impl DaemonConfig {
     /// - Lockfile or pidfile overlaps with stdout or stderr
     /// - An environment key is empty or contains `=`
     /// - A user is configured but the effective UID is not 0
+    #[must_use = "validate() returns a Result that must be checked"]
     pub fn validate(&self) -> Result<(), DaemonizeError> {
         // Check chdir is absolute, exists, and is a directory
         if !self.chdir.is_absolute() {

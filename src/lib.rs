@@ -16,8 +16,6 @@
 //! let mut config = DaemonConfig::new();
 //! config.pidfile("/var/run/foo.pid").chdir("/tmp");
 //!
-//! config.validate()?;
-//!
 //! let mut ctx = unsafe { daemonize(&config)? };
 //! // ... application initialization ...
 //! ctx.notify_parent()?;
@@ -315,18 +313,16 @@ mod tests {
     use crate::forker::null_forker::NullForker;
     use std::panic::catch_unwind;
 
-    /// Runs the full `daemonize_inner` happy path in a subprocess.
+    /// Run a `#[ignore]` test in an isolated subprocess.
     ///
-    /// This test cannot run in the main test process because the daemonization
-    /// sequence redirects stdin/stdout/stderr to /dev/null and closes all
-    /// inherited file descriptors — both of which would destroy the test
-    /// harness. Running in a subprocess isolates these side effects.
-    #[test]
-    fn both_forks_child_succeeds() {
+    /// Tests that redirect fds or close inherited fds destroy the test harness.
+    /// This helper re-invokes the test binary targeting a single `#[ignore]`
+    /// test, with an env-var gate so it only runs when spawned from here.
+    fn run_subprocess(test_name: &str) {
         let exe = std::env::current_exe().unwrap();
         let status = std::process::Command::new(exe)
             .arg("--exact")
-            .arg("tests::both_forks_child_succeeds_subprocess")
+            .arg(test_name)
             .arg("--nocapture")
             .env("__DAEMONIZE_SUBPROCESS_TEST", "1")
             .status()
@@ -334,11 +330,20 @@ mod tests {
         assert!(status.success(), "subprocess test failed: {status}");
     }
 
+    fn is_subprocess() -> bool {
+        std::env::var("__DAEMONIZE_SUBPROCESS_TEST").is_ok()
+    }
+
     #[test]
-    #[ignore] // only run as subprocess from both_forks_child_succeeds
+    fn both_forks_child_succeeds() {
+        run_subprocess("tests::both_forks_child_succeeds_subprocess");
+    }
+
+    #[test]
+    #[ignore]
     fn both_forks_child_succeeds_subprocess() {
-        if std::env::var("__DAEMONIZE_SUBPROCESS_TEST").is_err() {
-            return; // skip if not invoked as subprocess
+        if !is_subprocess() {
+            return;
         }
         let config = DaemonConfig::new();
         let mut forker = NullForker::both_child();
@@ -414,7 +419,6 @@ mod tests {
 
     #[test]
     fn write_error_to_pipe_noop_with_none() {
-        // Should not panic or do anything
         write_error_to_pipe(&None, &DaemonizeError::ForkFailed("test".into()));
     }
 
@@ -434,86 +438,54 @@ mod tests {
         assert_eq!(std::str::from_utf8(&buf[1..]).unwrap(), "test error");
     }
 
-    /// Foreground mode: forker is never called, result has no notify pipe.
-    /// Runs in a subprocess because daemonize_inner still redirects fds.
     #[test]
     fn foreground_mode_skips_fork() {
-        let exe = std::env::current_exe().unwrap();
-        let status = std::process::Command::new(exe)
-            .arg("--exact")
-            .arg("tests::foreground_mode_skips_fork_subprocess")
-            .arg("--nocapture")
-            .env("__DAEMONIZE_SUBPROCESS_TEST", "1")
-            .status()
-            .unwrap();
-        assert!(status.success(), "subprocess test failed: {status}");
+        run_subprocess("tests::foreground_mode_skips_fork_subprocess");
     }
 
     #[test]
     #[ignore]
     fn foreground_mode_skips_fork_subprocess() {
-        if std::env::var("__DAEMONIZE_SUBPROCESS_TEST").is_err() {
+        if !is_subprocess() {
             return;
         }
         let mut config = DaemonConfig::new();
         config.foreground(true);
-        // NullForker with no fork results — if fork is called, it panics
         let mut forker = NullForker::new(vec![], Ok(()));
         let result = daemonize_inner(&config, &mut forker);
         let ctx = result.expect("foreground daemonize_inner should succeed");
-        // notify_pipe should be None in foreground mode
         assert!(ctx.lockfile_fd().is_none());
     }
 
-    /// Foreground mode: notify_parent is a no-op (no pipe).
     #[test]
     fn foreground_mode_notify_parent_noop() {
-        let exe = std::env::current_exe().unwrap();
-        let status = std::process::Command::new(exe)
-            .arg("--exact")
-            .arg("tests::foreground_mode_notify_parent_noop_subprocess")
-            .arg("--nocapture")
-            .env("__DAEMONIZE_SUBPROCESS_TEST", "1")
-            .status()
-            .unwrap();
-        assert!(status.success(), "subprocess test failed: {status}");
+        run_subprocess("tests::foreground_mode_notify_parent_noop_subprocess");
     }
 
     #[test]
     #[ignore]
     fn foreground_mode_notify_parent_noop_subprocess() {
-        if std::env::var("__DAEMONIZE_SUBPROCESS_TEST").is_err() {
+        if !is_subprocess() {
             return;
         }
         let mut config = DaemonConfig::new();
         config.foreground(true);
         let mut forker = NullForker::new(vec![], Ok(()));
         let mut ctx = daemonize_inner(&config, &mut forker).unwrap();
-        // notify_parent should be a no-op without error
         assert!(ctx.notify_parent().is_ok());
     }
 
-    /// close_fds=false: inherited fds survive daemonization.
     #[test]
     fn close_fds_false_preserves_fds() {
-        let exe = std::env::current_exe().unwrap();
-        let status = std::process::Command::new(exe)
-            .arg("--exact")
-            .arg("tests::close_fds_false_preserves_fds_subprocess")
-            .arg("--nocapture")
-            .env("__DAEMONIZE_SUBPROCESS_TEST", "1")
-            .status()
-            .unwrap();
-        assert!(status.success(), "subprocess test failed: {status}");
+        run_subprocess("tests::close_fds_false_preserves_fds_subprocess");
     }
 
     #[test]
     #[ignore]
     fn close_fds_false_preserves_fds_subprocess() {
-        if std::env::var("__DAEMONIZE_SUBPROCESS_TEST").is_err() {
+        if !is_subprocess() {
             return;
         }
-        // Open a pipe to create an fd > 2 that we can check survives
         let (rd, wr) = nix::unistd::pipe().unwrap();
 
         let mut config = DaemonConfig::new();
@@ -521,7 +493,6 @@ mod tests {
         let mut forker = NullForker::both_child();
         let _ctx = daemonize_inner(&config, &mut forker).unwrap();
 
-        // Fds should still be open
         assert!(
             nix::unistd::write(&wr, b"alive").is_ok(),
             "write fd should still be open with close_fds=false"
@@ -533,24 +504,15 @@ mod tests {
         );
     }
 
-    /// DaemonContext stores config fields correctly.
     #[test]
     fn context_carries_config_fields() {
-        let exe = std::env::current_exe().unwrap();
-        let status = std::process::Command::new(exe)
-            .arg("--exact")
-            .arg("tests::context_carries_config_fields_subprocess")
-            .arg("--nocapture")
-            .env("__DAEMONIZE_SUBPROCESS_TEST", "1")
-            .status()
-            .unwrap();
-        assert!(status.success(), "subprocess test failed: {status}");
+        run_subprocess("tests::context_carries_config_fields_subprocess");
     }
 
     #[test]
     #[ignore]
     fn context_carries_config_fields_subprocess() {
-        if std::env::var("__DAEMONIZE_SUBPROCESS_TEST").is_err() {
+        if !is_subprocess() {
             return;
         }
         let dir = tempfile::tempdir().unwrap();

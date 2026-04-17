@@ -243,6 +243,7 @@ impl DaemonContext {
     /// # Errors
     ///
     /// Returns `io::Error` if writing to the pipe fails.
+    #[must_use = "the parent process blocks until notified; ignoring this Result may leave it waiting"]
     pub fn notify_parent(&mut self) -> Result<(), io::Error> {
         if let Some(fd) = self.notify_pipe.take() {
             let mut file = io::BufWriter::new(fd_to_file(fd));
@@ -346,22 +347,20 @@ fn resolve_group_gid(spec: &str) -> Result<nix::unistd::Gid, DaemonizeError> {
 }
 
 /// Resolve user/group specs to (uid_t, gid_t) for chown.
-/// Returns `(u32::MAX, u32::MAX)` for dimensions that should be unchanged.
+/// Returns `(u32::MAX, u32::MAX)` for fields that should be unchanged.
 fn resolve_uid_gid(
     user: Option<&str>,
     group: Option<&str>,
 ) -> Result<(libc::uid_t, libc::gid_t), DaemonizeError> {
-    let uid = match user {
-        Some(spec) => resolve_user(spec)?.uid.as_raw(),
-        None => u32::MAX, // -1 means "don't change" for chown
+    let resolved_user = match user {
+        Some(spec) => Some(resolve_user(spec)?),
+        None => None,
     };
+    let uid = resolved_user.as_ref().map_or(u32::MAX, |u| u.uid.as_raw());
     let gid = match group {
         Some(spec) => resolve_group_gid(spec)?.as_raw(),
-        None => match user {
-            // If user is set but group isn't, use user's primary group
-            Some(spec) => resolve_user(spec)?.gid.as_raw(),
-            None => u32::MAX,
-        },
+        // If user is set but group isn't, use user's primary group
+        None => resolved_user.as_ref().map_or(u32::MAX, |u| u.gid.as_raw()),
     };
     Ok((uid, gid))
 }
