@@ -776,6 +776,41 @@ fn shared_lockfile_pidfile_path() {
     kill_process(pid);
 }
 
+// --- Pidfile implies lockfile ---
+
+#[test]
+fn pidfile_without_lockfile_enforces_single_instance() {
+    let dir = tempfile::tempdir().unwrap();
+    let pidfile = dir.path().join("test.pid");
+
+    // Start first instance with only --pidfile (no --lock)
+    let output1 = daemonize_cmd()
+        .args(["-p", pidfile.to_str().unwrap(), "--", "sleep", "30"])
+        .output()
+        .unwrap();
+    assert!(
+        output1.status.success(),
+        "first instance should succeed: {}",
+        String::from_utf8_lossy(&output1.stderr)
+    );
+
+    let pid = wait_for_pidfile(&pidfile).expect("pidfile should appear");
+
+    // Second instance with same pidfile should fail (lockfile defaulted to pidfile)
+    let output2 = daemonize_cmd()
+        .args(["-p", pidfile.to_str().unwrap(), "--", "sleep", "30"])
+        .output()
+        .unwrap();
+    assert_eq!(
+        output2.status.code(),
+        Some(69),
+        "second instance should exit 69 (lock conflict), stderr: {}",
+        String::from_utf8_lossy(&output2.stderr)
+    );
+
+    kill_process(pid);
+}
+
 // --- Hyphen arguments pass through to program ---
 
 #[test]

@@ -37,7 +37,7 @@ struct Args {
     #[arg(short = 'a', long = "append")]
     append: bool,
 
-    /// Lockfile path
+    /// Lockfile path [default: pidfile path, if set]
     #[arg(short = 'l', long = "lock")]
     lockfile: Option<PathBuf>,
 
@@ -103,7 +103,9 @@ fn main() -> ExitCode {
         config.stderr(p);
     }
     config.append(args.append);
-    if let Some(ref p) = args.lockfile {
+    // Default lockfile to pidfile path for single-instance enforcement
+    let lockfile = args.lockfile.as_ref().or(args.pidfile.as_ref());
+    if let Some(p) = lockfile {
         config.lockfile(p);
     }
     for env_str in &args.env {
