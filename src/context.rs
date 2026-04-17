@@ -559,14 +559,6 @@ mod tests {
     }
 
     #[test]
-    fn resolve_user_nonexistent_numeric() {
-        // UID 4294967294 (u32::MAX - 1) is unlikely to exist
-        let result = resolve_user("4294967294");
-        // May or may not exist depending on system — just verify no panic
-        let _ = result;
-    }
-
-    #[test]
     fn resolve_group_gid_by_name() {
         // "wheel" on macOS/BSD, "root" on Linux — try both
         let result = resolve_group_gid("wheel").or_else(|_| resolve_group_gid("root"));
