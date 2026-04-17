@@ -135,37 +135,9 @@ pub(crate) fn raw_open(
     }
 }
 
-/// Safe wrapper around `libc::lseek` to seek to a given offset from start.
-pub(crate) fn raw_lseek(fd: i32, offset: i64) -> Result<i64, nix::errno::Errno> {
-    let ret = unsafe { libc::lseek(fd, offset as libc::off_t, libc::SEEK_SET) };
-    if ret < 0 {
-        Err(nix::errno::Errno::last())
-    } else {
-        Ok(ret as i64)
-    }
-}
-
-/// Safe wrapper around `libc::ftruncate`.
-pub(crate) fn raw_ftruncate(fd: i32, length: i64) -> Result<(), nix::errno::Errno> {
-    let ret = unsafe { libc::ftruncate(fd, length as libc::off_t) };
-    if ret < 0 {
-        Err(nix::errno::Errno::last())
-    } else {
-        Ok(())
-    }
-}
-
-/// Safe wrapper around `libc::write`.
-pub(crate) fn raw_write(fd: i32, buf: &[u8]) -> Result<usize, nix::errno::Errno> {
-    let ret = unsafe { libc::write(fd, buf.as_ptr() as *const libc::c_void, buf.len()) };
-    if ret < 0 {
-        Err(nix::errno::Errno::last())
-    } else {
-        Ok(ret as usize)
-    }
-}
-
 /// Safe wrapper around `libc::initgroups`.
+///
+/// `nix::unistd::initgroups` is not available on macOS, so we call libc directly.
 pub(crate) fn raw_initgroups(
     user: &std::ffi::CStr,
     group: libc::gid_t,

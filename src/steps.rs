@@ -1,15 +1,15 @@
 //! Post-fork daemonization steps.
 //!
-//! Each function corresponds to one step in the 15-step daemonization sequence
+//! Each function corresponds to one step in the daemonization sequence
 //! orchestrated by [`daemonize_inner`](crate::daemonize_inner). They are
-//! collected here rather than inlined because each is independently testable
-//! and the grouping mirrors the spec's step numbering.
+//! collected here rather than inlined because each is independently testable.
 
-use std::os::fd::{AsRawFd, OwnedFd};
+use std::os::fd::{AsFd, AsRawFd, OwnedFd};
 use std::path::{Path, PathBuf};
 
 use nix::fcntl::{open, Flock, FlockArg, OFlag};
 use nix::sys::stat::Mode;
+use nix::unistd::Whence;
 
 use crate::error::DaemonizeError;
 use crate::unsafe_ops;
@@ -112,13 +112,12 @@ pub(crate) fn write_pidfile(
     };
 
     if let Some(flock) = shared {
-        // Write to already-locked fd: seek, truncate, write via raw fd
-        let raw_fd = flock.as_raw_fd();
-        unsafe_ops::raw_lseek(raw_fd, 0)
+        // Write to already-locked fd: seek, truncate, write
+        nix::unistd::lseek(flock.as_fd(), 0, Whence::SeekSet)
             .map_err(|e| DaemonizeError::PidfileError(format!("seek pidfile: {e}")))?;
-        unsafe_ops::raw_ftruncate(raw_fd, 0)
+        nix::unistd::ftruncate(flock.as_fd(), 0)
             .map_err(|e| DaemonizeError::PidfileError(format!("truncate pidfile: {e}")))?;
-        unsafe_ops::raw_write(raw_fd, content.as_bytes())
+        write_all_fd(flock.as_fd(), content.as_bytes())
             .map_err(|e| DaemonizeError::PidfileError(format!("write pidfile: {e}")))?;
     } else {
         // Open, write, close
@@ -255,7 +254,7 @@ pub(crate) fn execute_output_redirect(plan: &OutputRedirectPlan) -> Result<(), D
     Ok(())
 }
 
-/// Step 13: Redirect stdout/stderr to configured files.
+/// Step 12: Redirect stdout/stderr to configured files.
 ///
 /// Opened after user switching so files have correct ownership.
 /// Same-path optimization: if stdout and stderr resolve to the same path,
@@ -267,6 +266,20 @@ pub(crate) fn redirect_output(
 ) -> Result<(), DaemonizeError> {
     let plan = plan_output_redirect(stdout, stderr, append);
     execute_output_redirect(&plan)
+}
+
+/// Write all bytes to a file descriptor, looping on partial writes.
+fn write_all_fd(fd: impl AsFd, buf: &[u8]) -> Result<(), nix::errno::Errno> {
+    let fd = fd.as_fd();
+    let mut written = 0;
+    while written < buf.len() {
+        match nix::unistd::write(fd, &buf[written..]) {
+            Ok(0) => return Err(nix::errno::Errno::EIO),
+            Ok(n) => written += n,
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(())
 }
 
 /// Query the process fd limit via getrlimit.
@@ -287,7 +300,7 @@ pub(crate) fn fds_to_close(max_fd: i32, skip_fds: &[i32]) -> impl Iterator<Item 
     (3..max_fd).filter(move |fd| !skip_fds.contains(fd))
 }
 
-/// Step 14: Close inherited file descriptors.
+/// Step 13: Close inherited file descriptors.
 ///
 /// Iterates 3..rlim_cur, skipping fds in the skip list.
 ///
@@ -303,6 +316,8 @@ pub(crate) fn close_inherited_fds(skip_fds: &[i32]) {
 
 #[cfg(test)]
 mod tests {
+    use std::io::Write;
+
     use super::*;
     use serial_test::serial;
 
@@ -641,14 +656,16 @@ mod tests {
         // Truncate mode
         std::fs::write(&stdout_path, "old content\n").unwrap();
         redirect_output(Some(&stdout_path), None, false).unwrap();
-        unsafe_ops::raw_write(1, b"new content\n").unwrap();
+        std::io::stdout().write_all(b"new content\n").unwrap();
+        std::io::stdout().flush().unwrap();
         let content = std::fs::read_to_string(&stdout_path).unwrap();
         assert!(!content.contains("old content"), "should have truncated");
         assert!(content.contains("new content"));
 
         // Append mode
         redirect_output(Some(&stdout_path), None, true).unwrap();
-        unsafe_ops::raw_write(1, b"appended\n").unwrap();
+        std::io::stdout().write_all(b"appended\n").unwrap();
+        std::io::stdout().flush().unwrap();
         let content = std::fs::read_to_string(&stdout_path).unwrap();
         assert!(content.contains("new content"), "should preserve existing");
         assert!(content.contains("appended"));
@@ -663,8 +680,10 @@ mod tests {
         let plan = plan_output_redirect(Some(&combined), Some(&combined), false);
         execute_output_redirect(&plan).unwrap();
 
-        unsafe_ops::raw_write(1, b"stdout\n").unwrap();
-        unsafe_ops::raw_write(2, b"stderr\n").unwrap();
+        std::io::stdout().write_all(b"stdout\n").unwrap();
+        std::io::stdout().flush().unwrap();
+        std::io::stderr().write_all(b"stderr\n").unwrap();
+        std::io::stderr().flush().unwrap();
 
         let content = std::fs::read_to_string(&combined).unwrap();
         assert!(content.contains("stdout"));
@@ -681,7 +700,8 @@ mod tests {
         execute_output_redirect(&plan).unwrap();
         assert!(stderr_path.exists());
 
-        unsafe_ops::raw_write(2, b"stderr content\n").unwrap();
+        std::io::stderr().write_all(b"stderr content\n").unwrap();
+        std::io::stderr().flush().unwrap();
         let content = std::fs::read_to_string(&stderr_path).unwrap();
         assert!(content.contains("stderr content"));
     }
