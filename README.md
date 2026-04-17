@@ -53,13 +53,18 @@ Daemonize any program:
 # Basic usage
 daemonize -- /usr/bin/my-server --port 8080
 
-# With pidfile, log redirection, and lockfile
+# With pidfile and log redirection (pidfile doubles as lockfile by default)
 daemonize \
   -p /var/run/myapp.pid \
-  -l /var/run/myapp.lock \
   -o /var/log/myapp.out \
   -e /var/log/myapp.err \
   -c /var/lib/myapp \
+  -- /usr/bin/my-server
+
+# Separate lockfile (overrides the pidfile default)
+daemonize \
+  -p /var/run/myapp.pid \
+  -l /var/run/myapp.lock \
   -- /usr/bin/my-server
 
 # Run as a different user and group (requires root)
@@ -85,7 +90,7 @@ so the daemon can continue to write to them after the switch.
 | Flag | Long | Description |
 |------|------|-------------|
 | `-p` | `--pidfile PATH` | Write daemon PID to file |
-| `-l` | `--lock PATH` | Exclusive lockfile (prevents duplicate instances) |
+| `-l` | `--lock PATH` | Exclusive lockfile (default: pidfile path, if set) |
 | `-c` | `--chdir PATH` | Working directory (default: `/`) |
 | `-m` | `--umask MODE` | Process umask in octal (e.g. `022`) |
 | `-o` | `--stdout PATH` | Redirect stdout to file |

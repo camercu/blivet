@@ -51,6 +51,8 @@ dropped, so the daemon can continue to write to them after the switch.
 
 **-p**, **--pidfile** *path*
 :   Write the daemon's PID to *path*. The path must be absolute.
+    When **--lock** is not specified, the pidfile is also used as the
+    lock file, providing single-instance enforcement by default.
 
 **-c**, **--chdir** *path*
 :   Change the daemon's working directory to *path* (default: **/**).
@@ -75,7 +77,10 @@ dropped, so the daemon can continue to write to them after the switch.
 :   Acquire an exclusive lock on *path* using **flock**(2). Prevents
     multiple instances of the same daemon from running simultaneously.
     The lock file is held for the lifetime of the daemon process and
-    survives across **exec**(3). The path must be absolute.
+    survives across **exec**(3). The path must be absolute. Defaults to
+    the **--pidfile** path when not specified, so a pidfile alone is
+    sufficient for single-instance enforcement. Use **--lock** with a
+    different path to separate the lock file from the PID file.
 
 **-E**, **--env** *name*=*value*
 :   Set environment variable *name* to *value* in the daemon. May be
@@ -160,7 +165,11 @@ Redirect output and run as a specific user:
               -u myapp \
               -- /usr/bin/myapp
 
-Prevent duplicate instances with a lock file:
+Prevent duplicate instances (pidfile acts as lock file by default):
+
+    daemonize -p /var/run/myapp.pid -- /usr/bin/myapp
+
+Use a separate lock file:
 
     daemonize -p /var/run/myapp.pid \
               -l /var/run/myapp.lock \
