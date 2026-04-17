@@ -137,7 +137,7 @@ jobs:
           mkdir -p /tmp/netbsd-sysroot
           for set in base comp; do
             curl -fL "https://cdn.netbsd.org/pub/NetBSD/NetBSD-10.1/amd64/binary/sets/${set}.tar.xz" \
-              | sudo tar xJf - -C /tmp/netbsd-sysroot ./usr/lib ./usr/include
+              | sudo tar xJf - -C /tmp/netbsd-sysroot
           done
       - name: Cross-compile for NetBSD
         env:
