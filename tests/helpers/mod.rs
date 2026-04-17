@@ -7,6 +7,19 @@ use std::time::Duration;
 use relentless::retry;
 use relentless::stop;
 use relentless::wait;
+use relentless::RetryState;
+
+const POLL_INTERVAL: Duration = Duration::from_millis(10);
+const POLL_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Poll `f` at fixed 10ms intervals until it returns `Ok` or 5s elapses.
+fn poll_until<T>(f: impl FnMut(RetryState) -> Result<T, ()>) -> Result<T, ()> {
+    retry(f)
+        .wait(wait::fixed(POLL_INTERVAL))
+        .stop(stop::elapsed(POLL_TIMEOUT))
+        .call()
+        .map_err(|_| ())
+}
 
 /// Process information gathered via platform-specific backends.
 pub struct ProcessInfo {
@@ -93,22 +106,19 @@ pub fn daemonize_bin() -> std::path::PathBuf {
 }
 
 /// Wait for a pidfile to appear and return its contents as a PID.
-pub fn wait_for_pidfile(path: &Path, timeout_ms: u64) -> Option<u32> {
-    retry(|_| {
+pub fn wait_for_pidfile(path: &Path) -> Option<u32> {
+    poll_until(|_| {
         std::fs::read_to_string(path)
             .ok()
             .and_then(|c| c.trim().parse::<u32>().ok())
             .ok_or(())
     })
-    .wait(wait::fixed(Duration::from_millis(50)))
-    .stop(stop::elapsed(Duration::from_millis(timeout_ms)))
-    .call()
     .ok()
 }
 
 /// Wait for a process to die.
-pub fn wait_for_exit(pid: u32, timeout_ms: u64) -> bool {
-    retry(|_| {
+pub fn wait_for_exit(pid: u32) -> bool {
+    poll_until(|_| {
         let ret = unsafe { libc::kill(pid as i32, 0) };
         if ret != 0 {
             Ok(())
@@ -116,9 +126,6 @@ pub fn wait_for_exit(pid: u32, timeout_ms: u64) -> bool {
             Err(())
         }
     })
-    .wait(wait::fixed(Duration::from_millis(50)))
-    .stop(stop::elapsed(Duration::from_millis(timeout_ms)))
-    .call()
     .is_ok()
 }
 
@@ -127,4 +134,19 @@ pub fn kill_process(pid: u32) {
     unsafe { libc::kill(pid as i32, libc::SIGTERM) };
     std::thread::sleep(std::time::Duration::from_millis(100));
     unsafe { libc::kill(pid as i32, libc::SIGKILL) };
+}
+
+/// Poll a file until it contains `expected`, returning its full content.
+///
+/// On timeout, returns whatever content exists for better assertion messages.
+pub fn wait_for_file_content(path: &Path, expected: &str) -> String {
+    match poll_until(|_| {
+        std::fs::read_to_string(path)
+            .ok()
+            .filter(|c| c.contains(expected))
+            .ok_or(())
+    }) {
+        Ok(content) => content,
+        Err(_) => std::fs::read_to_string(path).unwrap_or_default(),
+    }
 }

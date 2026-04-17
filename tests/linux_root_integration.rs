@@ -63,7 +63,7 @@ fn user_switch_sets_uid_and_gid() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let pid = wait_for_pidfile(&pidfile, 5000).expect("pidfile should appear");
+    let pid = wait_for_pidfile(&pidfile).expect("pidfile should appear");
     std::thread::sleep(Duration::from_millis(500));
 
     // Verify the daemon's UID/GID via ps
@@ -150,7 +150,7 @@ fn user_switch_sets_env_vars() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let pid = wait_for_pidfile(&pidfile, 5000).expect("pidfile should appear");
+    let pid = wait_for_pidfile(&pidfile).expect("pidfile should appear");
     std::thread::sleep(Duration::from_millis(500));
 
     let content = std::fs::read_to_string(&env_file).unwrap_or_default();
@@ -220,7 +220,7 @@ fn output_file_owned_by_target_user() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let pid = wait_for_pidfile(&pidfile, 5000).expect("pidfile should appear");
+    let pid = wait_for_pidfile(&pidfile).expect("pidfile should appear");
     std::thread::sleep(Duration::from_millis(500));
 
     // Resolve testuser's UID
@@ -345,7 +345,7 @@ fn daemon_cwd_via_proc() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let pid = wait_for_pidfile(&pidfile, 5000).expect("pidfile should appear");
+    let pid = wait_for_pidfile(&pidfile).expect("pidfile should appear");
 
     // Verify CWD via /proc
     let proc_cwd = std::fs::read_link(format!("/proc/{pid}/cwd"));
@@ -405,7 +405,7 @@ fn user_switch_sets_supplementary_groups() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let pid = wait_for_pidfile(&pidfile, 5000).expect("pidfile should appear");
+    let pid = wait_for_pidfile(&pidfile).expect("pidfile should appear");
     std::thread::sleep(Duration::from_millis(500));
 
     let content = std::fs::read_to_string(&groups_file).unwrap_or_default();
@@ -499,7 +499,7 @@ fn group_only_switch_sets_gid() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let pid = wait_for_pidfile(&pidfile, 5000).expect("pidfile should appear");
+    let pid = wait_for_pidfile(&pidfile).expect("pidfile should appear");
 
     let info = query_process(pid).expect("daemon process should exist");
 
@@ -544,7 +544,7 @@ fn user_and_group_switch_sets_independent_gid() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let pid = wait_for_pidfile(&pidfile, 5000).expect("pidfile should appear");
+    let pid = wait_for_pidfile(&pidfile).expect("pidfile should appear");
 
     let info = query_process(pid).expect("daemon process should exist");
 
@@ -628,7 +628,7 @@ fn numeric_uid_switch() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let pid = wait_for_pidfile(&pidfile, 5000).expect("pidfile should appear");
+    let pid = wait_for_pidfile(&pidfile).expect("pidfile should appear");
 
     let info = query_process(pid).expect("daemon process should exist");
     assert_eq!(

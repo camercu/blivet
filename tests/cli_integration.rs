@@ -34,7 +34,7 @@ fn happy_path_daemon_is_orphaned_and_in_new_session() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let pid = wait_for_pidfile(&pidfile, 5000).expect("pidfile should appear");
+    let pid = wait_for_pidfile(&pidfile).expect("pidfile should appear");
 
     let info = query_process(pid).expect("daemon process should exist");
 
@@ -73,7 +73,7 @@ fn default_cwd_is_root() {
 
     assert!(output.status.success());
 
-    let pid = wait_for_pidfile(&pidfile, 5000).expect("pidfile should appear");
+    let pid = wait_for_pidfile(&pidfile).expect("pidfile should appear");
     let info = query_process(pid).expect("daemon process should exist");
 
     if !info.cwd.is_empty() {
@@ -109,12 +109,9 @@ fn stdout_redirect_writes_output() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let pid = wait_for_pidfile(&pidfile, 5000).expect("pidfile should appear");
+    let pid = wait_for_pidfile(&pidfile).expect("pidfile should appear");
 
-    // Wait for output to appear
-    std::thread::sleep(std::time::Duration::from_millis(500));
-
-    let content = std::fs::read_to_string(&stdout_file).unwrap_or_default();
+    let content = wait_for_file_content(&stdout_file, "hello_stdout");
     assert!(
         content.contains("hello_stdout"),
         "stdout file should contain output, got: {content}"
@@ -145,10 +142,9 @@ fn stderr_redirect_writes_output() {
 
     assert!(output.status.success());
 
-    let pid = wait_for_pidfile(&pidfile, 5000).expect("pidfile should appear");
-    std::thread::sleep(std::time::Duration::from_millis(500));
+    let pid = wait_for_pidfile(&pidfile).expect("pidfile should appear");
 
-    let content = std::fs::read_to_string(&stderr_file).unwrap_or_default();
+    let content = wait_for_file_content(&stderr_file, "hello_stderr");
     assert!(
         content.contains("hello_stderr"),
         "stderr file should contain output, got: {content}"
@@ -182,10 +178,9 @@ fn append_mode_preserves_existing_content() {
         .unwrap();
 
     assert!(output.status.success());
-    let pid = wait_for_pidfile(&pidfile, 5000).expect("pidfile should appear");
-    std::thread::sleep(std::time::Duration::from_millis(500));
+    let pid = wait_for_pidfile(&pidfile).expect("pidfile should appear");
 
-    let content = std::fs::read_to_string(&stdout_file).unwrap();
+    let content = wait_for_file_content(&stdout_file, "appended");
     assert!(
         content.contains("existing"),
         "should preserve existing content"
@@ -216,7 +211,7 @@ fn lockfile_exclusion_second_instance_fails() {
         .unwrap();
     assert!(output1.status.success());
 
-    let pid = wait_for_pidfile(&pidfile, 5000).expect("pidfile should appear");
+    let pid = wait_for_pidfile(&pidfile).expect("pidfile should appear");
 
     // Second instance with same lockfile should fail
     let output2 = daemonize_cmd()
@@ -278,7 +273,7 @@ fn verbose_mode_prints_diagnostics() {
         "verbose mode should print diagnostics, got: {stderr}"
     );
 
-    let pid = wait_for_pidfile(&pidfile, 5000).expect("pidfile should appear");
+    let pid = wait_for_pidfile(&pidfile).expect("pidfile should appear");
     kill_process(pid);
 }
 
@@ -299,7 +294,7 @@ fn no_verbose_no_diagnostics() {
         "without -v should have no stderr, got: {stderr}"
     );
 
-    let pid = wait_for_pidfile(&pidfile, 5000).expect("pidfile should appear");
+    let pid = wait_for_pidfile(&pidfile).expect("pidfile should appear");
     kill_process(pid);
 }
 
@@ -326,10 +321,9 @@ fn env_vars_passed_to_daemon() {
         .unwrap();
 
     assert!(output.status.success());
-    let pid = wait_for_pidfile(&pidfile, 5000).expect("pidfile should appear");
-    std::thread::sleep(std::time::Duration::from_millis(500));
+    let pid = wait_for_pidfile(&pidfile).expect("pidfile should appear");
 
-    let content = std::fs::read_to_string(&env_file).unwrap_or_default();
+    let content = wait_for_file_content(&env_file, "hello_world");
     assert!(
         content.contains("hello_world"),
         "env var should be passed to daemon, got: {content}"
@@ -361,10 +355,9 @@ fn same_path_stdout_stderr() {
         .unwrap();
 
     assert!(output.status.success());
-    let pid = wait_for_pidfile(&pidfile, 5000).expect("pidfile should appear");
-    std::thread::sleep(std::time::Duration::from_millis(500));
+    let pid = wait_for_pidfile(&pidfile).expect("pidfile should appear");
 
-    let content = std::fs::read_to_string(&combined).unwrap_or_default();
+    let content = wait_for_file_content(&combined, "stderr_line");
     assert!(content.contains("stdout_line"), "should have stdout");
     assert!(content.contains("stderr_line"), "should have stderr");
 
@@ -404,10 +397,9 @@ fn relative_path_with_slash_canonicalized() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let pid = wait_for_pidfile(&pidfile, 5000).expect("pidfile should appear");
-    std::thread::sleep(Duration::from_millis(500));
+    let pid = wait_for_pidfile(&pidfile).expect("pidfile should appear");
 
-    let content = std::fs::read_to_string(&stdout_file).unwrap_or_default();
+    let content = wait_for_file_content(&stdout_file, "resolved_ok");
     assert!(
         content.contains("resolved_ok"),
         "script should execute despite chdir, got: {content}"
@@ -442,10 +434,9 @@ fn truncate_mode_overwrites_existing() {
         .unwrap();
 
     assert!(output.status.success());
-    let pid = wait_for_pidfile(&pidfile, 5000).expect("pidfile should appear");
-    std::thread::sleep(Duration::from_millis(500));
+    let pid = wait_for_pidfile(&pidfile).expect("pidfile should appear");
 
-    let content = std::fs::read_to_string(&stdout_file).unwrap();
+    let content = wait_for_file_content(&stdout_file, "new_content");
     assert!(
         !content.contains("old_content_should_be_gone"),
         "truncate should remove old content"
@@ -479,7 +470,7 @@ fn parent_waits_for_exec_before_exiting() {
         "parent should not hang (took {elapsed:?})"
     );
 
-    let pid = wait_for_pidfile(&pidfile, 5000).expect("pidfile should appear");
+    let pid = wait_for_pidfile(&pidfile).expect("pidfile should appear");
     kill_process(pid);
 }
 
@@ -582,15 +573,17 @@ fn no_pidfile_when_not_configured() {
             "--",
             "sh",
             "-c",
-            "echo running; sleep 5",
+            "echo running",
         ])
         .output()
         .unwrap();
 
     assert!(output.status.success());
-    std::thread::sleep(Duration::from_millis(500));
 
-    // No pidfile should exist in the tempdir other than lockfile and stdout
+    let content = wait_for_file_content(&stdout_file, "running");
+    assert!(content.contains("running"));
+
+    // No pidfile should exist in the tempdir
     let files: Vec<_> = std::fs::read_dir(dir.path())
         .unwrap()
         .filter_map(|e| e.ok())
@@ -601,10 +594,6 @@ fn no_pidfile_when_not_configured() {
         !files.iter().any(|f| f.ends_with(".pid")),
         "no pidfile should be created when not configured, found: {files:?}"
     );
-
-    // Clean up: find the daemon via lockfile holder
-    let content = std::fs::read_to_string(&stdout_file).unwrap_or_default();
-    assert!(content.contains("running"));
 }
 
 // --- Umask flag (R7) ---
@@ -639,11 +628,9 @@ fn umask_flag_sets_daemon_umask() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let pid = wait_for_pidfile(&pidfile, 5000).expect("pidfile should appear");
-    std::thread::sleep(Duration::from_millis(500));
+    let pid = wait_for_pidfile(&pidfile).expect("pidfile should appear");
 
-    let content = std::fs::read_to_string(&stdout_file).unwrap_or_default();
-    // With umask 077, a new file should have mode 600 (0666 & ~077)
+    let content = wait_for_file_content(&stdout_file, "600");
     assert!(
         content.contains("600"),
         "file created with umask 077 should have mode 600, got: {content}"
@@ -677,10 +664,9 @@ fn env_without_equals_sets_empty_value() {
         .unwrap();
 
     assert!(output.status.success());
-    let pid = wait_for_pidfile(&pidfile, 5000).expect("pidfile should appear");
-    std::thread::sleep(Duration::from_millis(500));
+    let pid = wait_for_pidfile(&pidfile).expect("pidfile should appear");
 
-    let content = std::fs::read_to_string(&env_file).unwrap_or_default();
+    let content = wait_for_file_content(&env_file, "VAL=[]");
     assert!(
         content.contains("VAL=[]"),
         "env var without = should be empty string, got: {content}"
@@ -716,10 +702,9 @@ fn multiple_env_vars() {
         .unwrap();
 
     assert!(output.status.success());
-    let pid = wait_for_pidfile(&pidfile, 5000).expect("pidfile should appear");
-    std::thread::sleep(Duration::from_millis(500));
+    let pid = wait_for_pidfile(&pidfile).expect("pidfile should appear");
 
-    let content = std::fs::read_to_string(&env_file).unwrap_or_default();
+    let content = wait_for_file_content(&env_file, "beta");
     assert!(
         content.contains("alpha"),
         "should have VAR_A, got: {content}"
@@ -750,7 +735,7 @@ fn bare_program_name_uses_path_search() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let pid = wait_for_pidfile(&pidfile, 5000).expect("pidfile should appear");
+    let pid = wait_for_pidfile(&pidfile).expect("pidfile should appear");
     kill_process(pid);
 }
 
@@ -780,7 +765,7 @@ fn shared_lockfile_pidfile_path() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let pid = wait_for_pidfile(&shared, 5000).expect("pidfile should appear");
+    let pid = wait_for_pidfile(&shared).expect("pidfile should appear");
     let content = std::fs::read_to_string(&shared).unwrap();
     assert_eq!(
         content.trim(),
@@ -820,10 +805,9 @@ fn hyphen_arguments_pass_through() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let pid = wait_for_pidfile(&pidfile, 5000);
-    std::thread::sleep(Duration::from_millis(500));
+    let pid = wait_for_pidfile(&pidfile);
 
-    let content = std::fs::read_to_string(&stdout_file).unwrap_or_default();
+    let content = wait_for_file_content(&stdout_file, "--flag");
     assert!(
         content.contains("--flag"),
         "program should receive --flag, got: {content}"
