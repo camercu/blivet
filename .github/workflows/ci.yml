@@ -137,7 +137,7 @@ jobs:
           mkdir -p /tmp/netbsd-sysroot
           for set in base comp; do
             curl -fL "https://cdn.netbsd.org/pub/NetBSD/NetBSD-10.1/amd64/binary/sets/${set}.tar.xz" \
-              | sudo tar xJf - -C /tmp/netbsd-sysroot ./usr/lib ./usr/include ./lib
+              | sudo tar xJf - -C /tmp/netbsd-sysroot ./usr/lib ./usr/include
           done
       - name: Cross-compile for NetBSD
         env:
@@ -169,38 +169,15 @@ jobs:
             kill "$PID"
             echo "PASS: smoke test on netbsd"
 
-  omnios-smoke:
-    runs-on: ubuntu-latest
-    name: smoke (omnios)
-    steps:
-      - uses: actions/checkout@v4
-      - uses: cross-platform-actions/action@v1.0.0
-        with:
-          operating_system: omnios
-          version: 'r151052'
-          shell: bash
-          run: |
-            set -euo pipefail
-            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
-            . "$HOME/.cargo/env"
-            cargo build --locked
-            PIDFILE="/tmp/daemonize-smoke-$$.pid"
-            ./target/debug/daemonize -p "$PIDFILE" -- sleep 30
-            for i in $(seq 1 10); do
-              [ -f "$PIDFILE" ] && break
-              sleep 1
-            done
-            test -f "$PIDFILE" || { echo "FAIL: pidfile not created"; exit 1; }
-            PID=$(cat "$PIDFILE")
-            kill -0 "$PID" || { echo "FAIL: daemon not running"; exit 1; }
-            kill "$PID"
-            echo "PASS: smoke test on omnios"
+  # OmniOS smoke test disabled: cross-platform-actions/action returns 404
+  # downloading OmniOS resources. Re-enable when upstream fixes the issue.
+  # https://github.com/cross-platform-actions/action
 
   # ── Gate (single required status check) ───────────────────
 
   gate:
     if: always()
-    needs: [ci, msrv, docker-test, commitlint, bsd-smoke, netbsd-smoke, omnios-smoke]
+    needs: [ci, msrv, docker-test, commitlint, bsd-smoke, netbsd-smoke]
     runs-on: ubuntu-latest
     steps:
       - name: Check results
@@ -212,7 +189,6 @@ jobs:
             "${{ needs.commitlint.result }}"
             "${{ needs.bsd-smoke.result }}"
             "${{ needs.netbsd-smoke.result }}"
-            "${{ needs.omnios-smoke.result }}"
           )
           for r in "${results[@]}"; do
             case "$r" in
