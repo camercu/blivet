@@ -572,8 +572,9 @@ mod tests {
 
     #[test]
     fn resolve_group_gid_by_name() {
-        // "wheel" on macOS/BSD, "root" on Linux — try both
-        let result = resolve_group_gid("wheel").or_else(|_| resolve_group_gid("root"));
+        // "root" on Linux, "wheel" on macOS/BSD — try root first to avoid
+        // NSS lookup hangs for nonexistent groups in CI.
+        let result = resolve_group_gid("root").or_else(|_| resolve_group_gid("wheel"));
         assert!(result.is_ok());
     }
 
