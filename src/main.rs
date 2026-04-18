@@ -1,6 +1,6 @@
 use std::ffi::CString;
 use std::os::fd::BorrowedFd;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::Parser;
@@ -25,11 +25,11 @@ struct Args {
     #[arg(short = 'm', long = "umask", value_parser = parse_octal_mode)]
     umask: Option<Mode>,
 
-    /// Redirect stdout to file
+    /// Redirect stdout to file (also sets stderr if --stderr is not given)
     #[arg(short = 'o', long = "stdout")]
     stdout: Option<PathBuf>,
 
-    /// Redirect stderr to file
+    /// Redirect stderr to file [default: stdout path, .stdout→.stderr]
     #[arg(short = 'e', long = "stderr")]
     stderr: Option<PathBuf>,
 
@@ -99,7 +99,18 @@ fn main() -> ExitCode {
     if let Some(ref p) = args.stdout {
         config.stdout(p);
     }
-    if let Some(ref p) = args.stderr {
+    // Default stderr to stdout path when not explicitly set:
+    // - If stdout ends in ".stdout", swap extension to ".stderr"
+    // - Otherwise, use the same path (shares the fd via dup2)
+    let stderr = args.stderr.as_ref().or(args.stdout.as_ref());
+    let stderr = stderr.map(|p| {
+        if args.stderr.is_some() {
+            p.clone()
+        } else {
+            derive_stderr_path(p)
+        }
+    });
+    if let Some(ref p) = stderr {
         config.stderr(p);
     }
     config.append(args.append);
@@ -221,6 +232,17 @@ fn resolve_program_path(program: &str) -> Result<String, DaemonizeError> {
     } else {
         // Bare name: execvp will search PATH
         Ok(program.to_string())
+    }
+}
+
+/// Derive a stderr path from a stdout path.
+///
+/// If the stdout path has a `.stdout` extension, swaps it for `.stderr`.
+/// Otherwise returns the path unchanged (stderr shares the same file).
+fn derive_stderr_path(stdout: &Path) -> PathBuf {
+    match stdout.extension() {
+        Some(ext) if ext == "stdout" => stdout.with_extension("stderr"),
+        _ => stdout.to_path_buf(),
     }
 }
 

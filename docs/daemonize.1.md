@@ -64,11 +64,15 @@ dropped, so the daemon can continue to write to them after the switch.
 
 **-o**, **--stdout** *path*
 :   Redirect the daemon's stdout to *path*. The path must be absolute.
-    If both **-o** and **-e** refer to the same file, the file is opened once
-    and shared between both streams.
+    When **--stderr** is not specified, stderr is also redirected: if *path*
+    ends in **.stdout**, stderr goes to the same name with a **.stderr**
+    extension; otherwise both streams share the same file (opened once,
+    shared via **dup2**(2)).
 
 **-e**, **--stderr** *path*
 :   Redirect the daemon's stderr to *path*. The path must be absolute.
+    Defaults to the **--stdout** path (with **.stdout**→**.stderr** extension
+    swap) when not specified.
 
 **-a**, **--append**
 :   Open stdout/stderr files in append mode instead of truncating them.
@@ -156,14 +160,19 @@ Run a program as a daemon with a PID file:
 
     daemonize -p /var/run/myapp.pid -- /usr/bin/myapp --config /etc/myapp.conf
 
-Redirect output and run as a specific user:
+Redirect output and run as a specific user (stderr mirrors stdout):
 
     daemonize -p /var/run/myapp.pid \
-              -o /var/log/myapp/stdout.log \
-              -e /var/log/myapp/stderr.log \
+              -o /var/log/myapp/output.log \
               -a \
               -u myapp \
               -- /usr/bin/myapp
+
+Split stdout and stderr using extension convention:
+
+    daemonize -p /var/run/myapp.pid \
+              -o /var/log/myapp/app.stdout \
+              -- /usr/bin/myapp  # stderr goes to app.stderr
 
 Prevent duplicate instances (pidfile acts as lock file by default):
 

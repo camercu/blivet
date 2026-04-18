@@ -364,6 +364,92 @@ fn same_path_stdout_stderr() {
     kill_process(pid);
 }
 
+// --- Stdout implies stderr ---
+
+#[test]
+fn stdout_only_mirrors_to_stderr() {
+    let dir = tempfile::tempdir().unwrap();
+    let pidfile = dir.path().join("test.pid");
+    let combined = dir.path().join("combined.log");
+
+    let output = daemonize_cmd()
+        .args([
+            "-p",
+            pidfile.to_str().unwrap(),
+            "-o",
+            combined.to_str().unwrap(),
+            "--",
+            "sh",
+            "-c",
+            "echo stdout_line; echo stderr_line >&2; sleep 1",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let pid = wait_for_pidfile(&pidfile).expect("pidfile should appear");
+
+    let content = wait_for_file_content(&combined, "stderr_line");
+    assert!(content.contains("stdout_line"), "should have stdout");
+    assert!(
+        content.contains("stderr_line"),
+        "should have stderr (mirrored from --stdout)"
+    );
+
+    kill_process(pid);
+}
+
+#[test]
+fn stdout_extension_swaps_to_stderr() {
+    let dir = tempfile::tempdir().unwrap();
+    let pidfile = dir.path().join("test.pid");
+    let stdout_file = dir.path().join("app.stdout");
+    let stderr_file = dir.path().join("app.stderr");
+
+    let output = daemonize_cmd()
+        .args([
+            "-p",
+            pidfile.to_str().unwrap(),
+            "-o",
+            stdout_file.to_str().unwrap(),
+            "--",
+            "sh",
+            "-c",
+            "echo out_line; echo err_line >&2; sleep 1",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "daemonize failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let pid = wait_for_pidfile(&pidfile).expect("pidfile should appear");
+
+    let out_content = wait_for_file_content(&stdout_file, "out_line");
+    assert!(
+        out_content.contains("out_line"),
+        "stdout file should have stdout"
+    );
+    assert!(
+        !out_content.contains("err_line"),
+        "stdout file should not have stderr"
+    );
+
+    let err_content = wait_for_file_content(&stderr_file, "err_line");
+    assert!(
+        err_content.contains("err_line"),
+        "stderr file should have stderr"
+    );
+    assert!(
+        !err_content.contains("out_line"),
+        "stderr file should not have stdout"
+    );
+
+    kill_process(pid);
+}
+
 // --- Relative path resolution (R55) ---
 
 #[test]

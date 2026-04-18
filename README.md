@@ -53,13 +53,18 @@ Daemonize any program:
 # Basic usage
 daemonize -- /usr/bin/my-server --port 8080
 
-# With pidfile and log redirection (pidfile doubles as lockfile by default)
+# With pidfile and log redirection (stderr mirrors stdout by default)
 daemonize \
   -p /var/run/myapp.pid \
-  -o /var/log/myapp.out \
-  -e /var/log/myapp.err \
+  -o /var/log/myapp.log \
   -c /var/lib/myapp \
   -- /usr/bin/my-server
+
+# Split stdout/stderr using .stdout/.stderr extensions (auto-derived)
+daemonize \
+  -p /var/run/myapp.pid \
+  -o /var/log/myapp.stdout \
+  -- /usr/bin/my-server  # stderr goes to /var/log/myapp.stderr
 
 # Separate lockfile (overrides the pidfile default)
 daemonize \
@@ -93,8 +98,8 @@ so the daemon can continue to write to them after the switch.
 | `-l` | `--lock PATH` | Exclusive lockfile (default: pidfile path, if set) |
 | `-c` | `--chdir PATH` | Working directory (default: `/`) |
 | `-m` | `--umask MODE` | Process umask in octal (e.g. `022`) |
-| `-o` | `--stdout PATH` | Redirect stdout to file |
-| `-e` | `--stderr PATH` | Redirect stderr to file |
+| `-o` | `--stdout PATH` | Redirect stdout to file (also sets stderr if `-e` is not given) |
+| `-e` | `--stderr PATH` | Redirect stderr to file (default: stdout path; `.stdout`→`.stderr`) |
 | `-a` | `--append` | Append to stdout/stderr files instead of truncating |
 | `-u` | `--user NAME\|UID` | Switch to user after daemonizing (requires root) |
 | `-g` | `--group NAME\|GID` | Switch to group after daemonizing (requires root) |
