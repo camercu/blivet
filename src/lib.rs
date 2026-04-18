@@ -380,7 +380,8 @@ mod tests {
         if !is_subprocess() {
             return;
         }
-        let config = DaemonConfig::new();
+        let mut config = DaemonConfig::new();
+        config.close_fds(false); // Don't close fds in test subprocess (systemd aborts on EBADF)
         let mut forker = NullForker::both_child();
         let result = daemonize_inner(&config, &mut forker);
         assert!(result.is_ok());
@@ -485,7 +486,7 @@ mod tests {
             return;
         }
         let mut config = DaemonConfig::new();
-        config.foreground(true);
+        config.foreground(true).close_fds(false);
         let mut forker = NullForker::new(vec![], Ok(()));
         let result = daemonize_inner(&config, &mut forker);
         let ctx = result.expect("foreground daemonize_inner should succeed");
@@ -504,7 +505,7 @@ mod tests {
             return;
         }
         let mut config = DaemonConfig::new();
-        config.foreground(true);
+        config.foreground(true).close_fds(false);
         let mut forker = NullForker::new(vec![], Ok(()));
         let mut ctx = daemonize_inner(&config, &mut forker).unwrap();
         assert!(ctx.notify_parent().is_ok());
@@ -560,7 +561,8 @@ mod tests {
             .stdout(&stdout)
             .user("nobody")
             .group("nogroup")
-            .foreground(true);
+            .foreground(true)
+            .close_fds(false);
 
         let mut forker = NullForker::new(vec![], Ok(()));
         let ctx = daemonize_inner(&config, &mut forker).unwrap();
