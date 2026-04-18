@@ -5,6 +5,7 @@
 /// Each variant maps to a `sysexits.h` exit code via [`exit_code`](DaemonizeError::exit_code).
 /// `ProgramNotFound` and `ExecFailed` are produced only by the CLI binary, never by the library.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum DaemonizeError {
     /// Bad path, bad env key, path overlap, or other config error.
     #[error("{0}")]
