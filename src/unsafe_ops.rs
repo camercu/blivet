@@ -5,9 +5,10 @@
 //!
 //! - **[`RealForker`]**: the production [`Forker`](crate::forker::Forker)
 //!   implementation wrapping fork, setsid, pipe, and `_exit`.
-//! - **libc wrappers**: thin safe-signature functions (`raw_dup2`, `raw_close`,
-//!   etc.) used by [`steps`](crate::steps) to perform fd manipulation and
-//!   signal reset without needing `#[allow(unsafe_code)]` themselves.
+//! - **libc wrappers**: thin safe-signature functions (`raw_close`,
+//!   `raw_initgroups`, etc.) used by [`steps`](crate::steps) and
+//!   [`context`](crate::context) without needing `#[allow(unsafe_code)]`
+//!   themselves.
 
 #![allow(unsafe_code)]
 
@@ -104,35 +105,9 @@ fn signal_range() -> Vec<i32> {
     }
 }
 
-/// Safe wrapper around `libc::dup2`. Duplicates `oldfd` onto `newfd`.
-///
-/// Returns `Ok(newfd)` on success, `Err(errno)` on failure.
-pub(crate) fn raw_dup2(oldfd: i32, newfd: i32) -> Result<i32, nix::errno::Errno> {
-    let ret = unsafe { libc::dup2(oldfd, newfd) };
-    if ret < 0 {
-        Err(nix::errno::Errno::last())
-    } else {
-        Ok(ret)
-    }
-}
-
 /// Safe wrapper around `libc::close`.
 pub(crate) fn raw_close(fd: i32) {
     unsafe { libc::close(fd) };
-}
-
-/// Safe wrapper around `libc::open`.
-pub(crate) fn raw_open(
-    path: &std::ffi::CStr,
-    flags: i32,
-    mode: libc::mode_t,
-) -> Result<i32, nix::errno::Errno> {
-    let ret = unsafe { libc::open(path.as_ptr(), flags, mode as libc::c_uint) };
-    if ret < 0 {
-        Err(nix::errno::Errno::last())
-    } else {
-        Ok(ret)
-    }
 }
 
 /// Safe wrapper around `libc::initgroups`.

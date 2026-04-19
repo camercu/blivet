@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 use nix::fcntl::{open, Flock, FlockArg, OFlag};
 use nix::sys::stat::Mode;
-use nix::unistd::Whence;
+use nix::unistd::{self, Whence};
 
 use crate::error::DaemonizeError;
 use crate::unsafe_ops;
@@ -56,17 +56,14 @@ pub(crate) fn change_dir(path: &Path) -> Result<(), DaemonizeError> {
 ///
 /// Panics if /dev/null cannot be opened or dup2 fails.
 pub(crate) fn redirect_to_devnull() {
-    let devnull_path = c"/dev/null";
-    let devnull_raw =
-        unsafe_ops::raw_open(devnull_path, libc::O_RDWR, 0).expect("failed to open /dev/null");
-
-    for &target_fd in &[0, 1, 2] {
-        if devnull_raw != target_fd {
-            unsafe_ops::raw_dup2(devnull_raw, target_fd).expect("failed to dup2 /dev/null");
-        }
-    }
-    if devnull_raw > 2 {
-        unsafe_ops::raw_close(devnull_raw);
+    let devnull =
+        open(c"/dev/null", OFlag::O_RDWR, Mode::empty()).expect("failed to open /dev/null");
+    unistd::dup2_stdin(&devnull).expect("failed to dup2 /dev/null to stdin");
+    unistd::dup2_stdout(&devnull).expect("failed to dup2 /dev/null to stdout");
+    unistd::dup2_stderr(&devnull).expect("failed to dup2 /dev/null to stderr");
+    if devnull.as_raw_fd() <= 2 {
+        // devnull IS one of the stdio fds — don't close it on drop.
+        std::mem::forget(devnull);
     }
 }
 
@@ -204,6 +201,15 @@ pub(crate) fn plan_output_redirect(
     }
 }
 
+/// Duplicate `source` onto a stdio target fd (1=stdout, 2=stderr).
+fn dup2_stdio(source: impl AsFd, target_fd: i32) -> Result<(), nix::errno::Errno> {
+    match target_fd {
+        1 => unistd::dup2_stdout(source),
+        2 => unistd::dup2_stderr(source),
+        _ => unreachable!("dup2_stdio called with non-stdio target: {target_fd}"),
+    }
+}
+
 /// Execute a single [`StreamAction`], performing the actual fd operations.
 fn execute_stream_action(action: &StreamAction) -> Result<(), DaemonizeError> {
     match action {
@@ -217,24 +223,29 @@ fn execute_stream_action(action: &StreamAction) -> Result<(), DaemonizeError> {
             let fd = open(path, *flags, mode).map_err(|e| {
                 DaemonizeError::OutputFileError(format!("cannot open {}: {e}", path.display()))
             })?;
-            let raw = fd.as_raw_fd();
-            if raw != *target_fd {
-                unsafe_ops::raw_dup2(raw, *target_fd).map_err(|e| {
+            if fd.as_raw_fd() != *target_fd {
+                dup2_stdio(&fd, *target_fd).map_err(|e| {
                     DaemonizeError::OutputFileError(format!("dup2 fd {target_fd}: {e}"))
                 })?;
-                unsafe_ops::raw_close(raw);
+                // fd drops here, closing the original descriptor.
+            } else {
+                // fd IS the target — don't close it on drop.
+                std::mem::forget(fd);
             }
-            // Prevent OwnedFd destructor from closing the fd — ownership is
-            // transferred to the target fd slot via dup2, or the fd already
-            // was the target and must stay open.
-            std::mem::forget(fd);
             Ok(())
         }
         StreamAction::DupFrom {
             source_fd,
             target_fd,
         } => {
-            unsafe_ops::raw_dup2(*source_fd, *target_fd).map_err(|e| {
+            // source_fd is always a stdio fd set up by a prior action.
+            match source_fd {
+                0 => dup2_stdio(std::io::stdin(), *target_fd),
+                1 => dup2_stdio(std::io::stdout(), *target_fd),
+                2 => dup2_stdio(std::io::stderr(), *target_fd),
+                _ => unreachable!("DupFrom with non-stdio source: {source_fd}"),
+            }
+            .map_err(|e| {
                 DaemonizeError::OutputFileError(format!("dup2 fd {source_fd} -> {target_fd}: {e}"))
             })?;
             Ok(())
