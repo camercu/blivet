@@ -1,58 +1,14 @@
 //! Unsafe code containment zone.
 //!
-//! Nearly all `unsafe` blocks live here (via `#![deny(unsafe_code)]` at the
-//! crate root). The few exceptions are `unsafe fn` calls to
-//! [`Forker::fork`](crate::forker::Forker::fork) in `lib.rs` and
-//! `nix::sys::signal::sigaction` in test code.
+//! Contains safe wrappers around libc/std functions that require `unsafe`.
+//! Other modules call these wrappers without needing `#[allow(unsafe_code)]`.
 //!
-//! - **[`RealForker`]**: the production [`Forker`](crate::forker::Forker)
-//!   implementation wrapping fork, setsid, pipe, and `_exit`.
-//! - **Safe wrappers**: thin safe-signature functions (`raw_close`,
-//!   `raw_set_env_var`, `raw_exit`, etc.) used by other modules without
-//!   needing `#[allow(unsafe_code)]` themselves.
+//! The few `unsafe` blocks outside this module are:
+//! - `unsafe fn` calls to [`Forker::fork`](crate::forker::Forker::fork) and
+//!   `nix::unistd::fork` in `forker.rs` / `lib.rs`
+//! - `nix::sys::signal::sigaction` in test code
 
 #![allow(unsafe_code)]
-
-use std::os::fd::{AsFd, OwnedFd};
-
-use nix::unistd::ForkResult;
-
-use crate::error::DaemonizeError;
-use crate::forker::Forker;
-
-/// Production forker that wraps real syscalls.
-pub(crate) struct RealForker;
-
-impl Forker for RealForker {
-    fn create_notification_pipe(&mut self) -> Option<(OwnedFd, OwnedFd)> {
-        use nix::fcntl::{fcntl, FcntlArg, FdFlag};
-
-        let (rd, wr) = nix::unistd::pipe().expect("failed to create notification pipe");
-        // Set O_CLOEXEC on both ends
-        fcntl(rd.as_fd(), FcntlArg::F_SETFD(FdFlag::FD_CLOEXEC))
-            .expect("failed to set CLOEXEC on pipe read end");
-        fcntl(wr.as_fd(), FcntlArg::F_SETFD(FdFlag::FD_CLOEXEC))
-            .expect("failed to set CLOEXEC on pipe write end");
-        Some((rd, wr))
-    }
-
-    unsafe fn fork(&mut self) -> Result<ForkResult, DaemonizeError> {
-        match nix::unistd::fork() {
-            Ok(result) => Ok(result),
-            Err(e) => Err(DaemonizeError::ForkFailed(e.to_string())),
-        }
-    }
-
-    fn setsid(&mut self) -> Result<(), DaemonizeError> {
-        nix::unistd::setsid()
-            .map(|_| ())
-            .map_err(|e| DaemonizeError::SetsidFailed(e.to_string()))
-    }
-
-    fn exit(&self, code: i32) -> ! {
-        raw_exit(code)
-    }
-}
 
 /// Reset signal dispositions from 1 through the signal ceiling to SIG_DFL.
 ///

@@ -1,14 +1,15 @@
 //! Forker trait abstracting fork/setsid/pipe syscalls for testability.
 //!
-//! [`RealForker`](crate::unsafe_ops::RealForker) wraps real syscalls;
+//! [`RealForker`] wraps real syscalls;
 //! [`NullForker`](null_forker::NullForker) (test-only) provides
 //! configurable results so `daemonize_inner` can be exercised without forking.
 
-use std::os::fd::OwnedFd;
+use std::os::fd::{AsFd, OwnedFd};
 
 use nix::unistd::ForkResult;
 
 use crate::error::DaemonizeError;
+use crate::unsafe_ops;
 
 /// Abstraction over fork/setsid/pipe for testability.
 ///
@@ -24,6 +25,41 @@ pub(crate) trait Forker {
     unsafe fn fork(&mut self) -> Result<ForkResult, DaemonizeError>;
     fn setsid(&mut self) -> Result<(), DaemonizeError>;
     fn exit(&self, code: i32) -> !;
+}
+
+/// Production forker that wraps real syscalls.
+pub(crate) struct RealForker;
+
+#[allow(unsafe_code)]
+impl Forker for RealForker {
+    fn create_notification_pipe(&mut self) -> Option<(OwnedFd, OwnedFd)> {
+        use nix::fcntl::{fcntl, FcntlArg, FdFlag};
+
+        let (rd, wr) = nix::unistd::pipe().expect("failed to create notification pipe");
+        // Set O_CLOEXEC on both ends
+        fcntl(rd.as_fd(), FcntlArg::F_SETFD(FdFlag::FD_CLOEXEC))
+            .expect("failed to set CLOEXEC on pipe read end");
+        fcntl(wr.as_fd(), FcntlArg::F_SETFD(FdFlag::FD_CLOEXEC))
+            .expect("failed to set CLOEXEC on pipe write end");
+        Some((rd, wr))
+    }
+
+    unsafe fn fork(&mut self) -> Result<ForkResult, DaemonizeError> {
+        match nix::unistd::fork() {
+            Ok(result) => Ok(result),
+            Err(e) => Err(DaemonizeError::ForkFailed(e.to_string())),
+        }
+    }
+
+    fn setsid(&mut self) -> Result<(), DaemonizeError> {
+        nix::unistd::setsid()
+            .map(|_| ())
+            .map_err(|e| DaemonizeError::SetsidFailed(e.to_string()))
+    }
+
+    fn exit(&self, code: i32) -> ! {
+        unsafe_ops::raw_exit(code)
+    }
 }
 
 #[cfg(test)]

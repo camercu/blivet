@@ -97,8 +97,7 @@ use std::os::fd::{AsRawFd, OwnedFd};
 
 use nix::unistd::ForkResult;
 
-use forker::Forker;
-use unsafe_ops::RealForker;
+use forker::{Forker, RealForker};
 
 /// Daemonize the current process.
 ///
