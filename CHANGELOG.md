@@ -1,3 +1,35 @@
+## [0.3.0](https://github.com/camercu/blivet/compare/v0.2.1...v0.3.0) (2026-04-19)
+
+
+### ⚠ BREAKING CHANGES
+
+* crate name changed from `daemonize` to `blivet`
+* DaemonizeError Display output now includes a variant
+prefix (e.g. "fork failed: {msg}" instead of just "{msg}"). Code
+matching on error message strings will need updating.
+
+Make Forker::fork() an unsafe trait method since it wraps fork(2),
+which is UB in multithreaded processes. Callers now explicitly
+acknowledge the safety contract.
+
+Move error message prefixes from call sites into the #[error(...)]
+attribute on each DaemonizeError variant, eliminating duplicated
+prefix strings across the codebase.
+
+* add prefixes to DaemonizeError Display and make Forker::fork unsafe ([4f26e5c](https://github.com/camercu/blivet/commit/4f26e5c3f4ce8f0b893de54844d379e4a5f94d13))
+* rename crate from daemonize to blivet ([65bec20](https://github.com/camercu/blivet/commit/65bec206342dbeb7309ae922a3e76970c9d0e710))
+
+
+### Features
+
+* **cli:** add .out→.err stderr extension derivation ([0a02f99](https://github.com/camercu/blivet/commit/0a02f99ab63b6b4240ec82b7d25448824d0de50f))
+
+
+### Bug Fixes
+
+* add stdin branch to dup2_stdio helper ([0646b20](https://github.com/camercu/blivet/commit/0646b204db0c32838b989813ba2d84d80c328bef))
+* normalize DaemonContext Debug output to unwrap Option fields ([b23e071](https://github.com/camercu/blivet/commit/b23e0714631d304e19d4bda4e34f25978509a5ea))
+
 ## [0.2.1](https://github.com/camercu/daemonize-rs/compare/v0.2.0...v0.2.1) (2026-04-18)
 
 
