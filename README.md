@@ -40,12 +40,11 @@ cargo install daemonize
 
 Or add the library to your project:
 
-```toml
-[dependencies]
-daemonize = "0.1"
+```sh
+cargo add daemonize
 ```
 
-## CLI quickstart
+## CLI Quickstart
 
 Daemonize any program:
 
@@ -60,7 +59,7 @@ daemonize \
   -c /var/lib/myapp \
   -- /usr/bin/my-server
 
-# Split stdout/stderr using .stdout/.stderr extensions (auto-derived)
+# Split stdout/stderr using .stdout/.stderr or .out/.err extensions (auto-derived)
 daemonize \
   -p /var/run/myapp.pid \
   -o /var/log/myapp.stdout \
@@ -92,21 +91,21 @@ so the daemon can continue to write to them after the switch.
 
 ### CLI flags
 
-| Flag | Long | Description |
-|------|------|-------------|
-| `-p` | `--pidfile PATH` | Write daemon PID to file |
-| `-l` | `--lock PATH` | Exclusive lockfile (default: pidfile path, if set) |
-| `-c` | `--chdir PATH` | Working directory (default: `/`) |
-| `-m` | `--umask MODE` | Process umask in octal (e.g. `022`) |
-| `-o` | `--stdout PATH` | Redirect stdout to file (also sets stderr if `-e` is not given) |
-| `-e` | `--stderr PATH` | Redirect stderr to file (default: stdout path; `.stdout`→`.stderr`) |
-| `-a` | `--append` | Append to stdout/stderr files instead of truncating |
-| `-u` | `--user NAME\|UID` | Switch to user after daemonizing (requires root) |
-| `-g` | `--group NAME\|GID` | Switch to group after daemonizing (requires root) |
-| `-f` | `--foreground` | Stay in foreground (no fork/setsid); consider `--no-close-fds` |
-|      | `--no-close-fds` | Keep inherited fds open (useful with `-f` for supervisor-passed fds) |
-| `-E` | `--env NAME=VAL` | Set environment variable (repeatable) |
-| `-v` | `--verbose` | Print diagnostic info before daemonizing |
+| Flag | Long                | Description                                                          |
+| ---- | ------------------- | -------------------------------------------------------------------- |
+| `-p` | `--pidfile PATH`    | Write daemon PID to file                                             |
+| `-l` | `--lock PATH`       | Exclusive lockfile (default: pidfile path, if set)                   |
+| `-c` | `--chdir PATH`      | Working directory (default: `/`)                                     |
+| `-m` | `--umask MODE`      | Process umask in octal (e.g. `022`)                                  |
+| `-o` | `--stdout PATH`     | Redirect stdout to file (also sets stderr if `-e` is not given)      |
+| `-e` | `--stderr PATH`     | Redirect stderr to file (default: stdout path; `.stdout`→`.stderr`, `.out`→`.err`) |
+| `-a` | `--append`          | Append to stdout/stderr files instead of truncating                  |
+| `-u` | `--user NAME\|UID`  | Switch to user after daemonizing (requires root)                     |
+| `-g` | `--group NAME\|GID` | Switch to group after daemonizing (requires root)                    |
+| `-f` | `--foreground`      | Stay in foreground (no fork/setsid); consider `--no-close-fds`       |
+|      | `--no-close-fds`    | Keep inherited fds open (useful with `-f` for supervisor-passed fds) |
+| `-E` | `--env NAME=VAL`    | Set environment variable (repeatable)                                |
+| `-v` | `--verbose`         | Print diagnostic info before daemonizing                             |
 
 ## Library quickstart
 
@@ -197,21 +196,21 @@ ctx.notify_parent()?;
 Builder for daemonization settings. All methods are infallible setters;
 validation is deferred to `validate()`.
 
-| Method | Default | Description |
-|--------|---------|-------------|
-| `pidfile(path)` | None | Write PID to file |
-| `lockfile(path)` | None | Exclusive flock-based lockfile |
-| `chdir(path)` | `/` | Working directory |
-| `umask(mode)` | `0` | Process umask |
-| `stdout(path)` | None | Redirect stdout (stays `/dev/null` if unset) |
-| `stderr(path)` | None | Redirect stderr (stays `/dev/null` if unset) |
-| `append(bool)` | `false` | Append vs truncate output files |
-| `user(name)` | None | Switch user -- name or numeric UID (requires root) |
-| `group(name)` | None | Switch group -- name or numeric GID (requires root) |
+| Method             | Default | Description                                           |
+| ------------------ | ------- | ----------------------------------------------------- |
+| `pidfile(path)`    | None    | Write PID to file                                     |
+| `lockfile(path)`   | None    | Exclusive flock-based lockfile                        |
+| `chdir(path)`      | `/`     | Working directory                                     |
+| `umask(mode)`      | `0`     | Process umask                                         |
+| `stdout(path)`     | None    | Redirect stdout (stays `/dev/null` if unset)          |
+| `stderr(path)`     | None    | Redirect stderr (stays `/dev/null` if unset)          |
+| `append(bool)`     | `false` | Append vs truncate output files                       |
+| `user(name)`       | None    | Switch user -- name or numeric UID (requires root)    |
+| `group(name)`      | None    | Switch group -- name or numeric GID (requires root)   |
 | `foreground(bool)` | `false` | Skip fork/setsid (for systemd, containers, debugging) |
-| `close_fds(bool)` | `true` | Close inherited fds 3+ |
-| `env(key, val)` | None | Set env var (accumulates, last-write-wins) |
-| `validate()` | -- | Check paths, permissions, overlaps before forking |
+| `close_fds(bool)`  | `true`  | Close inherited fds 3+                                |
+| `env(key, val)`    | None    | Set env var (accumulates, last-write-wins)            |
+| `validate()`       | --      | Check paths, permissions, overlaps before forking     |
 
 ### `daemonize(&config) -> Result<DaemonContext, DaemonizeError>`
 
@@ -229,13 +228,13 @@ User/group switching is **not** performed during this call. Use
 Returned by a successful `daemonize()` call. Holds the lockfile, notification
 pipe, and config state needed for privilege operations.
 
-| Method | Description |
-|--------|-------------|
-| `chown_paths()` | Transfer pidfile/lockfile/log ownership to target user/group |
-| `drop_privileges()` | Switch user/group (`initgroups` + `setgid` + `setuid`) |
-| `notify_parent()` | Signal readiness -- parent exits 0 |
-| `report_error(err)` | Report error to parent and `_exit` |
-| `lockfile_fd()` | Borrow the lockfile fd (if configured) |
+| Method              | Description                                                  |
+| ------------------- | ------------------------------------------------------------ |
+| `chown_paths()`     | Transfer pidfile/lockfile/log ownership to target user/group |
+| `drop_privileges()` | Switch user/group (`initgroups` + `setgid` + `setuid`)       |
+| `notify_parent()`   | Signal readiness -- parent exits 0                           |
+| `report_error(err)` | Report error to parent and `_exit`                           |
+| `lockfile_fd()`     | Borrow the lockfile fd (if configured)                       |
 
 Dropping without calling `notify_parent()` causes the parent to exit non-zero.
 
@@ -244,22 +243,22 @@ Dropping without calling `notify_parent()` causes the parent to exit non-zero.
 Fourteen variants covering validation, fork, setsid, lock, permission, chown,
 and exec failures. Each maps to a `sysexits.h` exit code via `exit_code()`.
 
-| Variant | Exit code | Meaning |
-|---------|-----------|---------|
-| `ValidationError` | 64 | Bad config (paths, env keys, overlaps) |
-| `ProgramNotFound` | 66 | CLI: program missing or not executable |
-| `UserNotFound` | 67 | User doesn't exist |
-| `GroupNotFound` | 67 | Group doesn't exist |
-| `LockConflict` | 69 | Lockfile held by another process |
-| `LockfileError` | 73 | Can't open lockfile |
-| `PidfileError` | 73 | Can't write pidfile |
-| `OutputFileError` | 73 | Can't open/redirect output file |
-| `ChownError` | 73 | Can't chown pidfile/lockfile/output file |
-| `ForkFailed` | 71 | `fork()` error |
-| `SetsidFailed` | 71 | `setsid()` error |
-| `ChdirFailed` | 71 | `chdir()` error |
-| `PermissionDenied` | 77 | Not root, or setuid/setgid failed |
-| `ExecFailed` | 71 | CLI: `exec` of target program failed |
+| Variant            | Exit code | Meaning                                  |
+| ------------------ | --------- | ---------------------------------------- |
+| `ValidationError`  | 64        | Bad config (paths, env keys, overlaps)   |
+| `ProgramNotFound`  | 66        | CLI: program missing or not executable   |
+| `UserNotFound`     | 67        | User doesn't exist                       |
+| `GroupNotFound`    | 67        | Group doesn't exist                      |
+| `LockConflict`     | 69        | Lockfile held by another process         |
+| `LockfileError`    | 73        | Can't open lockfile                      |
+| `PidfileError`     | 73        | Can't write pidfile                      |
+| `OutputFileError`  | 73        | Can't open/redirect output file          |
+| `ChownError`       | 73        | Can't chown pidfile/lockfile/output file |
+| `ForkFailed`       | 71        | `fork()` error                           |
+| `SetsidFailed`     | 71        | `setsid()` error                         |
+| `ChdirFailed`      | 71        | `chdir()` error                          |
+| `PermissionDenied` | 77        | Not root, or setuid/setgid failed        |
+| `ExecFailed`       | 71        | CLI: `exec` of target program failed     |
 
 ## Minimum supported Rust version
 
