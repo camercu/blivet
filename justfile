@@ -34,8 +34,8 @@ test:
 
 # Build and run Docker container for root + Linux-specific tests
 docker-test:
-    docker build -t daemonize-rs-test .
-    docker run --rm --init --privileged daemonize-rs-test
+    docker build -t blivet-test .
+    docker run --rm --init --privileged blivet-test
 
 # Run everything CI runs (except Docker)
 ci: check test

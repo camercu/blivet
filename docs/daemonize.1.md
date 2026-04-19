@@ -1,4 +1,4 @@
-% DAEMONIZE(1) daemonize 0.1.0
+% DAEMONIZE(1) blivet 0.2.1
 %
 % April 2026
 
@@ -16,6 +16,10 @@ daemonize - run a program as a Unix daemon
 terminal via the standard double-fork method. The parent process waits for
 the daemon to start successfully before exiting, so **daemonize** can be used
 reliably in init scripts and process supervisors.
+
+**daemonize** is the CLI binary shipped by the **blivet** crate — named for
+the "impossible fork" optical illusion (a.k.a. the devil's tuning fork),
+because daemons are created by forking.
 
 The daemonization sequence:
 

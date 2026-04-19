@@ -15,7 +15,7 @@ use crate::util::paths_same;
 /// # Example
 ///
 /// ```
-/// use daemonize::DaemonConfig;
+/// use blivet::DaemonConfig;
 ///
 /// let mut config = DaemonConfig::new();
 /// config.pidfile("/var/run/foo.pid").chdir("/tmp");

@@ -1,11 +1,11 @@
 [package]
-name = "daemonize"
+name = "blivet"
 version = "0.2.1"
 edition = "2021"
 rust-version = "1.85"
 description = "Daemonize a process using the double-fork method"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/camercu/daemonize-rs"
+repository = "https://github.com/camercu/blivet"
 readme = "README.md"
 keywords = ["daemon", "daemonize", "fork", "unix", "linux"]
 categories = ["os::unix-apis"]

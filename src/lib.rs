@@ -1,5 +1,9 @@
 //! Daemonize a process using the double-fork method.
 //!
+//! A [blivet] is the "impossible fork" optical illusion, also known as the
+//! devil's tuning fork. Daemons are created by forking — and this crate
+//! performs the impossible double-fork to do it correctly.
+//!
 //! This crate provides a library and CLI tool for daemonizing processes on Unix
 //! systems. It performs a mandatory double-fork, resets signal dispositions and
 //! mask, and uses a notification pipe so the parent can wait for daemon
@@ -7,11 +11,13 @@
 //! context while still privileged, and the caller explicitly calls
 //! `drop_privileges()` when ready.
 //!
+//! [blivet]: https://en.wikipedia.org/wiki/Impossible_trident
+//!
 //! # Example
 //!
 //! ```no_run
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! use daemonize::{DaemonConfig, daemonize};
+//! use blivet::{DaemonConfig, daemonize};
 //!
 //! let mut config = DaemonConfig::new();
 //! config.pidfile("/var/run/foo.pid").chdir("/tmp");
@@ -55,7 +61,7 @@
 //!
 //! ```no_run
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! use daemonize::{DaemonConfig, daemonize};
+//! use blivet::{DaemonConfig, daemonize};
 //!
 //! let mut config = DaemonConfig::new();
 //! config.pidfile("/var/run/foo.pid").user("nobody").group("nogroup");

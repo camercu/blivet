@@ -1,4 +1,4 @@
-# daemonize-rs Specification
+# blivet Specification
 
 Rust library and CLI tool for daemonizing processes. Mirrors Debian's
 daemonize(1) with improvements: double-fork is mandatory (not delegated
@@ -8,9 +8,14 @@ dropping is split-phase: `daemonize()` returns a context while still
 privileged, and the caller explicitly calls `drop_privileges()` when
 ready.
 
-Latest stable Rust, edition 2021. Crate name is `daemonize` (not
-`daemonize-rs`). License: `MIT OR Apache-2.0`; include both
-`LICENSE-MIT` and `LICENSE-APACHE` files.
+The name comes from the [blivet](https://en.wikipedia.org/wiki/Impossible_trident),
+the "impossible fork" optical illusion (a.k.a. the devil's tuning fork).
+Daemons are created by forking — and this crate performs the impossible
+double-fork to do it correctly. The CLI binary is named `daemonize`.
+
+Latest stable Rust, edition 2021. Crate name is `blivet`. License:
+`MIT OR Apache-2.0`; include both `LICENSE-MIT` and `LICENSE-APACHE`
+files.
 
 > The crate exposes `nix::sys::stat::Mode` in the public API (the
 > `umask()` builder). Since nix is pre-1.0 (0.29), this crate must
@@ -853,7 +858,7 @@ continues; (2) split-phase with `chown_paths()` → `drop_privileges()`
 
 ```toml
 [package]
-name = "daemonize"
+name = "blivet"
 version = "0.1.0"
 edition = "2021"
 description = "Daemonize a process using the double-fork method"

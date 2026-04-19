@@ -1,14 +1,19 @@
-# daemonize
+# blivet
 
-[![CI](https://github.com/camercu/daemonize-rs/actions/workflows/ci.yml/badge.svg)](https://github.com/camercu/daemonize-rs/actions/workflows/ci.yml)
-[![crates.io](https://img.shields.io/crates/v/daemonize.svg)](https://crates.io/crates/daemonize)
-[![docs.rs](https://docs.rs/daemonize/badge.svg)](https://docs.rs/daemonize)
+[![CI](https://github.com/camercu/blivet/actions/workflows/ci.yml/badge.svg)](https://github.com/camercu/blivet/actions/workflows/ci.yml)
+[![crates.io](https://img.shields.io/crates/v/blivet.svg)](https://crates.io/crates/blivet)
+[![docs.rs](https://docs.rs/blivet/badge.svg)](https://docs.rs/blivet)
 [![MSRV](https://img.shields.io/badge/MSRV-1.85-blue)](https://doc.rust-lang.org/cargo/reference/manifest.html#the-rust-version-field)
-[![License](https://img.shields.io/crates/l/daemonize.svg)](LICENSE-MIT)
+[![License](https://img.shields.io/crates/l/blivet.svg)](LICENSE-MIT)
 
 A correct, minimal Unix daemon library and CLI for Rust.
 
-`daemonize` implements the full double-fork daemonization sequence with a
+A [blivet](https://en.wikipedia.org/wiki/Impossible_trident) is the "impossible
+fork" optical illusion, also known as the devil's tuning fork. Daemons are
+created by forking — and this crate performs the impossible double-fork to do it
+correctly.
+
+`blivet` implements the full double-fork daemonization sequence with a
 parent-notification pipe, so your process detaches cleanly and the calling shell
 (or init system) knows exactly when the daemon is ready -- or why it failed.
 Errors that happen after forking are reported back to the parent with
@@ -30,18 +35,19 @@ Errors that happen after forking are reported back to the parent with
   lives in a single module (`unsafe_ops`), with safe wrappers for everything
   else.
 - **Library and CLI.** Use it as a Rust library with a builder API, or as a
-  standalone `daemonize` binary that wraps any program.
+  standalone `daemonize` binary (installed by `cargo install blivet`) that
+  wraps any program.
 
 ## Install
 
 ```sh
-cargo install daemonize
+cargo install blivet
 ```
 
 Or add the library to your project:
 
 ```sh
-cargo add daemonize
+cargo add blivet
 ```
 
 ## CLI Quickstart
@@ -110,7 +116,7 @@ so the daemon can continue to write to them after the switch.
 ## Library quickstart
 
 ```rust
-use daemonize::{DaemonConfig, daemonize};
+use blivet::{DaemonConfig, daemonize};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut config = DaemonConfig::new();
@@ -141,7 +147,7 @@ When your daemon needs to perform privileged operations (like binding to
 port 80) before dropping to an unprivileged user:
 
 ```rust
-use daemonize::{DaemonConfig, daemonize};
+use blivet::{DaemonConfig, daemonize};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut config = DaemonConfig::new();
@@ -182,7 +188,7 @@ On Linux, `daemonize_checked` provides a safe wrapper that verifies the process
 is single-threaded (via `/proc/self/status`) before forking:
 
 ```rust
-use daemonize::{DaemonConfig, daemonize_checked};
+use blivet::{DaemonConfig, daemonize_checked};
 
 let config = DaemonConfig::new();
 let mut ctx = daemonize_checked(&config)?; // panics if threads > 1

@@ -34,8 +34,8 @@ use crate::error::DaemonizeError;
 ///
 /// ```no_run
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-/// # let config = daemonize::DaemonConfig::new();
-/// let mut ctx = unsafe { daemonize::daemonize(&config)? };
+/// # let config = blivet::DaemonConfig::new();
+/// let mut ctx = unsafe { blivet::daemonize(&config)? };
 /// // ... privileged work (e.g., bind port 80) ...
 /// ctx.chown_paths()?;       // transfer file ownership while still root
 /// ctx.drop_privileges()?;   // setgid + setuid

@@ -6,7 +6,7 @@ use std::process::ExitCode;
 use clap::Parser;
 use nix::sys::stat::Mode;
 
-use daemonize::{DaemonConfig, DaemonizeError};
+use blivet::{DaemonConfig, DaemonizeError};
 
 /// Daemonize a program.
 #[derive(Parser)]
@@ -151,7 +151,7 @@ fn main() -> ExitCode {
 
     // Daemonize
     #[allow(unsafe_code)]
-    let mut ctx = match unsafe { daemonize::daemonize(&config) } {
+    let mut ctx = match unsafe { blivet::daemonize(&config) } {
         Ok(ctx) => ctx,
         Err(e) => {
             eprintln!("{e}");
