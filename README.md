@@ -4,7 +4,7 @@
 [![crates.io](https://img.shields.io/crates/v/blivet.svg)](https://crates.io/crates/blivet)
 [![docs.rs](https://docs.rs/blivet/badge.svg)](https://docs.rs/blivet)
 [![MSRV](https://img.shields.io/badge/MSRV-1.85-blue)](https://doc.rust-lang.org/cargo/reference/manifest.html#the-rust-version-field)
-[![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue)](LICENSE-MIT)
+[![License](https://img.shields.io/crates/l/blivet.svg)](LICENSE-MIT)
 
 A correct, minimal Unix daemon library and CLI for Rust.
 
