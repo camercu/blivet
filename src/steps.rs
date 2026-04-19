@@ -201,9 +201,10 @@ pub(crate) fn plan_output_redirect(
     }
 }
 
-/// Duplicate `source` onto a stdio target fd (1=stdout, 2=stderr).
+/// Duplicate `source` onto a stdio target fd (0=stdin, 1=stdout, 2=stderr).
 fn dup2_stdio(source: impl AsFd, target_fd: i32) -> Result<(), nix::errno::Errno> {
     match target_fd {
+        0 => unistd::dup2_stdin(source),
         1 => unistd::dup2_stdout(source),
         2 => unistd::dup2_stderr(source),
         _ => unreachable!("dup2_stdio called with non-stdio target: {target_fd}"),
