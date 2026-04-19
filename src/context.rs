@@ -252,7 +252,7 @@ impl DaemonContext {
     #[must_use = "the parent process blocks until notified; ignoring this Result may leave it waiting"]
     pub fn notify_parent(&mut self) -> Result<(), io::Error> {
         if let Some(fd) = self.notify_pipe.take() {
-            let mut file = io::BufWriter::new(fd_to_file(fd));
+            let mut file = io::BufWriter::new(std::fs::File::from(fd));
             file.write_all(&[0x00])?;
             file.flush()?;
         }
@@ -271,7 +271,7 @@ impl DaemonContext {
     #[allow(unsafe_code)]
     pub fn report_error(&mut self, err: &DaemonizeError) -> ! {
         if let Some(fd) = self.notify_pipe.take() {
-            let mut file = io::BufWriter::new(fd_to_file(fd));
+            let mut file = io::BufWriter::new(std::fs::File::from(fd));
             let msg = err.to_string();
             let code = err.exit_code();
             let mut buf = Vec::with_capacity(1 + msg.len());
@@ -287,7 +287,7 @@ impl DaemonContext {
 impl Drop for DaemonContext {
     fn drop(&mut self) {
         if let Some(fd) = self.notify_pipe.take() {
-            let mut file = io::BufWriter::new(fd_to_file(fd));
+            let mut file = io::BufWriter::new(std::fs::File::from(fd));
             let msg = b"daemon exited without signaling readiness";
             let mut buf = Vec::with_capacity(1 + msg.len());
             buf.push(1u8);
@@ -296,10 +296,6 @@ impl Drop for DaemonContext {
             let _ = file.flush();
         }
     }
-}
-
-fn fd_to_file(fd: OwnedFd) -> std::fs::File {
-    std::fs::File::from(fd)
 }
 
 /// Resolved user info from getpwnam or numeric UID.
