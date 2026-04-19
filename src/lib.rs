@@ -170,7 +170,7 @@ pub(crate) fn daemonize_inner(
     config: &DaemonConfig,
     forker: &mut impl Forker,
 ) -> Result<DaemonContext, DaemonizeError> {
-    let foreground = config.get_foreground();
+    let foreground = config.foreground;
 
     // Steps 1–3: Fork sequence (skipped in foreground mode)
     let pipe_wr = if foreground {
@@ -239,26 +239,26 @@ pub(crate) fn daemonize_inner(
     }
 
     // Step 4: Set umask
-    steps::set_umask(config.get_umask());
+    steps::set_umask(config.umask);
 
     // Step 5: chdir
-    post_fork_try!(steps::change_dir(config.get_chdir()));
+    post_fork_try!(steps::change_dir(&config.chdir));
 
     // Step 6: Redirect stdin/stdout/stderr to /dev/null
     steps::redirect_to_devnull();
 
     // Step 7: Open and lock lockfile (match required: macro uses divergent control flow)
     #[allow(clippy::manual_map)]
-    let lockfile = match config.get_lockfile() {
+    let lockfile = match config.lockfile.as_ref() {
         Some(path) => Some(post_fork_try!(steps::open_and_lock(path))),
         None => None,
     };
 
     // Step 8: Write pidfile
-    if let Some(pidfile_path) = config.get_pidfile() {
+    if let Some(ref pidfile_path) = config.pidfile {
         post_fork_try!(steps::write_pidfile(
             pidfile_path,
-            config.get_lockfile(),
+            config.lockfile.as_ref(),
             lockfile.as_ref()
         ));
     }
@@ -270,19 +270,19 @@ pub(crate) fn daemonize_inner(
     steps::clear_signal_mask();
 
     // Step 11: Set environment variables
-    steps::set_env_vars(config.get_env());
+    steps::set_env_vars(&config.env);
 
     // Step 12: Redirect stdout/stderr to configured files
-    if config.get_stdout().is_some() || config.get_stderr().is_some() {
+    if config.stdout.is_some() || config.stderr.is_some() {
         post_fork_try!(steps::redirect_output(
-            config.get_stdout(),
-            config.get_stderr(),
-            config.get_append(),
+            config.stdout.as_ref(),
+            config.stderr.as_ref(),
+            config.append,
         ));
     }
 
     // Step 13: Close inherited fds (if enabled)
-    if config.get_close_fds() {
+    if config.close_fds {
         let mut skip_fds: Vec<i32> = Vec::new();
         if let Some(ref flock) = lockfile {
             skip_fds.push(flock.as_raw_fd());
@@ -297,12 +297,12 @@ pub(crate) fn daemonize_inner(
     Ok(DaemonContext::new(
         lockfile,
         pipe_wr,
-        config.get_pidfile().cloned(),
-        config.get_lockfile().cloned(),
-        config.get_stdout().cloned(),
-        config.get_stderr().cloned(),
-        config.get_user().map(String::from),
-        config.get_group().map(String::from),
+        config.pidfile.clone(),
+        config.lockfile.clone(),
+        config.stdout.clone(),
+        config.stderr.clone(),
+        config.user.clone(),
+        config.group.clone(),
     ))
 }
 

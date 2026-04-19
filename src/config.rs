@@ -22,18 +22,18 @@ use crate::util::paths_same;
 /// ```
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct DaemonConfig {
-    pidfile: Option<PathBuf>,
-    chdir: PathBuf,
-    umask: Mode,
-    stdout: Option<PathBuf>,
-    stderr: Option<PathBuf>,
-    append: bool,
-    lockfile: Option<PathBuf>,
-    user: Option<String>,
-    group: Option<String>,
-    foreground: bool,
-    close_fds: bool,
-    env: Vec<(String, String)>,
+    pub(crate) pidfile: Option<PathBuf>,
+    pub(crate) chdir: PathBuf,
+    pub(crate) umask: Mode,
+    pub(crate) stdout: Option<PathBuf>,
+    pub(crate) stderr: Option<PathBuf>,
+    pub(crate) append: bool,
+    pub(crate) lockfile: Option<PathBuf>,
+    pub(crate) user: Option<String>,
+    pub(crate) group: Option<String>,
+    pub(crate) foreground: bool,
+    pub(crate) close_fds: bool,
+    pub(crate) env: Vec<(String, String)>,
 }
 
 impl Default for DaemonConfig {
@@ -148,56 +148,6 @@ impl DaemonConfig {
     pub fn env(&mut self, key: impl Into<String>, value: impl Into<String>) -> &mut Self {
         self.env.push((key.into(), value.into()));
         self
-    }
-
-    // Accessors for crate-internal use
-
-    pub(crate) fn get_pidfile(&self) -> Option<&PathBuf> {
-        self.pidfile.as_ref()
-    }
-
-    pub(crate) fn get_chdir(&self) -> &PathBuf {
-        &self.chdir
-    }
-
-    pub(crate) fn get_umask(&self) -> Mode {
-        self.umask
-    }
-
-    pub(crate) fn get_stdout(&self) -> Option<&PathBuf> {
-        self.stdout.as_ref()
-    }
-
-    pub(crate) fn get_stderr(&self) -> Option<&PathBuf> {
-        self.stderr.as_ref()
-    }
-
-    pub(crate) fn get_append(&self) -> bool {
-        self.append
-    }
-
-    pub(crate) fn get_lockfile(&self) -> Option<&PathBuf> {
-        self.lockfile.as_ref()
-    }
-
-    pub(crate) fn get_user(&self) -> Option<&str> {
-        self.user.as_deref()
-    }
-
-    pub(crate) fn get_group(&self) -> Option<&str> {
-        self.group.as_deref()
-    }
-
-    pub(crate) fn get_foreground(&self) -> bool {
-        self.foreground
-    }
-
-    pub(crate) fn get_close_fds(&self) -> bool {
-        self.close_fds
-    }
-
-    pub(crate) fn get_env(&self) -> &[(String, String)] {
-        &self.env
     }
 
     /// Validates the configuration.
