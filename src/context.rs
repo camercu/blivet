@@ -57,29 +57,29 @@ pub struct DaemonContext {
 
 impl fmt::Debug for DaemonContext {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        /// Helper that prints the inner value or `"none"`, avoiding `Some(…)` noise.
+        struct OptFmt<'a, T: fmt::Debug>(&'a Option<T>);
+        impl<T: fmt::Debug> fmt::Debug for OptFmt<'_, T> {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                match self.0 {
+                    Some(v) => v.fmt(f),
+                    None => f.write_str("none"),
+                }
+            }
+        }
+
         f.debug_struct("DaemonContext")
-            .field(
-                "lockfile",
-                if self.lockfile.is_some() {
-                    &"present"
-                } else {
-                    &"absent"
-                },
-            )
+            .field("lockfile", &OptFmt(&self.lockfile.as_ref().map(|_| "held")))
             .field(
                 "notify_pipe",
-                if self.notify_pipe.is_some() {
-                    &"present"
-                } else {
-                    &"absent"
-                },
+                &OptFmt(&self.notify_pipe.as_ref().map(|_| "open")),
             )
-            .field("pidfile", &self.pidfile)
-            .field("lockfile_path", &self.lockfile_path)
-            .field("stdout", &self.stdout)
-            .field("stderr", &self.stderr)
-            .field("user", &self.user)
-            .field("group", &self.group)
+            .field("pidfile", &OptFmt(&self.pidfile))
+            .field("lockfile_path", &OptFmt(&self.lockfile_path))
+            .field("stdout", &OptFmt(&self.stdout))
+            .field("stderr", &OptFmt(&self.stderr))
+            .field("user", &OptFmt(&self.user))
+            .field("group", &OptFmt(&self.group))
             .finish()
     }
 }
@@ -414,7 +414,18 @@ mod tests {
     fn debug_format() {
         let ctx = DaemonContext::new(None, None, None, None, None, None, None, None);
         let debug = format!("{:?}", ctx);
-        assert!(debug.contains("absent"));
+        assert!(
+            debug.contains("none"),
+            "all-None ctx should show 'none': {debug}"
+        );
+        assert!(
+            !debug.contains("Some"),
+            "should not contain 'Some': {debug}"
+        );
+        assert!(
+            !debug.contains("None"),
+            "should not contain 'None': {debug}"
+        );
     }
 
     #[test]
