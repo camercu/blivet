@@ -158,7 +158,7 @@ impl DaemonContext {
                 if ret != 0 {
                     let e = std::io::Error::last_os_error();
                     return Err(DaemonizeError::ChownError(format!(
-                        "chown {}: {e}",
+                        "{}: {e}",
                         path.display()
                     )));
                 }
@@ -318,7 +318,7 @@ fn resolve_user(spec: &str) -> Result<ResolvedUser, DaemonizeError> {
         let uid = nix::unistd::Uid::from_raw(uid_num);
         let user = User::from_uid(uid)
             .map_err(|e| DaemonizeError::UserNotFound(format!("getpwuid({uid_num}): {e}")))?
-            .ok_or_else(|| DaemonizeError::UserNotFound(format!("user not found: {uid_num}")))?;
+            .ok_or_else(|| DaemonizeError::UserNotFound(format!("uid {uid_num}")))?;
         Ok(ResolvedUser {
             name: user.name,
             uid: user.uid,
@@ -328,7 +328,7 @@ fn resolve_user(spec: &str) -> Result<ResolvedUser, DaemonizeError> {
     } else {
         let user = User::from_name(spec)
             .map_err(|e| DaemonizeError::UserNotFound(format!("getpwnam({spec}): {e}")))?
-            .ok_or_else(|| DaemonizeError::UserNotFound(format!("user not found: {spec}")))?;
+            .ok_or_else(|| DaemonizeError::UserNotFound(spec.to_string()))?;
         Ok(ResolvedUser {
             name: user.name,
             uid: user.uid,
@@ -347,7 +347,7 @@ fn resolve_group_gid(spec: &str) -> Result<nix::unistd::Gid, DaemonizeError> {
     } else {
         let group = Group::from_name(spec)
             .map_err(|e| DaemonizeError::GroupNotFound(format!("getgrnam({spec}): {e}")))?
-            .ok_or_else(|| DaemonizeError::GroupNotFound(format!("group not found: {spec}")))?;
+            .ok_or_else(|| DaemonizeError::GroupNotFound(spec.to_string()))?;
         Ok(group.gid)
     }
 }
@@ -649,13 +649,13 @@ mod tests {
 
     #[test]
     fn error_display_group_not_found() {
-        let err = crate::DaemonizeError::GroupNotFound("group not found: nobody".into());
+        let err = crate::DaemonizeError::GroupNotFound("nobody".into());
         assert_eq!(err.to_string(), "group not found: nobody");
     }
 
     #[test]
     fn error_display_chown_error() {
-        let err = crate::DaemonizeError::ChownError("chown /tmp/foo: permission denied".into());
-        assert_eq!(err.to_string(), "chown /tmp/foo: permission denied");
+        let err = crate::DaemonizeError::ChownError("/tmp/foo: permission denied".into());
+        assert_eq!(err.to_string(), "chown error: /tmp/foo: permission denied");
     }
 }

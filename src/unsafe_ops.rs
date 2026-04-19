@@ -34,17 +34,17 @@ impl Forker for RealForker {
         Some((rd, wr))
     }
 
-    fn fork(&mut self) -> Result<ForkResult, DaemonizeError> {
-        match unsafe { nix::unistd::fork() } {
+    unsafe fn fork(&mut self) -> Result<ForkResult, DaemonizeError> {
+        match nix::unistd::fork() {
             Ok(result) => Ok(result),
-            Err(e) => Err(DaemonizeError::ForkFailed(format!("fork failed: {e}"))),
+            Err(e) => Err(DaemonizeError::ForkFailed(e.to_string())),
         }
     }
 
     fn setsid(&mut self) -> Result<(), DaemonizeError> {
         nix::unistd::setsid()
             .map(|_| ())
-            .map_err(|e| DaemonizeError::SetsidFailed(format!("setsid failed: {e}")))
+            .map_err(|e| DaemonizeError::SetsidFailed(e.to_string()))
     }
 
     fn exit(&self, code: i32) -> ! {

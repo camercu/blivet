@@ -47,7 +47,7 @@ pub(crate) fn set_umask(mode: Mode) {
 /// Step 5: Change working directory.
 pub(crate) fn change_dir(path: &Path) -> Result<(), DaemonizeError> {
     nix::unistd::chdir(path)
-        .map_err(|e| DaemonizeError::ChdirFailed(format!("chdir to {}: {e}", path.display())))
+        .map_err(|e| DaemonizeError::ChdirFailed(format!("{}: {e}", path.display())))
 }
 
 /// Step 6: Redirect stdin, stdout, stderr to /dev/null.
@@ -77,18 +77,16 @@ pub(crate) fn open_and_lock(path: &Path) -> Result<Flock<OwnedFd>, DaemonizeErro
         OFlag::O_WRONLY | OFlag::O_CREAT | OFlag::O_CLOEXEC,
         Mode::from_bits_truncate(0o644),
     )
-    .map_err(|e| {
-        DaemonizeError::LockfileError(format!("cannot open lockfile {}: {e}", path.display()))
-    })?;
+    .map_err(|e| DaemonizeError::LockfileError(format!("cannot open {}: {e}", path.display())))?;
 
     Flock::lock(fd, FlockArg::LockExclusiveNonblock).map_err(|(_fd, e)| {
         if e == nix::errno::Errno::EWOULDBLOCK {
             DaemonizeError::LockConflict(format!(
-                "lockfile {} is already locked by another process",
+                "{} is already locked by another process",
                 path.display()
             ))
         } else {
-            DaemonizeError::LockfileError(format!("cannot lock {}: {e}", path.display()))
+            DaemonizeError::LockfileError(format!("flock {}: {e}", path.display()))
         }
     })
 }
@@ -114,15 +112,15 @@ pub(crate) fn write_pidfile(
     if let Some(flock) = shared {
         // Write to already-locked fd: seek, truncate, write
         nix::unistd::lseek(flock.as_fd(), 0, Whence::SeekSet)
-            .map_err(|e| DaemonizeError::PidfileError(format!("seek pidfile: {e}")))?;
+            .map_err(|e| DaemonizeError::PidfileError(format!("seek: {e}")))?;
         nix::unistd::ftruncate(flock.as_fd(), 0)
-            .map_err(|e| DaemonizeError::PidfileError(format!("truncate pidfile: {e}")))?;
+            .map_err(|e| DaemonizeError::PidfileError(format!("truncate: {e}")))?;
         write_all_fd(flock.as_fd(), content.as_bytes())
-            .map_err(|e| DaemonizeError::PidfileError(format!("write pidfile: {e}")))?;
+            .map_err(|e| DaemonizeError::PidfileError(format!("write: {e}")))?;
     } else {
         // Open, write, close
         std::fs::write(pidfile_path, content.as_bytes()).map_err(|e| {
-            DaemonizeError::PidfileError(format!("write pidfile {}: {e}", pidfile_path.display()))
+            DaemonizeError::PidfileError(format!("write {}: {e}", pidfile_path.display()))
         })?;
     }
 
@@ -217,10 +215,7 @@ fn execute_stream_action(action: &StreamAction) -> Result<(), DaemonizeError> {
         } => {
             let mode = Mode::from_bits_truncate(0o644);
             let fd = open(path, *flags, mode).map_err(|e| {
-                DaemonizeError::OutputFileError(format!(
-                    "cannot open output file {}: {e}",
-                    path.display()
-                ))
+                DaemonizeError::OutputFileError(format!("cannot open {}: {e}", path.display()))
             })?;
             let raw = fd.as_raw_fd();
             if raw != *target_fd {

@@ -14,9 +14,14 @@ use crate::error::DaemonizeError;
 ///
 /// `daemonize_inner` is generic over this trait. `RealForker` wraps real
 /// syscalls; `NullForker` (test-only) provides configurable results.
+#[allow(unsafe_code)]
 pub(crate) trait Forker {
     fn create_notification_pipe(&mut self) -> Option<(OwnedFd, OwnedFd)>;
-    fn fork(&mut self) -> Result<ForkResult, DaemonizeError>;
+    /// # Safety
+    ///
+    /// Calling `fork()` in a multithreaded process is undefined behavior.
+    /// The caller must ensure no other threads exist.
+    unsafe fn fork(&mut self) -> Result<ForkResult, DaemonizeError>;
     fn setsid(&mut self) -> Result<(), DaemonizeError>;
     fn exit(&self, code: i32) -> !;
 }
@@ -75,7 +80,7 @@ pub(crate) mod null_forker {
         /// First fork fails.
         pub(crate) fn first_fork_fails() -> Self {
             Self::new(
-                vec![Err(DaemonizeError::ForkFailed("first fork failed".into()))],
+                vec![Err(DaemonizeError::ForkFailed("first fork".into()))],
                 Ok(()),
             )
         }
@@ -84,7 +89,7 @@ pub(crate) mod null_forker {
         pub(crate) fn setsid_fails() -> Self {
             Self::new(
                 vec![Ok(ForkResult::Child)],
-                Err(DaemonizeError::SetsidFailed("setsid failed".into())),
+                Err(DaemonizeError::SetsidFailed("test".into())),
             )
         }
 
@@ -93,20 +98,21 @@ pub(crate) mod null_forker {
             Self::new(
                 vec![
                     Ok(ForkResult::Child),
-                    Err(DaemonizeError::ForkFailed("second fork failed".into())),
+                    Err(DaemonizeError::ForkFailed("second fork".into())),
                 ],
                 Ok(()),
             )
         }
     }
 
+    #[allow(unsafe_code)]
     impl Forker for NullForker {
         fn create_notification_pipe(&mut self) -> Option<(OwnedFd, OwnedFd)> {
             // NullForker skips the pipe; parent exits immediately
             None
         }
 
-        fn fork(&mut self) -> Result<ForkResult, DaemonizeError> {
+        unsafe fn fork(&mut self) -> Result<ForkResult, DaemonizeError> {
             self.fork_results
                 .pop_front()
                 .expect("NullForker: no more fork results")

@@ -614,9 +614,9 @@ mod tests {
     }
 
     #[test]
-    fn display_preserves_message() {
+    fn display_includes_prefix() {
         let err = DaemonizeError::ValidationError("test message".into());
-        assert_eq!(err.to_string(), "test message");
+        assert_eq!(err.to_string(), "validation error: test message");
     }
 
     #[test]

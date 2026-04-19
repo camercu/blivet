@@ -8,59 +8,59 @@
 #[non_exhaustive]
 pub enum DaemonizeError {
     /// Bad path, bad env key, path overlap, or other config error.
-    #[error("{0}")]
+    #[error("validation error: {0}")]
     ValidationError(String),
 
     /// CLI-only: program path missing or not executable.
-    #[error("{0}")]
+    #[error("program not found: {0}")]
     ProgramNotFound(String),
 
     /// User does not exist at runtime during user switching.
-    #[error("{0}")]
+    #[error("user not found: {0}")]
     UserNotFound(String),
 
     /// Group does not exist at runtime during group switching.
-    #[error("{0}")]
+    #[error("group not found: {0}")]
     GroupNotFound(String),
 
     /// flock already held by another process.
-    #[error("{0}")]
+    #[error("lock conflict: {0}")]
     LockConflict(String),
 
     /// Lockfile cannot be opened.
-    #[error("{0}")]
+    #[error("lockfile error: {0}")]
     LockfileError(String),
 
     /// `fork()` returned an error.
-    #[error("{0}")]
+    #[error("fork failed: {0}")]
     ForkFailed(String),
 
     /// `setsid()` returned an error.
-    #[error("{0}")]
+    #[error("setsid failed: {0}")]
     SetsidFailed(String),
 
     /// `chdir()` failed at runtime after fork.
-    #[error("{0}")]
+    #[error("chdir failed: {0}")]
     ChdirFailed(String),
 
     /// Non-root caller with user switch, or setuid/setgid failure.
-    #[error("{0}")]
+    #[error("permission denied: {0}")]
     PermissionDenied(String),
 
     /// Pidfile cannot be written.
-    #[error("{0}")]
+    #[error("pidfile error: {0}")]
     PidfileError(String),
 
     /// stdout/stderr file cannot be opened or dup2'd.
-    #[error("{0}")]
+    #[error("output file error: {0}")]
     OutputFileError(String),
 
     /// chown of pidfile/lockfile/output file failed.
-    #[error("{0}")]
+    #[error("chown error: {0}")]
     ChownError(String),
 
     /// CLI-only: exec of target program failed.
-    #[error("{0}")]
+    #[error("exec failed: {0}")]
     ExecFailed(String),
 }
 

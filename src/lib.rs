@@ -166,6 +166,7 @@ pub fn daemonize_checked(config: &DaemonConfig) -> Result<DaemonContext, Daemoni
 }
 
 /// Internal daemonization logic, generic over the Forker trait for testability.
+#[allow(unsafe_code)]
 pub(crate) fn daemonize_inner(
     config: &DaemonConfig,
     forker: &mut impl Forker,
@@ -183,7 +184,10 @@ pub(crate) fn daemonize_inner(
             None => (None, None),
         };
 
-        match forker.fork()? {
+        // SAFETY: daemonize() is unsafe and requires the caller to ensure
+        // the process is single-threaded. daemonize_checked() verifies this
+        // on Linux via /proc/self/status before calling daemonize_inner().
+        match (unsafe { forker.fork() })? {
             ForkResult::Parent { .. } => {
                 // Parent: close write end, read from pipe, exit
                 drop(pipe_wr);
@@ -207,7 +211,8 @@ pub(crate) fn daemonize_inner(
         }
 
         // Step 3: Second fork
-        match forker.fork() {
+        // SAFETY: same as above — single-threaded post-fork child.
+        match unsafe { forker.fork() } {
             Ok(ForkResult::Parent { .. }) => {
                 // Intermediate child exits
                 drop(pipe_wr);
@@ -471,7 +476,10 @@ mod tests {
         file.read_to_end(&mut buf).unwrap();
 
         assert_eq!(buf[0], 71); // EX_OSERR
-        assert_eq!(std::str::from_utf8(&buf[1..]).unwrap(), "test error");
+        assert_eq!(
+            std::str::from_utf8(&buf[1..]).unwrap(),
+            "fork failed: test error"
+        );
     }
 
     #[test]
