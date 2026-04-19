@@ -130,13 +130,14 @@ impl DaemonContext {
     /// Returns `DaemonizeError::ChownError` if `chown()` fails on any path.
     /// Returns `DaemonizeError::UserNotFound` or `DaemonizeError::GroupNotFound`
     /// if the configured user/group cannot be resolved.
-    #[allow(unsafe_code)]
     pub fn chown_paths(&mut self) -> Result<(), DaemonizeError> {
         if self.user.is_none() && self.group.is_none() {
             return Ok(());
         }
 
         let (uid, gid) = resolve_uid_gid(self.user.as_deref(), self.group.as_deref())?;
+        let owner = Some(nix::unistd::Uid::from_raw(uid));
+        let group = Some(nix::unistd::Gid::from_raw(gid));
 
         let paths: Vec<&PathBuf> = [
             &self.pidfile,
@@ -150,18 +151,8 @@ impl DaemonContext {
 
         for path in paths {
             if path.exists() {
-                let ret = unsafe {
-                    let c_path = std::ffi::CString::new(path.as_os_str().as_encoded_bytes())
-                        .map_err(|e| DaemonizeError::ChownError(format!("invalid path: {e}")))?;
-                    libc::chown(c_path.as_ptr(), uid, gid)
-                };
-                if ret != 0 {
-                    let e = std::io::Error::last_os_error();
-                    return Err(DaemonizeError::ChownError(format!(
-                        "{}: {e}",
-                        path.display()
-                    )));
-                }
+                nix::unistd::chown(path, owner, group)
+                    .map_err(|e| DaemonizeError::ChownError(format!("{}: {e}", path.display())))?;
             }
         }
 
@@ -189,7 +180,6 @@ impl DaemonContext {
     /// Returns `DaemonizeError::GroupNotFound` if the group cannot be resolved.
     /// Returns `DaemonizeError::PermissionDenied` if `initgroups`, `setgid`,
     /// or `setuid` fails.
-    #[allow(unsafe_code)]
     pub fn drop_privileges(&mut self) -> Result<(), DaemonizeError> {
         use std::ffi::CString;
 
@@ -228,12 +218,9 @@ impl DaemonContext {
                 .map_err(|e| DaemonizeError::PermissionDenied(format!("setuid: {e}")))?;
 
             // Set USER, HOME, LOGNAME — overwrite any .env() values
-            // SAFETY: post-fork, single-threaded — no concurrent readers.
-            unsafe {
-                std::env::set_var("USER", &info.name);
-                std::env::set_var("HOME", &info.dir);
-                std::env::set_var("LOGNAME", &info.name);
-            }
+            crate::unsafe_ops::raw_set_env_var("USER", &info.name);
+            crate::unsafe_ops::raw_set_env_var("HOME", &info.dir);
+            crate::unsafe_ops::raw_set_env_var("LOGNAME", &info.name);
         }
 
         Ok(())
@@ -268,7 +255,6 @@ impl DaemonContext {
     /// Uses `libc::_exit` rather than `std::process::exit` to avoid running
     /// atexit handlers or flushing stdio buffers inherited from the pre-fork
     /// parent, which could cause double-flush corruption or deadlocks.
-    #[allow(unsafe_code)]
     pub fn report_error(&mut self, err: &DaemonizeError) -> ! {
         if let Some(fd) = self.notify_pipe.take() {
             let mut file = io::BufWriter::new(std::fs::File::from(fd));
@@ -280,7 +266,7 @@ impl DaemonContext {
             let _ = file.write_all(&buf);
             let _ = file.flush();
         }
-        unsafe { libc::_exit(err.exit_code() as i32) }
+        crate::unsafe_ops::raw_exit(err.exit_code() as i32)
     }
 }
 

@@ -136,16 +136,9 @@ pub(crate) fn clear_signal_mask() {
 }
 
 /// Step 11: Set environment variables in insertion order.
-///
-/// # Safety context
-///
-/// `std::env::set_var` is not thread-safe. This is called post-fork in a
-/// single-threaded child process, so no data race is possible.
-#[allow(unsafe_code)]
 pub(crate) fn set_env_vars(env: &[(String, String)]) {
     for (key, value) in env {
-        // SAFETY: post-fork, single-threaded — no concurrent readers.
-        unsafe { std::env::set_var(key, value) };
+        unsafe_ops::raw_set_env_var(key, value);
     }
 }
 
@@ -334,17 +327,21 @@ mod tests {
     /// because the harness writes results to those fds. This guard `dup`s the
     /// originals before the test body runs, then `dup2`s them back when dropped.
     struct SavedFds {
-        saved: Vec<(i32, i32)>, // (original_fd, saved_copy)
+        saved: Vec<(i32, OwnedFd)>, // (original_fd, saved_copy)
     }
 
     impl SavedFds {
         fn new(fds: &[i32]) -> Self {
-            #[allow(unsafe_code)]
             let saved = fds
                 .iter()
                 .map(|&fd| {
-                    let copy = unsafe { libc::dup(fd) };
-                    assert!(copy >= 0, "dup({fd}) failed");
+                    let copy = match fd {
+                        0 => unistd::dup(std::io::stdin()),
+                        1 => unistd::dup(std::io::stdout()),
+                        2 => unistd::dup(std::io::stderr()),
+                        _ => panic!("SavedFds only supports stdio fds"),
+                    }
+                    .unwrap_or_else(|e| panic!("dup({fd}) failed: {e}"));
                     (fd, copy)
                 })
                 .collect();
@@ -356,18 +353,19 @@ mod tests {
         /// Use this to build a skip list for `close_inherited_fds` so it
         /// doesn't close the backup copies we need for restoration.
         fn saved_fds(&self) -> Vec<i32> {
-            self.saved.iter().map(|&(_, copy)| copy).collect()
+            self.saved
+                .iter()
+                .map(|(_, copy)| copy.as_raw_fd())
+                .collect()
         }
     }
 
     impl Drop for SavedFds {
         fn drop(&mut self) {
-            #[allow(unsafe_code)]
-            for &(orig, copy) in &self.saved {
-                unsafe {
-                    libc::dup2(copy, orig);
-                    libc::close(copy);
-                }
+            for (orig, copy) in self.saved.drain(..) {
+                dup2_stdio(&copy, orig)
+                    .unwrap_or_else(|e| panic!("dup2({} -> {orig}) failed: {e}", copy.as_raw_fd()));
+                // copy is an OwnedFd — closed on drop
             }
         }
     }
@@ -481,7 +479,6 @@ mod tests {
 
     #[test]
     #[serial]
-    #[allow(unsafe_code)]
     fn set_env_vars_applies() {
         let vars = vec![
             ("DAEMONIZE_TEST_A".into(), "1".into()),
@@ -490,15 +487,12 @@ mod tests {
         set_env_vars(&vars);
         assert_eq!(std::env::var("DAEMONIZE_TEST_A").unwrap(), "1");
         assert_eq!(std::env::var("DAEMONIZE_TEST_B").unwrap(), "2");
-        unsafe {
-            std::env::remove_var("DAEMONIZE_TEST_A");
-            std::env::remove_var("DAEMONIZE_TEST_B");
-        }
+        unsafe_ops::raw_remove_env_var("DAEMONIZE_TEST_A");
+        unsafe_ops::raw_remove_env_var("DAEMONIZE_TEST_B");
     }
 
     #[test]
     #[serial]
-    #[allow(unsafe_code)]
     fn set_env_vars_last_write_wins() {
         let vars = vec![
             ("DAEMONIZE_TEST_DUP".into(), "first".into()),
@@ -506,7 +500,7 @@ mod tests {
         ];
         set_env_vars(&vars);
         assert_eq!(std::env::var("DAEMONIZE_TEST_DUP").unwrap(), "second");
-        unsafe { std::env::remove_var("DAEMONIZE_TEST_DUP") };
+        unsafe_ops::raw_remove_env_var("DAEMONIZE_TEST_DUP");
     }
 
     // --- Step 9: signal disposition reset ---

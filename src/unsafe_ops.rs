@@ -1,14 +1,15 @@
 //! Unsafe code containment zone.
 //!
-//! All `unsafe` blocks in the crate are confined to this module (via
-//! `#![deny(unsafe_code)]` at the crate root). Contains two things:
+//! Nearly all `unsafe` blocks live here (via `#![deny(unsafe_code)]` at the
+//! crate root). The few exceptions are `unsafe fn` calls to
+//! [`Forker::fork`](crate::forker::Forker::fork) in `lib.rs` and
+//! `nix::sys::signal::sigaction` in test code.
 //!
 //! - **[`RealForker`]**: the production [`Forker`](crate::forker::Forker)
 //!   implementation wrapping fork, setsid, pipe, and `_exit`.
-//! - **libc wrappers**: thin safe-signature functions (`raw_close`,
-//!   `raw_initgroups`, etc.) used by [`steps`](crate::steps) and
-//!   [`context`](crate::context) without needing `#[allow(unsafe_code)]`
-//!   themselves.
+//! - **Safe wrappers**: thin safe-signature functions (`raw_close`,
+//!   `raw_set_env_var`, `raw_exit`, etc.) used by other modules without
+//!   needing `#[allow(unsafe_code)]` themselves.
 
 #![allow(unsafe_code)]
 
@@ -49,7 +50,7 @@ impl Forker for RealForker {
     }
 
     fn exit(&self, code: i32) -> ! {
-        unsafe { libc::_exit(code) }
+        raw_exit(code)
     }
 }
 
@@ -123,6 +124,33 @@ pub(crate) fn raw_initgroups(
     } else {
         Ok(())
     }
+}
+
+/// Set an environment variable.
+///
+/// `std::env::set_var` is not thread-safe (unsafe since Rust 1.83).
+/// Callers must ensure no other threads exist (e.g. post-fork child).
+pub(crate) fn raw_set_env_var(
+    key: impl AsRef<std::ffi::OsStr>,
+    value: impl AsRef<std::ffi::OsStr>,
+) {
+    unsafe { std::env::set_var(key, value) };
+}
+
+/// Remove an environment variable.
+///
+/// Same thread-safety constraints as [`raw_set_env_var`].
+#[cfg(test)]
+pub(crate) fn raw_remove_env_var(key: &str) {
+    unsafe { std::env::remove_var(key) };
+}
+
+/// Terminate the process immediately via `_exit(2)`.
+///
+/// Unlike `std::process::exit`, this does not run atexit handlers or flush
+/// stdio buffers — necessary post-fork to avoid double-flush corruption.
+pub(crate) fn raw_exit(code: i32) -> ! {
+    unsafe { libc::_exit(code) }
 }
 
 /// Returns a `BorrowedFd` for `AT_FDCWD`, the sentinel that means
