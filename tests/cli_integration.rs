@@ -450,6 +450,57 @@ fn stdout_extension_swaps_to_stderr() {
     kill_process(pid);
 }
 
+#[test]
+fn stdout_out_extension_swaps_to_err() {
+    let dir = tempfile::tempdir().unwrap();
+    let pidfile = dir.path().join("test.pid");
+    let stdout_file = dir.path().join("app.out");
+    let stderr_file = dir.path().join("app.err");
+
+    let output = daemonize_cmd()
+        .args([
+            "-p",
+            pidfile.to_str().unwrap(),
+            "-o",
+            stdout_file.to_str().unwrap(),
+            "--",
+            "sh",
+            "-c",
+            "echo out_line; echo err_line >&2; sleep 1",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "daemonize failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let pid = wait_for_pidfile(&pidfile).expect("pidfile should appear");
+
+    let out_content = wait_for_file_content(&stdout_file, "out_line");
+    assert!(
+        out_content.contains("out_line"),
+        "stdout file should have stdout"
+    );
+    assert!(
+        !out_content.contains("err_line"),
+        "stdout file should not have stderr"
+    );
+
+    let err_content = wait_for_file_content(&stderr_file, "err_line");
+    assert!(
+        err_content.contains("err_line"),
+        "stderr file should have stderr"
+    );
+    assert!(
+        !err_content.contains("out_line"),
+        "stderr file should not have stdout"
+    );
+
+    kill_process(pid);
+}
+
 // --- Relative path resolution (R55) ---
 
 #[test]

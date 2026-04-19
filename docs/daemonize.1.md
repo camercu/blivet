@@ -66,13 +66,14 @@ dropped, so the daemon can continue to write to them after the switch.
 :   Redirect the daemon's stdout to *path*. The path must be absolute.
     When **--stderr** is not specified, stderr is also redirected: if *path*
     ends in **.stdout**, stderr goes to the same name with a **.stderr**
-    extension; otherwise both streams share the same file (opened once,
-    shared via **dup2**(2)).
+    extension; if *path* ends in **.out**, stderr goes to **.err**;
+    otherwise both streams share the same file (opened once, shared via
+    **dup2**(2)).
 
 **-e**, **--stderr** *path*
 :   Redirect the daemon's stderr to *path*. The path must be absolute.
-    Defaults to the **--stdout** path (with **.stdout**→**.stderr** extension
-    swap) when not specified.
+    Defaults to the **--stdout** path (with **.stdout**→**.stderr** or
+    **.out**→**.err** extension swap) when not specified.
 
 **-a**, **--append**
 :   Open stdout/stderr files in append mode instead of truncating them.
@@ -173,6 +174,10 @@ Split stdout and stderr using extension convention:
     daemonize -p /var/run/myapp.pid \
               -o /var/log/myapp/app.stdout \
               -- /usr/bin/myapp  # stderr goes to app.stderr
+
+    daemonize -p /var/run/myapp.pid \
+              -o /var/log/myapp/app.out \
+              -- /usr/bin/myapp  # stderr goes to app.err
 
 Prevent duplicate instances (pidfile acts as lock file by default):
 

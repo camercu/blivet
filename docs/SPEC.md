@@ -636,6 +636,18 @@ remains valid after `chdir` changes the working directory:
 
 All CLI validation occurs before daemonization.
 
+### Stderr derivation from stdout
+
+When `--stdout` is given but `--stderr` is not, the CLI derives the
+stderr path from the stdout path:
+
+- If the stdout path ends in `.stdout`, stderr uses `.stderr`.
+- If the stdout path ends in `.out`, stderr uses `.err`.
+- Otherwise, stderr shares the same path as stdout (same fd via `dup2`).
+
+This is a CLI-only convenience; the library requires explicit
+`stdout`/`stderr` configuration.
+
 ### Program execution
 
 The CLI calls `unsafe { daemonize(&config) }`, then:

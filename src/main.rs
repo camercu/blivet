@@ -29,7 +29,7 @@ struct Args {
     #[arg(short = 'o', long = "stdout")]
     stdout: Option<PathBuf>,
 
-    /// Redirect stderr to file [default: stdout path, .stdout→.stderr]
+    /// Redirect stderr to file [default: stdout path, .stdout→.stderr / .out→.err]
     #[arg(short = 'e', long = "stderr")]
     stderr: Option<PathBuf>,
 
@@ -101,6 +101,7 @@ fn main() -> ExitCode {
     }
     // Default stderr to stdout path when not explicitly set:
     // - If stdout ends in ".stdout", swap extension to ".stderr"
+    // - If stdout ends in ".out", swap extension to ".err"
     // - Otherwise, use the same path (shares the fd via dup2)
     let stderr = args.stderr.as_ref().or(args.stdout.as_ref());
     let stderr = stderr.map(|p| {
@@ -232,10 +233,12 @@ fn resolve_program_path(program: &str) -> Result<String, DaemonizeError> {
 /// Derive a stderr path from a stdout path.
 ///
 /// If the stdout path has a `.stdout` extension, swaps it for `.stderr`.
+/// If the stdout path has a `.out` extension, swaps it for `.err`.
 /// Otherwise returns the path unchanged (stderr shares the same file).
 fn derive_stderr_path(stdout: &Path) -> PathBuf {
     match stdout.extension() {
         Some(ext) if ext == "stdout" => stdout.with_extension("stderr"),
+        Some(ext) if ext == "out" => stdout.with_extension("err"),
         _ => stdout.to_path_buf(),
     }
 }
