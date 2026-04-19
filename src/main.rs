@@ -142,12 +142,6 @@ fn main() -> ExitCode {
         }
     };
 
-    // Validate config before daemonization
-    if let Err(e) = config.validate() {
-        eprintln!("{e}");
-        return ExitCode::from(e.exit_code());
-    }
-
     // Verbose diagnostics
     if args.verbose {
         eprintln!("daemonize: program={program_path}");

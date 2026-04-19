@@ -594,7 +594,7 @@ fn chdir_nonexistent_exits_71() {
         .output()
         .unwrap();
 
-    // ChdirFailed or ValidationError — chdir to nonexistent is caught in validate
+    // ChdirFailed (71) or ValidationError (64) — depends on when the check runs
     let code = output.status.code().unwrap();
     assert!(
         code == 64 || code == 71,
