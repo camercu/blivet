@@ -28,17 +28,17 @@ The daemonization sequence:
 3. Forks a second time so the daemon cannot reacquire a controlling terminal.
 4. Sets the umask, changes the working directory, and redirects
    stdin/stdout/stderr to */dev/null*.
-5. Writes the PID file and acquires the lock file (if configured).
+5. Acquires the lock file and writes the PID file (if configured).
 6. Resets all signal dispositions to **SIG_DFL** and clears the signal mask.
-7. Applies environment variables.
-8. Transfers ownership of pidfile, lockfile, and output files to the target
+7. Applies environment variables and redirects stdout/stderr to files
+   (if configured).
+8. Closes all inherited file descriptors (except the lock file), unless
+   **--no-close-fds** is given.
+9. Transfers ownership of pidfile, lockfile, and output files to the target
    user/group (if configured) via **chown**(2).
-9. Switches user and group (if configured) via **setuid**(2), **setgid**(2),
-   and **initgroups**(3).
-10. Redirects stdout/stderr to files (if configured).
-11. Closes all inherited file descriptors (except the lock file), unless
-    **--no-close-fds** is given.
-12. Exec's *program*.
+10. Switches user and group (if configured) via **setuid**(2), **setgid**(2),
+    and **initgroups**(3).
+11. Exec's *program*.
 
 In foreground mode (**-f**), steps 1-3 are skipped: no fork or setsid occurs,
 and the notification pipe is not created. All other steps still apply.
