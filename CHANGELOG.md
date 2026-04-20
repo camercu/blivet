@@ -1,3 +1,13 @@
+## [0.3.2](https://github.com/camercu/blivet/compare/v0.3.1...v0.3.2) (2026-04-20)
+
+
+### Bug Fixes
+
+* **ci:** add rust toolchain to release workflow for cargo publish ([a39dbbd](https://github.com/camercu/blivet/commit/a39dbbd0383a9ada07adb86e9a4f8203a2dbfeed))
+* **ci:** enable crates.io publishing and track Cargo.lock in releases ([b2da1af](https://github.com/camercu/blivet/commit/b2da1af0326998635fc58545e10b3e0088f42661))
+* **ci:** scope push trigger to main branch only ([44022cd](https://github.com/camercu/blivet/commit/44022cd1ded191830375b6871bd3b9db546a1ac9))
+* **ci:** sync Cargo.lock with v0.3.1 release ([457bd89](https://github.com/camercu/blivet/commit/457bd89a4d3bae3f0b5c03df9ed545e210c42bc1))
+
 ## [0.3.1](https://github.com/camercu/blivet/compare/v0.3.0...v0.3.1) (2026-04-20)
 
 
