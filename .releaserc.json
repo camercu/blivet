@@ -38,6 +38,10 @@
       "semantic-release-cargo",
       { "publish": true, "alwaysVerifyToken": true }
     ],
+    [
+      "@semantic-release/exec",
+      { "prepareCmd": "cargo generate-lockfile" }
+    ],
     "@semantic-release/changelog",
     [
       "@semantic-release/git",
