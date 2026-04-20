@@ -36,7 +36,9 @@ impl Forker for RealForker {
         use nix::fcntl::{fcntl, FcntlArg, FdFlag};
 
         let (rd, wr) = nix::unistd::pipe().expect("failed to create notification pipe");
-        // Set O_CLOEXEC on both ends
+        // Set O_CLOEXEC on both ends. pipe2(O_CLOEXEC) would be atomic, but
+        // macOS lacks pipe2. The two-step approach is safe here because
+        // daemonize() requires single-threaded execution.
         fcntl(rd.as_fd(), FcntlArg::F_SETFD(FdFlag::FD_CLOEXEC))
             .expect("failed to set CLOEXEC on pipe read end");
         fcntl(wr.as_fd(), FcntlArg::F_SETFD(FdFlag::FD_CLOEXEC))
