@@ -1,3 +1,4 @@
 /target
+.claude/
 .direnv/
 node_modules/

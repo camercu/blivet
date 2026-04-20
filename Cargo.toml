@@ -10,6 +10,7 @@ readme = "README.md"
 keywords = ["daemon", "daemonize", "fork", "unix", "linux"]
 categories = ["os::unix-apis"]
 exclude = [
+    ".claude/",
     ".github/",
     "Dockerfile",
     ".dockerignore",

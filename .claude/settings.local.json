@@ -70,7 +70,14 @@
       "Bash(git pull:*)",
       "Bash(printf 'n\\\\ny\\\\n')",
       "Bash(grep -r 'pub fn dup2\\\\|pub unsafe fn dup2\\\\|pub fn close\\\\|pub unsafe fn close' target/debug/.fingerprint/../../../.cargo/registry/src/*/nix-0.31.*/src/unistd.rs)",
-      "Bash(grep -v '^$')"
+      "Bash(grep -v '^$')",
+      "Bash(cargo deny:*)",
+      "Bash(git revert:*)",
+      "Bash(RUSTDOCFLAGS=\"-D warnings\" cargo doc --locked --no-deps)",
+      "Bash(cargo package:*)",
+      "Bash(git check-ignore:*)",
+      "Bash(command -v pandoc)",
+      "Bash(git rm:*)"
     ]
   }
 }
