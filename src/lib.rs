@@ -268,8 +268,7 @@ pub(crate) fn daemonize_inner(
     if let Some(ref pidfile_path) = config.pidfile {
         post_fork_try!(steps::write_pidfile(
             pidfile_path,
-            config.lockfile.as_ref(),
-            lockfile.as_ref()
+            config.lockfile.as_deref().zip(lockfile.as_ref()),
         ));
     }
 
@@ -285,8 +284,8 @@ pub(crate) fn daemonize_inner(
     // Step 12: Redirect stdout/stderr to configured files
     if config.stdout.is_some() || config.stderr.is_some() {
         post_fork_try!(steps::redirect_output(
-            config.stdout.as_ref(),
-            config.stderr.as_ref(),
+            config.stdout.as_deref(),
+            config.stderr.as_deref(),
             config.append,
         ));
     }

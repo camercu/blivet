@@ -94,15 +94,14 @@ pub(crate) fn open_and_lock(path: &Path) -> Result<Flock<OwnedFd>, DaemonizeErro
 /// and writes to the already-locked fd. Otherwise opens, writes, and closes.
 pub(crate) fn write_pidfile(
     pidfile_path: &Path,
-    lockfile_path: Option<&PathBuf>,
-    lockfile: Option<&Flock<OwnedFd>>,
+    lockfile: Option<(&Path, &Flock<OwnedFd>)>,
 ) -> Result<(), DaemonizeError> {
     let pid = std::process::id();
     let content = format!("{pid}\n");
 
     // Check if pidfile is the same as lockfile
-    let shared = match (lockfile_path, lockfile) {
-        (Some(lp), Some(flock)) if paths_same(pidfile_path, lp) => Some(flock),
+    let shared = match lockfile {
+        Some((lp, flock)) if paths_same(pidfile_path, lp) => Some(flock),
         _ => None,
     };
 
@@ -147,8 +146,8 @@ pub(crate) fn set_env_vars(env: &[(String, String)]) {
 /// This is pure logic with no side effects — it decides *what* to do based on
 /// the configured paths and append flag, without touching any file descriptors.
 pub(crate) fn plan_output_redirect(
-    stdout: Option<&PathBuf>,
-    stderr: Option<&PathBuf>,
+    stdout: Option<&Path>,
+    stderr: Option<&Path>,
     append: bool,
 ) -> OutputRedirectPlan {
     let mut flags = OFlag::O_WRONLY | OFlag::O_CREAT;
@@ -165,7 +164,7 @@ pub(crate) fn plan_output_redirect(
 
     let stdout_action = match stdout {
         Some(path) => StreamAction::OpenAndRedirect {
-            path: path.clone(),
+            path: path.to_path_buf(),
             flags,
             target_fd: 1,
         },
@@ -180,7 +179,7 @@ pub(crate) fn plan_output_redirect(
     } else {
         match stderr {
             Some(path) => StreamAction::OpenAndRedirect {
-                path: path.clone(),
+                path: path.to_path_buf(),
                 flags,
                 target_fd: 2,
             },
@@ -260,8 +259,8 @@ pub(crate) fn execute_output_redirect(plan: &OutputRedirectPlan) -> Result<(), D
 /// Same-path optimization: if stdout and stderr resolve to the same path,
 /// open once for stdout and dup2 to stderr.
 pub(crate) fn redirect_output(
-    stdout: Option<&PathBuf>,
-    stderr: Option<&PathBuf>,
+    stdout: Option<&Path>,
+    stderr: Option<&Path>,
     append: bool,
 ) -> Result<(), DaemonizeError> {
     let plan = plan_output_redirect(stdout, stderr, append);
@@ -438,7 +437,7 @@ mod tests {
     fn write_pidfile_standalone() {
         let dir = tempfile::tempdir().unwrap();
         let pidfile = dir.path().join("test.pid");
-        let result = write_pidfile(&pidfile, None, None);
+        let result = write_pidfile(&pidfile, None);
         assert!(result.is_ok());
         let contents = std::fs::read_to_string(&pidfile).unwrap();
         let pid: u32 = contents.trim().parse().unwrap();
@@ -450,11 +449,44 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("shared.pid");
         let flock = open_and_lock(&path).unwrap();
-        let result = write_pidfile(&path, Some(&path.clone()), Some(&flock));
+        let result = write_pidfile(&path, Some((path.as_path(), &flock)));
         assert!(result.is_ok());
         let contents = std::fs::read_to_string(&path).unwrap();
         let pid: u32 = contents.trim().parse().unwrap();
         assert_eq!(pid, std::process::id());
+    }
+
+    // --- Step 9: signal disposition reset ---
+
+    #[test]
+    #[serial]
+    #[allow(unsafe_code)]
+    fn reset_signal_dispositions_restores_default() {
+        use nix::sys::signal::{sigaction, SaFlags, SigAction, SigHandler, SigSet, Signal};
+
+        // Install SIG_IGN handler for SIGUSR1
+        let handler = SigAction::new(SigHandler::SigIgn, SaFlags::empty(), SigSet::empty());
+        let old = unsafe { sigaction(Signal::SIGUSR1, &handler) }.unwrap();
+
+        // Verify it's not SIG_DFL
+        let current = unsafe { sigaction(Signal::SIGUSR1, &handler) }.unwrap();
+        assert!(
+            !matches!(current.handler(), SigHandler::SigDfl),
+            "precondition: SIGUSR1 should not be SIG_DFL"
+        );
+
+        // Reset all dispositions
+        crate::unsafe_ops::reset_signal_dispositions();
+
+        // Read back SIGUSR1 disposition — should be SIG_DFL now
+        let after_reset = unsafe { sigaction(Signal::SIGUSR1, &old) }.unwrap();
+        assert!(
+            matches!(after_reset.handler(), SigHandler::SigDfl),
+            "SIGUSR1 should be SIG_DFL after reset"
+        );
+
+        // Restore original
+        let _ = unsafe { sigaction(Signal::SIGUSR1, &old) };
     }
 
     // --- Step 10: clear signal mask ---
@@ -503,40 +535,7 @@ mod tests {
         unsafe_ops::raw_remove_env_var("DAEMONIZE_TEST_DUP");
     }
 
-    // --- Step 9: signal disposition reset ---
-
-    #[test]
-    #[serial]
-    #[allow(unsafe_code)]
-    fn reset_signal_dispositions_restores_default() {
-        use nix::sys::signal::{sigaction, SaFlags, SigAction, SigHandler, SigSet, Signal};
-
-        // Install SIG_IGN handler for SIGUSR1
-        let handler = SigAction::new(SigHandler::SigIgn, SaFlags::empty(), SigSet::empty());
-        let old = unsafe { sigaction(Signal::SIGUSR1, &handler) }.unwrap();
-
-        // Verify it's not SIG_DFL
-        let current = unsafe { sigaction(Signal::SIGUSR1, &handler) }.unwrap();
-        assert!(
-            !matches!(current.handler(), SigHandler::SigDfl),
-            "precondition: SIGUSR1 should not be SIG_DFL"
-        );
-
-        // Reset all dispositions
-        crate::unsafe_ops::reset_signal_dispositions();
-
-        // Read back SIGUSR1 disposition — should be SIG_DFL now
-        let after_reset = unsafe { sigaction(Signal::SIGUSR1, &old) }.unwrap();
-        assert!(
-            matches!(after_reset.handler(), SigHandler::SigDfl),
-            "SIGUSR1 should be SIG_DFL after reset"
-        );
-
-        // Restore original
-        let _ = unsafe { sigaction(Signal::SIGUSR1, &old) };
-    }
-
-    // --- Step 13: redirect output (pure plan tests) ---
+    // --- Step 12: redirect output (pure plan tests) ---
 
     #[test]
     fn plan_stdout_only_truncate() {
@@ -631,7 +630,7 @@ mod tests {
         assert_eq!(plan.stderr, StreamAction::None);
     }
 
-    // --- Step 13: redirect output (executor smoke tests, serial) ---
+    // --- Step 12: redirect output (executor smoke tests, serial) ---
 
     #[test]
     #[serial]
@@ -707,7 +706,7 @@ mod tests {
         assert!(content.contains("stderr content"));
     }
 
-    // --- Step 14: close inherited fds (pure plan tests) ---
+    // --- Step 13: close inherited fds (pure plan tests) ---
 
     #[test]
     fn fds_to_close_skips_correctly() {
@@ -733,7 +732,7 @@ mod tests {
         assert!(result.is_empty());
     }
 
-    // --- Step 14: close inherited fds (executor smoke test, serial) ---
+    // --- Step 13: close inherited fds (executor smoke test, serial) ---
 
     #[test]
     #[serial]
@@ -762,7 +761,7 @@ mod tests {
         let lockfile_path = dir.path().join("test.lock");
         let flock = open_and_lock(&lockfile_path).unwrap();
         // lockfile_path differs from pidfile — should use std::fs::write path
-        let result = write_pidfile(&pidfile, Some(&lockfile_path), Some(&flock));
+        let result = write_pidfile(&pidfile, Some((lockfile_path.as_path(), &flock)));
         assert!(result.is_ok());
         let contents = std::fs::read_to_string(&pidfile).unwrap();
         let pid: u32 = contents.trim().parse().unwrap();
