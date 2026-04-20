@@ -77,7 +77,9 @@
       "Bash(cargo package:*)",
       "Bash(git check-ignore:*)",
       "Bash(command -v pandoc)",
-      "Bash(git rm:*)"
+      "Bash(git rm:*)",
+      "Bash(cargo generate-lockfile:*)",
+      "Bash(gh run:*)"
     ]
   }
 }
