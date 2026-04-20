@@ -174,6 +174,12 @@ impl DaemonContext {
     ///
     /// After switching, sets `USER`, `HOME`, `LOGNAME` environment variables.
     ///
+    /// # Safety considerations
+    ///
+    /// This method calls `setenv` internally (to set `USER`, `HOME`,
+    /// `LOGNAME`), which is not thread-safe. Do not spawn threads between
+    /// [`daemonize()`](crate::daemonize) and this call.
+    ///
     /// # Errors
     ///
     /// Returns `DaemonizeError::UserNotFound` if the user cannot be resolved.
