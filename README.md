@@ -6,12 +6,7 @@
 [![MSRV](https://img.shields.io/badge/MSRV-1.85-blue)](https://doc.rust-lang.org/cargo/reference/manifest.html#the-rust-version-field)
 [![License](https://img.shields.io/crates/l/blivet.svg)](LICENSE-MIT)
 
-A correct, minimal Unix daemon library and CLI for Rust.
-
-A [blivet](https://en.wikipedia.org/wiki/Impossible_trident) is the "impossible
-fork" optical illusion, also known as the devil's tuning fork. Daemons are
-created by forking — and this crate performs the impossible double-fork to do it
-correctly.
+A correct, full-featured Unix daemon library and CLI for Rust.
 
 `blivet` implements the full double-fork daemonization sequence with a
 parent-notification pipe, so your process detaches cleanly and the calling shell
@@ -37,6 +32,13 @@ Errors that happen after forking are reported back to the parent with
 - **Library and CLI.** Use it as a Rust library with a builder API, or as a
   standalone `daemonize` binary (installed by `cargo install blivet`) that
   wraps any program.
+
+**Why the name `blivet`?**
+
+A [blivet](https://en.wikipedia.org/wiki/Impossible_trident) is the "impossible
+pitchfork" optical illusion, also known as the devil's fork, where the prongs
+are mysteriously detached from the base. Daemons are created by forking to
+detach from their parent terminal.
 
 ## Install
 
@@ -97,21 +99,21 @@ so the daemon can continue to write to them after the switch.
 
 ### CLI flags
 
-| Flag | Long                | Description                                                          |
-| ---- | ------------------- | -------------------------------------------------------------------- |
-| `-p` | `--pidfile PATH`    | Write daemon PID to file                                             |
-| `-l` | `--lock PATH`       | Exclusive lockfile (default: pidfile path, if set)                   |
-| `-c` | `--chdir PATH`      | Working directory (default: `/`)                                     |
-| `-m` | `--umask MODE`      | Process umask in octal (e.g. `022`)                                  |
-| `-o` | `--stdout PATH`     | Redirect stdout to file (also sets stderr if `-e` is not given)      |
+| Flag | Long                | Description |
+| ---- | ------------------- | --- |
+| `-p` | `--pidfile PATH`    | Write daemon PID to file |
+| `-l` | `--lock PATH`       | Exclusive lockfile (default: pidfile path, if set) |
+| `-c` | `--chdir PATH`      | Working directory (default: `/`) |
+| `-m` | `--umask MODE`      | Process umask in octal (e.g. `022`) |
+| `-o` | `--stdout PATH`     | Redirect stdout to file (also sets stderr if `-e` is not given) |
 | `-e` | `--stderr PATH`     | Redirect stderr to file (default: stdout path; `.stdout`→`.stderr`, `.out`→`.err`) |
-| `-a` | `--append`          | Append to stdout/stderr files instead of truncating                  |
-| `-u` | `--user NAME\|UID`  | Switch to user after daemonizing (requires root)                     |
-| `-g` | `--group NAME\|GID` | Switch to group after daemonizing (requires root)                    |
-| `-f` | `--foreground`      | Stay in foreground (no fork/setsid); consider `--no-close-fds`       |
+| `-a` | `--append`          | Append to stdout/stderr files instead of truncating |
+| `-u` | `--user NAME\|UID`  | Switch to user after daemonizing (requires root) |
+| `-g` | `--group NAME\|GID` | Switch to group after daemonizing (requires root) |
+| `-f` | `--foreground`      | Stay in foreground (no fork/setsid); consider `--no-close-fds` |
 |      | `--no-close-fds`    | Keep inherited fds open (useful with `-f` for supervisor-passed fds) |
-| `-E` | `--env NAME=VAL`    | Set environment variable (repeatable)                                |
-| `-v` | `--verbose`         | Print diagnostic info before daemonizing                             |
+| `-E` | `--env NAME=VAL`    | Set environment variable (repeatable) |
+| `-v` | `--verbose`         | Print diagnostic info before daemonizing |
 
 ## Library quickstart
 
