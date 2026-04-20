@@ -1,3 +1,10 @@
+## [0.3.3](https://github.com/camercu/blivet/compare/v0.3.2...v0.3.3) (2026-04-20)
+
+
+### Bug Fixes
+
+* **ci:** regenerate Cargo.lock during release prepare phase ([c05b2ec](https://github.com/camercu/blivet/commit/c05b2ec423c05f94e2f21686dacffdef341e862b))
+
 ## [0.3.2](https://github.com/camercu/blivet/compare/v0.3.1...v0.3.2) (2026-04-20)
 
 

@@ -1,6 +1,6 @@
 [package]
 name = "blivet"
-version = "0.3.2"
+version = "0.3.3"
 edition = "2021"
 rust-version = "1.85"
 description = "Daemonize a process using the double-fork method"
