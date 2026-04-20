@@ -23,8 +23,9 @@ files.
 > the public surface. A newtype wrapper adds friction for users who
 > already depend on nix and provides no safety benefit.
 
-Dependencies: nix (≥0.29, features: `fs`, `signal`, `unistd`,
-`process`), clap, thiserror. Dev: tempfile, serial_test.
+Dependencies: nix (0.31, features: `fs`, `signal`, `process`,
+`user`, `resource`), clap, thiserror, libc. Dev: tempfile,
+serial_test, relentless.
 
 ## Dependency policy
 
