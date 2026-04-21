@@ -143,6 +143,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
+On Linux, `daemonize_checked` provides a safe wrapper that verifies the process
+is single-threaded (via `/proc/self/status`) before forking:
+
+```rust
+use blivet::{DaemonConfig, daemonize_checked};
+
+let config = DaemonConfig::new();
+let mut ctx = daemonize_checked(&config)?; // panics if threads > 1
+ctx.notify_parent()?;
+```
+
 ### Split-phase privilege dropping
 
 When your daemon needs to perform privileged operations (like binding to
@@ -184,17 +195,6 @@ let mut config = DaemonConfig::new();
 config
     .foreground(true)
     .close_fds(false);  // keep supervisor-passed fds
-```
-
-On Linux, `daemonize_checked` provides a safe wrapper that verifies the process
-is single-threaded (via `/proc/self/status`) before forking:
-
-```rust
-use blivet::{DaemonConfig, daemonize_checked};
-
-let config = DaemonConfig::new();
-let mut ctx = daemonize_checked(&config)?; // panics if threads > 1
-ctx.notify_parent()?;
 ```
 
 ## API overview
