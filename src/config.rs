@@ -33,6 +33,7 @@ pub struct DaemonConfig {
     pub(crate) group: Option<String>,
     pub(crate) foreground: bool,
     pub(crate) close_fds: bool,
+    pub(crate) cleanup_on_drop: bool,
     pub(crate) env: Vec<(String, String)>,
 }
 
@@ -50,6 +51,7 @@ impl Default for DaemonConfig {
             group: None,
             foreground: false,
             close_fds: true,
+            cleanup_on_drop: true,
             env: Vec::new(),
         }
     }
@@ -140,6 +142,16 @@ impl DaemonConfig {
     /// file descriptors.
     pub fn close_fds(&mut self, close_fds: bool) -> &mut Self {
         self.close_fds = close_fds;
+        self
+    }
+
+    /// Sets whether to remove the pidfile on drop. Default: `true`.
+    ///
+    /// When `true`, dropping [`DaemonContext`](crate::DaemonContext) removes
+    /// the pidfile from disk. Can be overridden at runtime via
+    /// [`DaemonContext::set_cleanup_on_drop`](crate::DaemonContext::set_cleanup_on_drop).
+    pub fn cleanup_on_drop(&mut self, cleanup: bool) -> &mut Self {
+        self.cleanup_on_drop = cleanup;
         self
     }
 

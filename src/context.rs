@@ -24,7 +24,8 @@ use crate::error::DaemonizeError;
 ///
 /// Dropping this without calling [`notify_parent`](DaemonContext::notify_parent)
 /// writes a failure message to the notification pipe, causing the parent to
-/// exit non-zero.
+/// exit non-zero. When [`cleanup_on_drop`](crate::DaemonConfig::cleanup_on_drop)
+/// is `true` (the default), dropping also removes the pidfile from disk.
 ///
 /// The lock is released when this value is dropped.
 ///
@@ -53,6 +54,8 @@ pub struct DaemonContext {
     stderr: Option<PathBuf>,
     user: Option<String>,
     group: Option<String>,
+    cleanup_on_drop: bool,
+    cleaned_up: bool,
 }
 
 impl fmt::Debug for DaemonContext {
@@ -80,6 +83,7 @@ impl fmt::Debug for DaemonContext {
             .field("stderr", &OptFmt(&self.stderr))
             .field("user", &OptFmt(&self.user))
             .field("group", &OptFmt(&self.group))
+            .field("cleanup_on_drop", &self.cleanup_on_drop)
             .finish()
     }
 }
@@ -95,6 +99,7 @@ impl DaemonContext {
         stderr: Option<PathBuf>,
         user: Option<String>,
         group: Option<String>,
+        cleanup_on_drop: bool,
     ) -> Self {
         Self {
             lockfile,
@@ -105,6 +110,8 @@ impl DaemonContext {
             stderr,
             user,
             group,
+            cleanup_on_drop,
+            cleaned_up: false,
         }
     }
 
@@ -115,6 +122,38 @@ impl DaemonContext {
     /// the lock to survive, clear `CLOEXEC` before calling `exec`.
     pub fn lockfile_fd(&self) -> Option<BorrowedFd<'_>> {
         self.lockfile.as_ref().map(|flock| flock.as_fd())
+    }
+
+    /// Sets whether [`cleanup`](DaemonContext::cleanup) runs automatically
+    /// when this context is dropped.
+    ///
+    /// Overrides the value set by
+    /// [`DaemonConfig::cleanup_on_drop`](crate::DaemonConfig::cleanup_on_drop).
+    pub fn set_cleanup_on_drop(&mut self, cleanup: bool) {
+        self.cleanup_on_drop = cleanup;
+    }
+
+    /// Removes the pidfile from disk (best-effort).
+    ///
+    /// Only the pidfile is removed. Standalone lockfiles are left on disk
+    /// (the flock is released when this context is dropped).
+    ///
+    /// Errors are silently ignored — the daemon is shutting down and there
+    /// is nothing useful to do with them. Safe to call multiple times
+    /// (idempotent).
+    ///
+    /// Runs automatically on drop when
+    /// [`cleanup_on_drop`](crate::DaemonConfig::cleanup_on_drop) is `true`
+    /// (the default).
+    pub fn cleanup(&mut self) {
+        if self.cleaned_up {
+            return;
+        }
+        self.cleaned_up = true;
+
+        if let Some(ref path) = self.pidfile {
+            let _ = std::fs::remove_file(path);
+        }
     }
 
     /// Changes ownership of all configured path-based resources to the target
@@ -287,6 +326,9 @@ impl Drop for DaemonContext {
             let _ = file.write_all(&buf);
             let _ = file.flush();
         }
+        if self.cleanup_on_drop {
+            self.cleanup();
+        }
     }
 }
 
@@ -378,7 +420,7 @@ mod tests {
     #[test]
     fn notify_parent_writes_success_byte() {
         let (rd, wr) = make_pipe();
-        let mut ctx = DaemonContext::new(None, Some(wr), None, None, None, None, None, None);
+        let mut ctx = DaemonContext::new(None, Some(wr), None, None, None, None, None, None, true);
         ctx.notify_parent().unwrap();
         assert_eq!(read_pipe(rd), vec![0x00]);
     }
@@ -386,7 +428,7 @@ mod tests {
     #[test]
     fn notify_parent_idempotent() {
         let (_rd, wr) = make_pipe();
-        let mut ctx = DaemonContext::new(None, Some(wr), None, None, None, None, None, None);
+        let mut ctx = DaemonContext::new(None, Some(wr), None, None, None, None, None, None, true);
         ctx.notify_parent().unwrap();
         ctx.notify_parent().unwrap();
     }
@@ -395,7 +437,7 @@ mod tests {
     fn drop_writes_failure_when_not_notified() {
         let (rd, wr) = make_pipe();
         {
-            let _ctx = DaemonContext::new(None, Some(wr), None, None, None, None, None, None);
+            let _ctx = DaemonContext::new(None, Some(wr), None, None, None, None, None, None, true);
         }
 
         let buf = read_pipe(rd);
@@ -410,7 +452,8 @@ mod tests {
     fn drop_no_write_after_notify() {
         let (rd, wr) = make_pipe();
         {
-            let mut ctx = DaemonContext::new(None, Some(wr), None, None, None, None, None, None);
+            let mut ctx =
+                DaemonContext::new(None, Some(wr), None, None, None, None, None, None, true);
             ctx.notify_parent().unwrap();
         }
         assert_eq!(read_pipe(rd), vec![0x00]);
@@ -418,7 +461,7 @@ mod tests {
 
     #[test]
     fn debug_format() {
-        let ctx = DaemonContext::new(None, None, None, None, None, None, None, None);
+        let ctx = DaemonContext::new(None, None, None, None, None, None, None, None, true);
         let debug = format!("{:?}", ctx);
         assert!(
             debug.contains("none"),
@@ -436,7 +479,7 @@ mod tests {
 
     #[test]
     fn notify_parent_noop_without_pipe() {
-        let mut ctx = DaemonContext::new(None, None, None, None, None, None, None, None);
+        let mut ctx = DaemonContext::new(None, None, None, None, None, None, None, None, true);
         assert!(ctx.notify_parent().is_ok());
     }
 
@@ -454,7 +497,7 @@ mod tests {
         )
         .unwrap();
         let flock = Flock::lock(fd, FlockArg::LockExclusiveNonblock).unwrap();
-        let ctx = DaemonContext::new(Some(flock), None, None, None, None, None, None, None);
+        let ctx = DaemonContext::new(Some(flock), None, None, None, None, None, None, None, true);
         assert!(ctx.lockfile_fd().is_some());
         // Drop ctx explicitly to release the lock before tempdir cleanup
         drop(ctx);
@@ -462,19 +505,19 @@ mod tests {
 
     #[test]
     fn lockfile_fd_returns_none_without_lockfile() {
-        let ctx = DaemonContext::new(None, None, None, None, None, None, None, None);
+        let ctx = DaemonContext::new(None, None, None, None, None, None, None, None, true);
         assert!(ctx.lockfile_fd().is_none());
     }
 
     #[test]
     fn drop_privileges_noop_without_user_or_group() {
-        let mut ctx = DaemonContext::new(None, None, None, None, None, None, None, None);
+        let mut ctx = DaemonContext::new(None, None, None, None, None, None, None, None, true);
         assert!(ctx.drop_privileges().is_ok());
     }
 
     #[test]
     fn chown_paths_noop_without_user_or_group() {
-        let mut ctx = DaemonContext::new(None, None, None, None, None, None, None, None);
+        let mut ctx = DaemonContext::new(None, None, None, None, None, None, None, None, true);
         assert!(ctx.chown_paths().is_ok());
     }
 
@@ -492,6 +535,7 @@ mod tests {
             None,
             Some("nonexistent_daemonize_test_user_xyz".into()),
             None,
+            true,
         );
         let result = ctx.drop_privileges();
         assert!(matches!(
@@ -514,6 +558,7 @@ mod tests {
             None,
             None,
             Some("nonexistent_daemonize_test_group_xyz".into()),
+            true,
         );
         let result = ctx.drop_privileges();
         assert!(matches!(
@@ -553,6 +598,7 @@ mod tests {
             Some("/var/log/test.err".into()),
             Some("nobody".into()),
             Some("nogroup".into()),
+            true,
         );
         let debug = format!("{:?}", ctx);
         assert!(debug.contains("test.pid"));
@@ -625,6 +671,7 @@ mod tests {
             None,
             Some("root".into()),
             None,
+            false,
         );
         // Should succeed — nonexistent paths are skipped
         assert!(ctx.chown_paths().is_ok());
@@ -633,7 +680,7 @@ mod tests {
     #[test]
     fn chown_paths_idempotent() {
         // Calling chown_paths twice should be safe
-        let mut ctx = DaemonContext::new(None, None, None, None, None, None, None, None);
+        let mut ctx = DaemonContext::new(None, None, None, None, None, None, None, None, true);
         assert!(ctx.chown_paths().is_ok());
         assert!(ctx.chown_paths().is_ok());
     }
@@ -641,7 +688,7 @@ mod tests {
     #[test]
     fn drop_privileges_idempotent_noop() {
         // Calling drop_privileges twice with no user/group should be safe
-        let mut ctx = DaemonContext::new(None, None, None, None, None, None, None, None);
+        let mut ctx = DaemonContext::new(None, None, None, None, None, None, None, None, true);
         assert!(ctx.drop_privileges().is_ok());
         assert!(ctx.drop_privileges().is_ok());
     }
@@ -656,5 +703,172 @@ mod tests {
     fn error_display_chown_error() {
         let err = crate::DaemonizeError::ChownError("/tmp/foo: permission denied".into());
         assert_eq!(err.to_string(), "chown error: /tmp/foo: permission denied");
+    }
+
+    // --- cleanup ---
+
+    #[test]
+    fn cleanup_removes_pidfile() {
+        let dir = tempfile::tempdir().unwrap();
+        let pidfile = dir.path().join("test.pid");
+        std::fs::write(&pidfile, "12345\n").unwrap();
+
+        let mut ctx = DaemonContext::new(
+            None,
+            None,
+            Some(pidfile.clone()),
+            None,
+            None,
+            None,
+            None,
+            None,
+            false,
+        );
+        ctx.cleanup();
+        assert!(!pidfile.exists(), "pidfile should be removed after cleanup");
+    }
+
+    #[test]
+    fn cleanup_idempotent() {
+        let dir = tempfile::tempdir().unwrap();
+        let pidfile = dir.path().join("test.pid");
+        std::fs::write(&pidfile, "12345\n").unwrap();
+
+        let mut ctx = DaemonContext::new(
+            None,
+            None,
+            Some(pidfile.clone()),
+            None,
+            None,
+            None,
+            None,
+            None,
+            false,
+        );
+        ctx.cleanup();
+        ctx.cleanup(); // second call should not panic
+        assert!(!pidfile.exists());
+    }
+
+    #[test]
+    fn cleanup_noop_without_pidfile() {
+        let mut ctx = DaemonContext::new(None, None, None, None, None, None, None, None, false);
+        ctx.cleanup(); // should not panic
+    }
+
+    #[test]
+    fn cleanup_ignores_missing_pidfile() {
+        let mut ctx = DaemonContext::new(
+            None,
+            None,
+            Some("/nonexistent_xyz/test.pid".into()),
+            None,
+            None,
+            None,
+            None,
+            None,
+            false,
+        );
+        ctx.cleanup(); // best-effort, should not panic
+    }
+
+    #[test]
+    fn drop_cleans_up_when_configured() {
+        let dir = tempfile::tempdir().unwrap();
+        let pidfile = dir.path().join("test.pid");
+        std::fs::write(&pidfile, "12345\n").unwrap();
+
+        {
+            let _ctx = DaemonContext::new(
+                None,
+                None,
+                Some(pidfile.clone()),
+                None,
+                None,
+                None,
+                None,
+                None,
+                true,
+            );
+        }
+        assert!(!pidfile.exists(), "pidfile should be removed on drop");
+    }
+
+    #[test]
+    fn drop_skips_cleanup_when_disabled() {
+        let dir = tempfile::tempdir().unwrap();
+        let pidfile = dir.path().join("test.pid");
+        std::fs::write(&pidfile, "12345\n").unwrap();
+
+        {
+            let _ctx = DaemonContext::new(
+                None,
+                None,
+                Some(pidfile.clone()),
+                None,
+                None,
+                None,
+                None,
+                None,
+                false,
+            );
+        }
+        assert!(
+            pidfile.exists(),
+            "pidfile should survive drop when cleanup_on_drop=false"
+        );
+    }
+
+    #[test]
+    fn set_cleanup_on_drop_overrides_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let pidfile = dir.path().join("test.pid");
+        std::fs::write(&pidfile, "12345\n").unwrap();
+
+        {
+            let mut ctx = DaemonContext::new(
+                None,
+                None,
+                Some(pidfile.clone()),
+                None,
+                None,
+                None,
+                None,
+                None,
+                false,
+            );
+            ctx.set_cleanup_on_drop(true);
+        }
+        assert!(
+            !pidfile.exists(),
+            "pidfile should be removed after runtime override"
+        );
+    }
+
+    #[test]
+    fn cleanup_leaves_standalone_lockfile() {
+        let dir = tempfile::tempdir().unwrap();
+        let pidfile = dir.path().join("test.pid");
+        let lockfile_path = dir.path().join("test.lock");
+        std::fs::write(&pidfile, "12345\n").unwrap();
+        std::fs::write(&lockfile_path, "").unwrap();
+
+        let mut ctx = DaemonContext::new(
+            None,
+            None,
+            Some(pidfile.clone()),
+            Some(lockfile_path.clone()),
+            None,
+            None,
+            None,
+            None,
+            false,
+        );
+        ctx.cleanup();
+        assert!(!pidfile.exists(), "pidfile should be removed");
+        assert!(
+            lockfile_path.exists(),
+            "standalone lockfile should be left on disk"
+        );
     }
 }

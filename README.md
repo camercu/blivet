@@ -157,7 +157,8 @@ ctx.notify_parent()?;
 ### Split-phase privilege dropping
 
 When your daemon needs to perform privileged operations (like binding to
-port 80) before dropping to an unprivileged user:
+port 80, calling `chroot`, or setting resource limits) before dropping to
+an unprivileged user:
 
 ```rust
 use blivet::{DaemonConfig, daemonize};
@@ -172,7 +173,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // SAFETY: must be called before spawning any threads.
     let mut ctx = unsafe { daemonize(&config)? };
 
-    // Still running as root here -- bind privileged port
+    // Still running as root here -- bind privileged port, chroot, set rlimits, etc.
     // let listener = TcpListener::bind("0.0.0.0:80")?;
 
     // Transfer file ownership, then drop privileges
@@ -217,6 +218,7 @@ validation is deferred to `validate()`.
 | `group(name)`      | None    | Switch group -- name or numeric GID (requires root)   |
 | `foreground(bool)` | `false` | Skip fork/setsid (for systemd, containers, debugging) |
 | `close_fds(bool)`  | `true`  | Close inherited fds 3+                                |
+| `cleanup_on_drop(bool)` | `true` | Remove pidfile when `DaemonContext` is dropped   |
 | `env(key, val)`    | None    | Set env var (accumulates, last-write-wins)            |
 | `validate()`       | --      | Check paths, permissions, overlaps before forking     |
 
@@ -236,15 +238,18 @@ User/group switching is **not** performed during this call. Use
 Returned by a successful `daemonize()` call. Holds the lockfile, notification
 pipe, and config state needed for privilege operations.
 
-| Method              | Description                                                  |
-| ------------------- | ------------------------------------------------------------ |
-| `chown_paths()`     | Transfer pidfile/lockfile/log ownership to target user/group |
-| `drop_privileges()` | Switch user/group (`initgroups` + `setgid` + `setuid`)       |
-| `notify_parent()`   | Signal readiness -- parent exits 0                           |
-| `report_error(err)` | Report error to parent and `_exit`                           |
-| `lockfile_fd()`     | Borrow the lockfile fd (if configured)                       |
+| Method                     | Description                                                  |
+| -------------------------- | ------------------------------------------------------------ |
+| `cleanup()`                | Remove pidfile from disk (best-effort, idempotent)           |
+| `set_cleanup_on_drop(bool)`| Override `cleanup_on_drop` at runtime                        |
+| `chown_paths()`            | Transfer pidfile/lockfile/log ownership to target user/group |
+| `drop_privileges()`        | Switch user/group (`initgroups` + `setgid` + `setuid`)       |
+| `notify_parent()`          | Signal readiness -- parent exits 0                           |
+| `report_error(err)`        | Report error to parent and `_exit`                           |
+| `lockfile_fd()`            | Borrow the lockfile fd (if configured)                       |
 
 Dropping without calling `notify_parent()` causes the parent to exit non-zero.
+When `cleanup_on_drop` is `true` (the default), dropping also removes the pidfile.
 
 ### `DaemonizeError`
 

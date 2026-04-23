@@ -49,8 +49,10 @@
 //!
 //! This split gives full control over ordering:
 //!
-//! 1. **Privileged init** — bind sockets, open devices, acquire
-//!    resources that require elevated permissions.
+//! 1. **Privileged init** — bind sockets, open devices, call
+//!    [`chroot`](nix::unistd::chroot), set
+//!    [resource limits](nix::sys::resource::setrlimit), or acquire any
+//!    other resources that require elevated permissions.
 //! 2. **Ownership transfer** — `chown_paths()` hands pidfile, lockfile,
 //!    and log files to the target user/group while still root.
 //! 3. **Privilege drop** — `drop_privileges()` calls `initgroups`,
@@ -68,7 +70,8 @@
 //!
 //! let mut ctx = unsafe { daemonize(&config)? };
 //!
-//! // 1. Privileged work while still root
+//! // 1. Privileged work while still root:
+//! //    bind sockets, chroot, set resource limits, etc.
 //! let _listener = std::net::TcpListener::bind("0.0.0.0:80")?;
 //!
 //! // 2–3. Transfer file ownership, then drop to unprivileged user
@@ -312,6 +315,7 @@ pub(crate) fn daemonize_inner(
         config.stderr.clone(),
         config.user.clone(),
         config.group.clone(),
+        config.cleanup_on_drop,
     ))
 }
 
