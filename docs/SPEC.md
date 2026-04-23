@@ -152,7 +152,10 @@ context). Returns `None` when no lockfile was configured.
 `cleanup(&mut self)` removes the pidfile from disk (best-effort).
 Standalone lockfiles are left on disk; the flock is released when
 `DaemonContext` drops. Errors are silently ignored. Idempotent via
-an internal `cleaned_up` flag.
+an internal `cleaned_up` flag. Note that `Drop` does not run when the
+process is killed by a signal — callers must install a signal handler
+to ensure `cleanup()` runs (either explicitly or by dropping
+`DaemonContext` at main-loop exit).
 
 **Privilege methods:**
 

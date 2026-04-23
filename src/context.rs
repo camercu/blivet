@@ -27,6 +27,13 @@ use crate::error::DaemonizeError;
 /// exit non-zero. When [`cleanup_on_drop`](crate::DaemonConfig::cleanup_on_drop)
 /// is `true` (the default), dropping also removes the pidfile from disk.
 ///
+/// **Signal caveat:** `Drop` does not run when the process is killed by a
+/// signal. To clean up the pidfile on `SIGTERM`/`SIGINT`, install a signal
+/// handler that exits the main loop cleanly so this context can drop (or
+/// call [`cleanup()`](DaemonContext::cleanup) explicitly). See the
+/// [README](https://github.com/camercu/blivet#pidfile-cleanup) for an example
+/// using [`signal_hook`](https://docs.rs/signal-hook).
+///
 /// The lock is released when this value is dropped.
 ///
 /// # Post-daemonization workflow
@@ -144,7 +151,11 @@ impl DaemonContext {
     ///
     /// Runs automatically on drop when
     /// [`cleanup_on_drop`](crate::DaemonConfig::cleanup_on_drop) is `true`
-    /// (the default).
+    /// (the default). Note that `Drop` **does not run** when the process is
+    /// killed by a signal (`SIGTERM`, `SIGKILL`, etc.). To remove the pidfile
+    /// on signal termination, install a signal handler (e.g., with
+    /// [`signal_hook`](https://docs.rs/signal-hook)) that exits the main loop
+    /// cleanly, allowing this context to drop or calling `cleanup()` explicitly.
     pub fn cleanup(&mut self) {
         if self.cleaned_up {
             return;
