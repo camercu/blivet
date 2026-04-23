@@ -198,6 +198,37 @@ config
     .close_fds(false);  // keep supervisor-passed fds
 ```
 
+### Pidfile cleanup
+
+When `cleanup_on_drop` is `true` (the default), the pidfile is removed when
+`DaemonContext` is dropped. However, **`Drop` does not run when the process is
+killed by a signal** (`SIGTERM`, `SIGKILL`, etc.) — which is how most daemons
+are stopped. To clean up the pidfile on signal termination, install a signal
+handler that either calls `cleanup()` or lets `DaemonContext` drop:
+
+```rust
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use blivet::{DaemonConfig, daemonize};
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let config = DaemonConfig::new();
+    let mut ctx = unsafe { daemonize(&config)? };
+    ctx.notify_parent()?;
+
+    // Set a flag on SIGTERM/SIGINT so the main loop exits cleanly
+    let running = Arc::new(AtomicBool::new(true));
+    signal_hook::flag::register(signal_hook::consts::SIGTERM, Arc::clone(&running))?;
+    signal_hook::flag::register(signal_hook::consts::SIGINT, Arc::clone(&running))?;
+
+    while running.load(Ordering::Relaxed) {
+        // ... daemon work ...
+    }
+
+    ctx.cleanup(); // or just let ctx drop
+    Ok(())
+}
+```
 ## API overview
 
 ### `DaemonConfig`
@@ -250,6 +281,8 @@ pipe, and config state needed for privilege operations.
 
 Dropping without calling `notify_parent()` causes the parent to exit non-zero.
 When `cleanup_on_drop` is `true` (the default), dropping also removes the pidfile.
+Note that `Drop` does not run on signal termination — see
+[Pidfile cleanup](#pidfile-cleanup) above.
 
 ### `DaemonizeError`
 
