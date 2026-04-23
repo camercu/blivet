@@ -189,7 +189,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ### Foreground mode
 
 For systemd, containers, or debugging, use foreground mode to skip forking
-while still applying all other daemon setup (umask, chdir, signal reset, etc.):
+while still applying all other daemon setup (umask, chdir, signal reset, etc.).
+Stdout and stderr are left inherited (not redirected to `/dev/null`) unless
+explicitly configured with `.stdout()`/`.stderr()`:
 
 ```rust
 let mut config = DaemonConfig::new();

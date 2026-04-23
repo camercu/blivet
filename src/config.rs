@@ -128,8 +128,10 @@ impl DaemonConfig {
     /// Sets foreground mode. Default: `false`.
     ///
     /// When `true`, daemonization skips both forks, `setsid`, and the
-    /// notification pipe. All other steps (umask, chdir, redirect, signal
-    /// reset, etc.) still execute.
+    /// notification pipe. Stdout and stderr are left inherited (not
+    /// redirected to `/dev/null`) unless explicitly configured with
+    /// [`stdout`](DaemonConfig::stdout)/[`stderr`](DaemonConfig::stderr).
+    /// All other steps (umask, chdir, signal reset, etc.) still execute.
     pub fn foreground(&mut self, foreground: bool) -> &mut Self {
         self.foreground = foreground;
         self
