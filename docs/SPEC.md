@@ -81,6 +81,7 @@ All fields are private; callers use builder methods.
 | `group`      | `Option<String>`        | `None`               | `.group(name)`       | `impl Into<String>`        | Setter      |
 | `foreground` | `bool`                  | `false`              | `.foreground(bool)`  | `bool`                     | Setter      |
 | `close_fds`  | `bool`                  | `true`               | `.close_fds(bool)`   | `bool`                     | Setter      |
+| `cleanup_on_drop` | `bool`             | `true`               | `.cleanup_on_drop(bool)` | `bool`                 | Setter      |
 | `env`        | `Vec<(String, String)>` | `vec![]`             | `.env(key, value)`   | `impl Into<String>` (both) | Accumulator |
 
 All builder methods except `.env()` are setters: each call replaces the
@@ -129,17 +130,29 @@ derives `Debug` (Flock formatted as present/absent). Do not derive
 | --------------- | ------------------ | -------------------------------------------------- |
 | `lockfile`      | `Option<Flock>`    | Owned lock (`nix::fcntl`); drop releases.          |
 | `notify_pipe`   | `Option<OwnedFd>`  | Write end of notification pipe; see below.         |
-| `pidfile`       | `Option<PathBuf>`  | Cloned from config; used by `chown_paths()`.       |
+| `pidfile`       | `Option<PathBuf>`  | Cloned from config; used by `chown_paths()` and `cleanup()`. |
 | `lockfile_path` | `Option<PathBuf>`  | Cloned from config; used by `chown_paths()`.       |
 | `stdout`        | `Option<PathBuf>`  | Cloned from config; used by `chown_paths()`.       |
 | `stderr`        | `Option<PathBuf>`  | Cloned from config; used by `chown_paths()`.       |
 | `user`          | `Option<String>`   | Cloned from config; used by `drop_privileges()`.   |
 | `group`         | `Option<String>`   | Cloned from config; used by `drop_privileges()`.   |
+| `cleanup_on_drop` | `bool`           | From config; controls whether `cleanup()` runs on drop. |
+| `cleaned_up`    | `bool`             | Internal flag; prevents double cleanup.            |
 
 **Accessors:**
 
 `lockfile_fd()` returns `Option<BorrowedFd<'_>>` (lifetime tied to the
 context). Returns `None` when no lockfile was configured.
+
+`set_cleanup_on_drop(bool)` overrides the config-level
+`cleanup_on_drop` setting at runtime.
+
+**Cleanup:**
+
+`cleanup(&mut self)` removes the pidfile from disk (best-effort).
+Standalone lockfiles are left on disk; the flock is released when
+`DaemonContext` drops. Errors are silently ignored. Idempotent via
+an internal `cleaned_up` flag.
 
 **Privilege methods:**
 
@@ -182,7 +195,9 @@ by the CLI to report post-daemonization failures (e.g., exec failure).
 **Drop behavior:** if `notify_pipe` is still `Some` when `DaemonContext`
 is dropped, the `Drop` impl writes exit code `1` followed by the
 message "daemon exited without signaling readiness" to the pipe, then
-closes it. The parent reads this and exits 1.
+closes it. The parent reads this and exits 1. If `cleanup_on_drop` is
+`true` (the default), `Drop` then calls `cleanup()` to remove the
+pidfile.
 
 > Exit code `1` (not a `sysexits.h` value) is used for the Drop case
 > to distinguish it from categorized `DaemonizeError` failures.
@@ -497,7 +512,8 @@ If lockfile and pidfile are the same path, seek to 0, truncate, and
 write PID + `\n` to the already-locked fd from step 7. Otherwise open
 with `O_WRONLY | O_CREAT | O_TRUNC`, mode 0644, write PID + `\n`, and
 close. Write failure returns `PidfileError`. When not configured, no
-pidfile is created. The library does not remove the pidfile on exit.
+pidfile is created. The pidfile is removed on exit when `cleanup_on_drop`
+is `true` (the default); see `DaemonContext::cleanup()`.
 
 > Lock-then-write ensures only the lock holder writes its PID,
 > eliminating the race where two processes both write before either
@@ -850,8 +866,11 @@ continues; (2) split-phase with `chown_paths()` → `drop_privileges()`
 - `notify_parent()`: parent exit behavior, Drop semantics.
 - `report_error()`: writes error protocol and calls `_exit()`.
 - All builder methods: what the field controls, default value.
+- `cleanup()`: best-effort, idempotent, standalone lockfiles preserved.
+- `set_cleanup_on_drop()`: runtime override for cleanup-on-drop.
 - `DaemonContext`: drop releases lock, writes failure to pipe if
-  `notify_parent()` was not called, `#[non_exhaustive]`.
+  `notify_parent()` was not called, removes pidfile if
+  `cleanup_on_drop` is true, `#[non_exhaustive]`.
 - `DaemonizeError`: each variant's condition, `exit_code()`.
   Note which variants are CLI-only.
 
@@ -877,7 +896,6 @@ categories = ["os::unix-apis"]
 - POSIX capability manipulation
 - Linux namespace handling
 - Chroot support
-- PID file cleanup on exit
 - Privileged action callbacks (use split-phase `drop_privileges()` instead)
 - Any form of `exec` within the library (exec is CLI-only)
 - Serde support for `DaemonConfig`
@@ -912,7 +930,8 @@ verification points.
 - R16. Second instance with same lockfile fails with exit code 69.
 - R17. Pidfile contains PID as decimal + `\n`.
 - R18. No pidfile when not configured.
-- R19. Pidfile is not removed on daemon exit.
+- R19. Pidfile is removed on daemon exit when `cleanup_on_drop` is true
+  (the default). Pidfile survives when `cleanup_on_drop` is false.
 - R20. With default config, umask is 0.
 - R21. With configured umask, process umask matches.
 - R22. Configured chdir changes CWD.
@@ -973,63 +992,72 @@ verification points.
 - R70. Group switching sets GID independently from user's primary GID.
 - R71. CLI calls `chown_paths()` then `drop_privileges()` when user
   or group is configured.
+- R72. `cleanup()` removes pidfile from disk.
+- R73. `cleanup()` is idempotent (second call is no-op).
+- R74. `cleanup()` ignores errors (best-effort).
+- R75. `cleanup()` leaves standalone lockfiles on disk.
+- R76. `cleanup_on_drop` true: Drop calls `cleanup()`.
+- R77. `cleanup_on_drop` false: Drop does not call `cleanup()`.
+- R78. `set_cleanup_on_drop()` overrides config-level setting.
 
 ### Implementation constraints (verifiable by code review)
 
-- R72. `DaemonConfig` derives `Default`, `Debug`, `Clone`, `Eq`,
+- R79. `DaemonConfig` derives `Default`, `Debug`, `Clone`, `Eq`,
   `PartialEq`.
-- R73. `DaemonContext` is `#[non_exhaustive]`, all fields private.
-- R74. `DaemonContext` derives `Debug`; not `Clone` or `PartialEq`.
-- R75. `DaemonizeError` derives `Debug`, `thiserror::Error`; not
+- R80. `DaemonContext` is `#[non_exhaustive]`, all fields private.
+- R81. `DaemonContext` derives `Debug`; not `Clone` or `PartialEq`.
+- R82. `DaemonizeError` derives `Debug`, `thiserror::Error`; not
   `Clone` or `PartialEq`.
-- R76. `Display` messages are lowercase, no trailing punctuation.
-- R77. All builder methods: `&mut self` → `&mut Self`, infallible.
-- R78. `daemonize()` calls `validate()` before forking.
-- R79. `daemonize()` is `pub unsafe fn`.
-- R80. `daemonize_checked()` is `pub fn`, `#[cfg(target_os = "linux")]`.
-- R81. Crate root: `#![deny(unsafe_code)]`.
-- R82. All `unsafe` blocks confined to `unsafe_ops` module.
-- R83. `daemonize()` delegates to `daemonize_inner()` with
+- R83. `Display` messages are lowercase, no trailing punctuation.
+- R84. All builder methods: `&mut self` → `&mut Self`, infallible.
+- R85. `daemonize()` calls `validate()` before forking.
+- R86. `daemonize()` is `pub unsafe fn`.
+- R87. `daemonize_checked()` is `pub fn`, `#[cfg(target_os = "linux")]`.
+- R88. Crate root: `#![deny(unsafe_code)]`.
+- R89. All `unsafe` blocks confined to `unsafe_ops` module.
+- R90. `daemonize()` delegates to `daemonize_inner()` with
   `&mut impl Forker`.
-- R84. `Forker` is `pub(crate)`, invisible to consumers.
-- R85. `NullForker` exists only under `#[cfg(test)]`.
-- R86. `Cargo.toml`: no `panic = "abort"` in dev/test profiles.
-- R87. Steps execute in specified order; ordering is load-bearing.
-- R88. `/dev/null` open or `dup2` failure panics.
-- R89. Lockfile opened with `O_WRONLY | O_CREAT | O_CLOEXEC`, 0644.
-- R90. Shared lockfile/pidfile: lock first, then seek/truncate/write.
-- R91. File-creating opens use mode 0644, subject to process umask.
-- R92. Signal reset: 1..SIGRTMAX, skip SIGKILL/SIGSTOP, EINVAL → skip.
-- R93. Signal reset uses `libc::sigaction()` directly.
-- R94. `drop_privileges()` user switch order: `getpwnam` →
+- R91. `Forker` is `pub(crate)`, invisible to consumers.
+- R92. `NullForker` exists only under `#[cfg(test)]`.
+- R93. `Cargo.toml`: no `panic = "abort"` in dev/test profiles.
+- R94. Steps execute in specified order; ordering is load-bearing.
+- R95. `/dev/null` open or `dup2` failure panics.
+- R96. Lockfile opened with `O_WRONLY | O_CREAT | O_CLOEXEC`, 0644.
+- R97. Shared lockfile/pidfile: lock first, then seek/truncate/write.
+- R98. File-creating opens use mode 0644, subject to process umask.
+- R99. Signal reset: 1..SIGRTMAX, skip SIGKILL/SIGSTOP, EINVAL → skip.
+- R100. Signal reset uses `libc::sigaction()` directly.
+- R101. `drop_privileges()` user switch order: `getpwnam` →
   `initgroups` → `setgid` → `setuid`.
-- R95. Output files opened in daemonization step 12 (before caller's
+- R102. Output files opened in daemonization step 12 (before caller's
   privilege drop).
-- R96. Fd closing: brute-force 3..rlim_cur, not `/proc/self/fd`.
-- R97. Fd closing skips lockfile fd and notification pipe fd.
-- R98. `getrlimit` failure panics.
-- R99. Individual `close()` errors silently ignored.
-- R100. Notification pipe both ends created with `O_CLOEXEC`.
-- R101. CLI does not call `notify_parent()`; relies on CLOEXEC + exec.
-- R102. CLI calls `report_error()` on exec failure.
-- R103. CLI clears CLOEXEC on lockfile fd before exec.
-- R104. `execvp` argv[0] is the program path as provided by user
+- R103. Fd closing: brute-force 3..rlim_cur, not `/proc/self/fd`.
+- R104. Fd closing skips lockfile fd and notification pipe fd.
+- R105. `getrlimit` failure panics.
+- R106. Individual `close()` errors silently ignored.
+- R107. Notification pipe both ends created with `O_CLOEXEC`.
+- R108. CLI does not call `notify_parent()`; relies on CLOEXEC + exec.
+- R109. CLI calls `report_error()` on exec failure.
+- R110. CLI clears CLOEXEC on lockfile fd before exec.
+- R111. `execvp` argv[0] is the program path as provided by user
   (possibly canonicalized).
-- R105. Trailing args parsed with `trailing_var_arg` +
+- R112. Trailing args parsed with `trailing_var_arg` +
   `allow_hyphen_values`.
-- R106. All CLI validation occurs before daemonization.
-- R107. Library does not accept a program path or call exec.
-- R108. Path comparison: `canonicalize()` with byte-equality fallback.
-- R109. `ProgramNotFound` and `ExecFailed` are produced only by CLI.
-- R110. `DaemonContext::Drop` writes exit code `1` and failure message
+- R113. All CLI validation occurs before daemonization.
+- R114. Library does not accept a program path or call exec.
+- R115. Path comparison: `canonicalize()` with byte-equality fallback.
+- R116. `ProgramNotFound` and `ExecFailed` are produced only by CLI.
+- R117. `DaemonContext::Drop` writes exit code `1` and failure message
   to pipe if `notify_pipe` is still `Some`.
-- R111. Parent-side pipe reader is implemented inside `daemonize()`'s
+- R118. `DaemonContext::Drop` calls `cleanup()` when `cleanup_on_drop`
+  is true.
+- R119. Parent-side pipe reader is implemented inside `daemonize()`'s
   parent branch (step 1).
-- R112. `DaemonContext` stores cloned path/user/group fields from
+- R120. `DaemonContext` stores cloned path/user/group fields from
   config (not a config reference or full clone).
-- R113. Foreground mode skips steps 1–3 (pipe, forks, setsid).
-- R114. `close_fds` false skips step 13 (fd closing).
-- R115. `chown_paths()` resolves user/group using same string-parsing
+- R121. Foreground mode skips steps 1–3 (pipe, forks, setsid).
+- R122. `close_fds` false skips step 13 (fd closing).
+- R123. `chown_paths()` resolves user/group using same string-parsing
   strategy as `drop_privileges()`.
-- R116. CLI calls `chown_paths()` then `drop_privileges()` when
+- R124. CLI calls `chown_paths()` then `drop_privileges()` when
   user or group is configured, between `daemonize()` and exec.
