@@ -27,8 +27,8 @@ Calls \f[B]setsid\f[R](2) to create a new session.
 Forks a second time so the daemon cannot reacquire a controlling
 terminal.
 .IP " 4." 4
-Sets the umask, changes the working directory, and redirects
-stdin/stdout/stderr to \f[I]/dev/null\f[R].
+Sets the umask, changes the working directory, and redirects stdin to
+\f[I]/dev/null\f[R] (stdout/stderr too, unless in foreground mode).
 .IP " 5." 4
 Acquires the lock file and writes the PID file (if configured).
 .IP " 6." 4
@@ -51,6 +51,8 @@ Exec\(cqs \f[I]program\f[R].
 .PP
 In foreground mode (\f[B]\-f\f[R]), steps 1\-3 are skipped: no fork or
 setsid occurs, and the notification pipe is not created.
+Stdout and stderr are left inherited unless explicitly redirected with
+\f[B]\-o\f[R]/\f[B]\-e\f[R].
 All other steps still apply.
 .PP
 The parent exits 0 only after the daemon has successfully exec\(cqd
@@ -139,6 +141,8 @@ Requires root privileges.
 Stay in the foreground instead of daemonizing.
 Skips the double\-fork and \f[B]setsid\f[R](2), but still applies all
 other setup steps (umask, chdir, signal reset, etc.).
+Stdout and stderr are left inherited (not redirected to
+\f[I]/dev/null\f[R]) unless explicitly set with \f[B]\-o\f[R]/\f[B]\-e\f[R].
 Useful for systemd, containers, and debugging.
 Consider combining with \f[B]\(enno\-close\-fds\f[R] to preserve
 supervisor\-passed file descriptors.

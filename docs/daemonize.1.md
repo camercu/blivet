@@ -26,8 +26,8 @@ The daemonization sequence:
 1. Creates a notification pipe, then forks.
 2. Calls **setsid**(2) to create a new session.
 3. Forks a second time so the daemon cannot reacquire a controlling terminal.
-4. Sets the umask, changes the working directory, and redirects
-   stdin/stdout/stderr to */dev/null*.
+4. Sets the umask, changes the working directory, and redirects stdin to
+   */dev/null* (stdout/stderr too, unless in foreground mode).
 5. Acquires the lock file and writes the PID file (if configured).
 6. Resets all signal dispositions to **SIG_DFL** and clears the signal mask.
 7. Applies environment variables and redirects stdout/stderr to files
@@ -41,7 +41,8 @@ The daemonization sequence:
 11. Exec's *program*.
 
 In foreground mode (**-f**), steps 1-3 are skipped: no fork or setsid occurs,
-and the notification pipe is not created. All other steps still apply.
+and the notification pipe is not created. Stdout and stderr are left inherited
+unless explicitly redirected with **-o**/**-e**. All other steps still apply.
 
 The parent exits 0 only after the daemon has successfully exec'd *program*.
 If any step fails, the parent exits with a non-zero status and prints a
@@ -112,9 +113,10 @@ dropped, so the daemon can continue to write to them after the switch.
 **-f**, **--foreground**
 :   Stay in the foreground instead of daemonizing. Skips the double-fork
     and **setsid**(2), but still applies all other setup steps (umask, chdir,
-    signal reset, etc.). Useful for systemd, containers, and debugging.
-    Consider combining with **--no-close-fds** to preserve supervisor-passed
-    file descriptors.
+    signal reset, etc.). Stdout and stderr are left inherited (not
+    redirected to */dev/null*) unless explicitly set with **-o**/**-e**.
+    Useful for systemd, containers, and debugging. Consider combining with
+    **--no-close-fds** to preserve supervisor-passed file descriptors.
 
 **--no-close-fds**
 :   Keep inherited file descriptors (3 and above) open. By default, all
