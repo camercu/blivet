@@ -388,6 +388,11 @@ When `foreground` is true, steps 1–3 (pipe creation, both forks,
 setsid) are skipped entirely. Execution continues from step 4 in the
 current process. The returned `DaemonContext` has `notify_pipe: None`.
 
+In foreground mode, step 6 only redirects stdin to `/dev/null`.
+Stdout and stderr are left inherited so output reaches the parent
+terminal or supervisor. If stdout/stderr paths are explicitly
+configured, step 12 still redirects them.
+
 ### Steps
 
 1. **Create notification pipe, first fork.** *(Skipped in foreground
@@ -404,8 +409,9 @@ current process. The returned `DaemonContext` has `notify_pipe: None`.
    child calls `_exit(0)`; grandchild continues with `pipe_wr`.
 4. **Set umask.**
 5. **chdir.** Failure: write `ChdirFailed` to pipe, `_exit()`.
-6. **Redirect stdin, stdout, stderr to `/dev/null`.** See
-   /dev/null redirect policy.
+6. **Redirect standard streams to `/dev/null`.** Always redirects
+   stdin. Redirects stdout and stderr only in daemon mode (not
+   foreground). See /dev/null redirect policy.
 7. **Open and lock lockfile** (if configured). Open with
    `O_WRONLY | O_CREAT | O_CLOEXEC`, mode 0644, then
    `flock(LOCK_EX | LOCK_NB)`. Open failure: `LockfileError`.
@@ -474,8 +480,12 @@ and takes one of three actions:
 
 ### /dev/null redirect policy
 
-Step 6 redirects all three standard fds to `/dev/null`. For each fd:
-open `/dev/null`, `dup2` to the target fd, close the source fd. If the
+Step 6 always redirects stdin to `/dev/null`. In daemon mode (not
+foreground), it also redirects stdout and stderr. In foreground mode,
+stdout and stderr are left inherited so output reaches the parent
+terminal or supervisor.
+
+Open `/dev/null` with `O_RDWR`, `dup2` to the target fd(s). If the
 source fd already equals the target, skip `dup2` and close. Failure to
 open `/dev/null` or `dup2` to it panics.
 
@@ -920,8 +930,9 @@ verification points.
 - R4. Daemon runs in a new session (SID differs from caller's).
 - R5. Daemon is not the session leader (PID != SID).
 - R6. Daemon is orphaned (PPID == 1).
-- R7. Stdin is `/dev/null` after daemonization.
-- R8. Stdout/stderr are `/dev/null` when not configured.
+- R7. Stdin is `/dev/null` after daemonization (all modes).
+- R8. Stdout/stderr are `/dev/null` when not configured (daemon mode).
+  In foreground mode, stdout/stderr are inherited when not configured.
 - R9. Configured stdout/stderr files contain expected output.
 - R10. Configured output files are owned by the target user when `-u`
   is used (via `chown_paths()`).
@@ -1058,7 +1069,8 @@ verification points.
   parent branch (step 1).
 - R120. `DaemonContext` stores cloned path/user/group fields from
   config (not a config reference or full clone).
-- R121. Foreground mode skips steps 1–3 (pipe, forks, setsid).
+- R121. Foreground mode skips steps 1–3 (pipe, forks, setsid) and
+  leaves stdout/stderr inherited in step 6.
 - R122. `close_fds` false skips step 13 (fd closing).
 - R123. `chown_paths()` resolves user/group using same string-parsing
   strategy as `drop_privileges()`.

@@ -257,8 +257,10 @@ pub(crate) fn daemonize_inner(
     // Step 5: chdir
     post_fork_try!(steps::change_dir(&config.chdir));
 
-    // Step 6: Redirect stdin/stdout/stderr to /dev/null
-    steps::redirect_to_devnull();
+    // Step 6: Redirect stdin to /dev/null (always); redirect stdout/stderr
+    // to /dev/null only when not in foreground mode (foreground leaves them
+    // inherited so output reaches the terminal or supervisor).
+    steps::redirect_to_devnull(!foreground);
 
     // Step 7: Open and lock lockfile (match required: macro uses divergent control flow)
     #[allow(clippy::manual_map)]

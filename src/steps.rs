@@ -50,17 +50,23 @@ pub(crate) fn change_dir(path: &Path) -> Result<(), DaemonizeError> {
         .map_err(|e| DaemonizeError::ChdirFailed(format!("{}: {e}", path.display())))
 }
 
-/// Step 6: Redirect stdin, stdout, stderr to /dev/null.
+/// Step 6: Redirect standard streams to /dev/null.
+///
+/// Always redirects stdin. When `stdout_stderr` is true, also redirects
+/// stdout and stderr. In foreground mode, stdout/stderr are left
+/// inherited so output reaches the parent terminal or supervisor.
 ///
 /// # Panics
 ///
 /// Panics if /dev/null cannot be opened or dup2 fails.
-pub(crate) fn redirect_to_devnull() {
+pub(crate) fn redirect_to_devnull(stdout_stderr: bool) {
     let devnull =
         open(c"/dev/null", OFlag::O_RDWR, Mode::empty()).expect("failed to open /dev/null");
     unistd::dup2_stdin(&devnull).expect("failed to dup2 /dev/null to stdin");
-    unistd::dup2_stdout(&devnull).expect("failed to dup2 /dev/null to stdout");
-    unistd::dup2_stderr(&devnull).expect("failed to dup2 /dev/null to stderr");
+    if stdout_stderr {
+        unistd::dup2_stdout(&devnull).expect("failed to dup2 /dev/null to stdout");
+        unistd::dup2_stderr(&devnull).expect("failed to dup2 /dev/null to stderr");
+    }
     if devnull.as_raw_fd() <= 2 {
         // devnull IS one of the stdio fds — don't close it on drop.
         std::mem::forget(devnull);
@@ -408,7 +414,25 @@ mod tests {
     #[serial]
     fn redirect_to_devnull_succeeds() {
         let _restore = SavedFds::new(&[0, 1, 2]);
-        redirect_to_devnull();
+        redirect_to_devnull(true);
+    }
+
+    #[test]
+    #[serial]
+    fn redirect_to_devnull_foreground_preserves_stdout_stderr() {
+        use nix::sys::stat::fstat;
+
+        let _restore = SavedFds::new(&[0, 1, 2]);
+        let stdout_before = fstat(std::io::stdout()).unwrap();
+        let stderr_before = fstat(std::io::stderr()).unwrap();
+        redirect_to_devnull(false);
+        // stdout and stderr should still point to the same files as before
+        let stdout_after = fstat(std::io::stdout()).unwrap();
+        let stderr_after = fstat(std::io::stderr()).unwrap();
+        assert_eq!(stdout_before.st_dev, stdout_after.st_dev);
+        assert_eq!(stdout_before.st_ino, stdout_after.st_ino);
+        assert_eq!(stderr_before.st_dev, stderr_after.st_dev);
+        assert_eq!(stderr_before.st_ino, stderr_after.st_ino);
     }
 
     // --- Step 7: open and lock ---
