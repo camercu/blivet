@@ -1,3 +1,31 @@
+## [0.4.0](https://github.com/camercu/blivet/compare/v0.3.3...v0.4.0) (2026-04-25)
+
+
+### ⚠ BREAKING CHANGES
+
+* In foreground mode, stdout and stderr are no longer
+redirected to /dev/null when not explicitly configured. They are left
+inherited from the parent process so output reaches the terminal or
+supervisor. Stdin is still redirected to /dev/null in all modes.
+* DaemonContext now removes the pidfile on drop by
+default. Set cleanup_on_drop(false) to preserve the previous behavior.
+
+Add cleanup() for best-effort pidfile removal, callable from signal
+handlers or explicitly before exit. Runs automatically on drop when
+cleanup_on_drop is true (the default). Standalone lockfiles are left
+on disk by convention; the flock is released when DaemonContext drops.
+
+Also mention chroot and setrlimit in split-phase docs/examples.
+
+### Features
+
+* add pidfile cleanup method and cleanup-on-drop to DaemonContext ([ba243b0](https://github.com/camercu/blivet/commit/ba243b030aad1ec124f336f3f3cf14d5ef0f3b70))
+
+
+### Bug Fixes
+
+* preserve stdout/stderr in foreground mode ([744a93a](https://github.com/camercu/blivet/commit/744a93a9b82dcb405f3f1ef092dfe612d81e8794))
+
 ## [0.3.3](https://github.com/camercu/blivet/compare/v0.3.2...v0.3.3) (2026-04-20)
 
 
