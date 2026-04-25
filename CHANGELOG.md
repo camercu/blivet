@@ -1,3 +1,16 @@
+## [0.5.0](https://github.com/camercu/blivet/compare/v0.4.0...v0.5.0) (2026-04-25)
+
+
+### ⚠ BREAKING CHANGES
+
+* the --no-close-fds CLI flag is removed
+
+### Bug Fixes
+
+* **ci:** use Nix for manpage check to pin Pandoc version ([e7af539](https://github.com/camercu/blivet/commit/e7af539d6697e7689f4d5c49800bc0d5a845293e))
+* **cli:** correct binary name in --version and --help output ([9a88f0f](https://github.com/camercu/blivet/commit/9a88f0f6e3a5f917426111404271902ed6a8d749))
+* remove --no-close-fds CLI flag ([3c1f4e0](https://github.com/camercu/blivet/commit/3c1f4e0c2c7b6fc4e0bd3f0db3f19947527840d7))
+
 ## [0.4.0](https://github.com/camercu/blivet/compare/v0.3.3...v0.4.0) (2026-04-25)
 
 
