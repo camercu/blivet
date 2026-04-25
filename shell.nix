@@ -14,5 +14,6 @@ pkgs.mkShell {
     nodejs
     pandoc
     cargo-deny
+    cargo-llvm-cov
   ];
 }

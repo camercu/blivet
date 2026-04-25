@@ -37,6 +37,11 @@ docker-test:
     docker build -t blivet-test .
     docker run --rm --init --privileged blivet-test
 
+# Generate code coverage report (requires cargo-llvm-cov)
+coverage:
+    cargo llvm-cov --html {{locked}}
+    @echo "Coverage report: target/llvm-cov/html/index.html"
+
 # Run everything CI runs (except Docker)
 ci: check test
 
