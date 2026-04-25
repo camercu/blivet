@@ -76,10 +76,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: pandoc/actions/setup@v1
+      - uses: cachix/install-nix-action@v31
       - name: Check manpage is up to date
         run: |
-          pandoc docs/daemonize.1.md -s -t man -o docs/daemonize.1.check
+          nix-shell --run 'pandoc docs/daemonize.1.md -s -t man -o docs/daemonize.1.check'
           diff docs/daemonize.1 docs/daemonize.1.check || {
             echo "::error::docs/daemonize.1 is out of date. Run 'just manpage' and commit."
             exit 1
