@@ -8,10 +8,9 @@ use nix::sys::stat::Mode;
 
 use blivet::{DaemonConfig, DaemonizeError};
 
-/// Daemonize a program.
+/// Run a program as a Unix daemon.
 #[derive(Parser)]
-#[command(version, about)]
-#[command(trailing_var_arg = true)]
+#[command(name = "daemonize", version, trailing_var_arg = true)]
 struct Args {
     /// Pidfile path
     #[arg(short = 'p', long = "pidfile")]
@@ -141,7 +140,39 @@ fn main() -> ExitCode {
     // Verbose diagnostics
     if args.verbose {
         eprintln!("daemonize: program={program_path}");
-        eprintln!("daemonize: config={config:?}");
+        if let Some(ref p) = args.pidfile {
+            eprintln!("daemonize: pidfile={}", p.display());
+        }
+        if let Some(p) = lockfile {
+            eprintln!("daemonize: lockfile={}", p.display());
+        }
+        if let Some(ref p) = args.chdir {
+            eprintln!("daemonize: chdir={}", p.display());
+        }
+        if let Some(m) = args.umask {
+            eprintln!("daemonize: umask={:03o}", m.bits());
+        }
+        if let Some(ref p) = args.stdout {
+            eprintln!("daemonize: stdout={}", p.display());
+        }
+        if let Some(ref p) = stderr {
+            eprintln!("daemonize: stderr={}", p.display());
+        }
+        if args.append {
+            eprintln!("daemonize: append=true");
+        }
+        if let Some(ref u) = args.user {
+            eprintln!("daemonize: user={u}");
+        }
+        if let Some(ref g) = args.group {
+            eprintln!("daemonize: group={g}");
+        }
+        if args.foreground {
+            eprintln!("daemonize: foreground=true");
+        }
+        for env_str in &args.env {
+            eprintln!("daemonize: env={env_str}");
+        }
     }
 
     // Daemonize
