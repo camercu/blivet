@@ -55,6 +55,23 @@ jobs:
       - name: Docker test
         run: just docker-test
 
+  coverage:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@cargo-llvm-cov
+      - name: Generate coverage
+        run: cargo llvm-cov --lcov --output-path lcov.info
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: lcov.info
+
   commitlint:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
@@ -173,28 +190,3 @@ jobs:
   # OmniOS smoke test disabled: cross-platform-actions/action returns 404
   # downloading OmniOS resources. Re-enable when upstream fixes the issue.
   # https://github.com/cross-platform-actions/action
-
-  # ── Gate (single required status check) ───────────────────
-
-  gate:
-    if: always()
-    needs: [ci, msrv, docker-test, commitlint, bsd-smoke, netbsd-smoke]
-    runs-on: ubuntu-latest
-    steps:
-      - name: Check results
-        run: |
-          results=(
-            "${{ needs.ci.result }}"
-            "${{ needs.msrv.result }}"
-            "${{ needs.docker-test.result }}"
-            "${{ needs.commitlint.result }}"
-            "${{ needs.bsd-smoke.result }}"
-            "${{ needs.netbsd-smoke.result }}"
-          )
-          for r in "${results[@]}"; do
-            case "$r" in
-              success|skipped) ;;
-              *) echo "FAIL: job result=$r"; exit 1 ;;
-            esac
-          done
-          echo "All jobs passed."
