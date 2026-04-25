@@ -428,10 +428,59 @@ mod tests {
         buf
     }
 
+    /// Test helper to reduce 9-arg `DaemonContext::new` boilerplate.
+    struct TestCtx {
+        lockfile: Option<Flock<OwnedFd>>,
+        notify_pipe: Option<OwnedFd>,
+        pidfile: Option<PathBuf>,
+        lockfile_path: Option<PathBuf>,
+        stdout: Option<PathBuf>,
+        stderr: Option<PathBuf>,
+        user: Option<String>,
+        group: Option<String>,
+        cleanup_on_drop: bool,
+    }
+
+    impl Default for TestCtx {
+        fn default() -> Self {
+            Self {
+                lockfile: None,
+                notify_pipe: None,
+                pidfile: None,
+                lockfile_path: None,
+                stdout: None,
+                stderr: None,
+                user: None,
+                group: None,
+                cleanup_on_drop: true,
+            }
+        }
+    }
+
+    impl TestCtx {
+        fn build(self) -> DaemonContext {
+            DaemonContext::new(
+                self.lockfile,
+                self.notify_pipe,
+                self.pidfile,
+                self.lockfile_path,
+                self.stdout,
+                self.stderr,
+                self.user,
+                self.group,
+                self.cleanup_on_drop,
+            )
+        }
+    }
+
     #[test]
     fn notify_parent_writes_success_byte() {
         let (rd, wr) = make_pipe();
-        let mut ctx = DaemonContext::new(None, Some(wr), None, None, None, None, None, None, true);
+        let mut ctx = TestCtx {
+            notify_pipe: Some(wr),
+            ..Default::default()
+        }
+        .build();
         ctx.notify_parent().unwrap();
         assert_eq!(read_pipe(rd), vec![0x00]);
     }
@@ -439,7 +488,11 @@ mod tests {
     #[test]
     fn notify_parent_idempotent() {
         let (_rd, wr) = make_pipe();
-        let mut ctx = DaemonContext::new(None, Some(wr), None, None, None, None, None, None, true);
+        let mut ctx = TestCtx {
+            notify_pipe: Some(wr),
+            ..Default::default()
+        }
+        .build();
         ctx.notify_parent().unwrap();
         ctx.notify_parent().unwrap();
     }
@@ -448,7 +501,11 @@ mod tests {
     fn drop_writes_failure_when_not_notified() {
         let (rd, wr) = make_pipe();
         {
-            let _ctx = DaemonContext::new(None, Some(wr), None, None, None, None, None, None, true);
+            let _ctx = TestCtx {
+                notify_pipe: Some(wr),
+                ..Default::default()
+            }
+            .build();
         }
 
         let buf = read_pipe(rd);
@@ -463,8 +520,11 @@ mod tests {
     fn drop_no_write_after_notify() {
         let (rd, wr) = make_pipe();
         {
-            let mut ctx =
-                DaemonContext::new(None, Some(wr), None, None, None, None, None, None, true);
+            let mut ctx = TestCtx {
+                notify_pipe: Some(wr),
+                ..Default::default()
+            }
+            .build();
             ctx.notify_parent().unwrap();
         }
         assert_eq!(read_pipe(rd), vec![0x00]);
@@ -472,7 +532,7 @@ mod tests {
 
     #[test]
     fn debug_format() {
-        let ctx = DaemonContext::new(None, None, None, None, None, None, None, None, true);
+        let ctx = TestCtx::default().build();
         let debug = format!("{:?}", ctx);
         assert!(
             debug.contains("none"),
@@ -490,7 +550,7 @@ mod tests {
 
     #[test]
     fn notify_parent_noop_without_pipe() {
-        let mut ctx = DaemonContext::new(None, None, None, None, None, None, None, None, true);
+        let mut ctx = TestCtx::default().build();
         assert!(ctx.notify_parent().is_ok());
     }
 
@@ -508,27 +568,30 @@ mod tests {
         )
         .unwrap();
         let flock = Flock::lock(fd, FlockArg::LockExclusiveNonblock).unwrap();
-        let ctx = DaemonContext::new(Some(flock), None, None, None, None, None, None, None, true);
+        let ctx = TestCtx {
+            lockfile: Some(flock),
+            ..Default::default()
+        }
+        .build();
         assert!(ctx.lockfile_fd().is_some());
-        // Drop ctx explicitly to release the lock before tempdir cleanup
         drop(ctx);
     }
 
     #[test]
     fn lockfile_fd_returns_none_without_lockfile() {
-        let ctx = DaemonContext::new(None, None, None, None, None, None, None, None, true);
+        let ctx = TestCtx::default().build();
         assert!(ctx.lockfile_fd().is_none());
     }
 
     #[test]
     fn drop_privileges_noop_without_user_or_group() {
-        let mut ctx = DaemonContext::new(None, None, None, None, None, None, None, None, true);
+        let mut ctx = TestCtx::default().build();
         assert!(ctx.drop_privileges().is_ok());
     }
 
     #[test]
     fn chown_paths_noop_without_user_or_group() {
-        let mut ctx = DaemonContext::new(None, None, None, None, None, None, None, None, true);
+        let mut ctx = TestCtx::default().build();
         assert!(ctx.chown_paths().is_ok());
     }
 
@@ -537,17 +600,11 @@ mod tests {
         if std::env::var("CI").is_ok() {
             return; // NSS lookups for nonexistent users can hang in CI
         }
-        let mut ctx = DaemonContext::new(
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            Some("nonexistent_daemonize_test_user_xyz".into()),
-            None,
-            true,
-        );
+        let mut ctx = TestCtx {
+            user: Some("nonexistent_daemonize_test_user_xyz".into()),
+            ..Default::default()
+        }
+        .build();
         let result = ctx.drop_privileges();
         assert!(matches!(
             result,
@@ -560,17 +617,11 @@ mod tests {
         if std::env::var("CI").is_ok() {
             return; // NSS lookups for nonexistent groups can hang in CI
         }
-        let mut ctx = DaemonContext::new(
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            Some("nonexistent_daemonize_test_group_xyz".into()),
-            true,
-        );
+        let mut ctx = TestCtx {
+            group: Some("nonexistent_daemonize_test_group_xyz".into()),
+            ..Default::default()
+        }
+        .build();
         let result = ctx.drop_privileges();
         assert!(matches!(
             result,
@@ -600,17 +651,16 @@ mod tests {
 
     #[test]
     fn context_stores_config_fields() {
-        let ctx = DaemonContext::new(
-            None,
-            None,
-            Some("/var/run/test.pid".into()),
-            Some("/var/run/test.lock".into()),
-            Some("/var/log/test.out".into()),
-            Some("/var/log/test.err".into()),
-            Some("nobody".into()),
-            Some("nogroup".into()),
-            true,
-        );
+        let ctx = TestCtx {
+            pidfile: Some("/var/run/test.pid".into()),
+            lockfile_path: Some("/var/run/test.lock".into()),
+            stdout: Some("/var/log/test.out".into()),
+            stderr: Some("/var/log/test.err".into()),
+            user: Some("nobody".into()),
+            group: Some("nogroup".into()),
+            ..Default::default()
+        }
+        .build();
         let debug = format!("{:?}", ctx);
         assert!(debug.contains("test.pid"));
         assert!(debug.contains("nobody"));
@@ -672,34 +722,26 @@ mod tests {
 
     #[test]
     fn chown_paths_skips_nonexistent_files() {
-        // chown_paths should skip files that don't exist
-        let mut ctx = DaemonContext::new(
-            None,
-            None,
-            Some("/nonexistent_daemonize_test_xyz/test.pid".into()),
-            None,
-            None,
-            None,
-            Some("root".into()),
-            None,
-            false,
-        );
-        // Should succeed — nonexistent paths are skipped
+        let mut ctx = TestCtx {
+            pidfile: Some("/nonexistent_daemonize_test_xyz/test.pid".into()),
+            user: Some("root".into()),
+            cleanup_on_drop: false,
+            ..Default::default()
+        }
+        .build();
         assert!(ctx.chown_paths().is_ok());
     }
 
     #[test]
     fn chown_paths_idempotent() {
-        // Calling chown_paths twice should be safe
-        let mut ctx = DaemonContext::new(None, None, None, None, None, None, None, None, true);
+        let mut ctx = TestCtx::default().build();
         assert!(ctx.chown_paths().is_ok());
         assert!(ctx.chown_paths().is_ok());
     }
 
     #[test]
     fn drop_privileges_idempotent_noop() {
-        // Calling drop_privileges twice with no user/group should be safe
-        let mut ctx = DaemonContext::new(None, None, None, None, None, None, None, None, true);
+        let mut ctx = TestCtx::default().build();
         assert!(ctx.drop_privileges().is_ok());
         assert!(ctx.drop_privileges().is_ok());
     }
@@ -724,17 +766,12 @@ mod tests {
         let pidfile = dir.path().join("test.pid");
         std::fs::write(&pidfile, "12345\n").unwrap();
 
-        let mut ctx = DaemonContext::new(
-            None,
-            None,
-            Some(pidfile.clone()),
-            None,
-            None,
-            None,
-            None,
-            None,
-            false,
-        );
+        let mut ctx = TestCtx {
+            pidfile: Some(pidfile.clone()),
+            cleanup_on_drop: false,
+            ..Default::default()
+        }
+        .build();
         ctx.cleanup();
         assert!(!pidfile.exists(), "pidfile should be removed after cleanup");
     }
@@ -745,17 +782,12 @@ mod tests {
         let pidfile = dir.path().join("test.pid");
         std::fs::write(&pidfile, "12345\n").unwrap();
 
-        let mut ctx = DaemonContext::new(
-            None,
-            None,
-            Some(pidfile.clone()),
-            None,
-            None,
-            None,
-            None,
-            None,
-            false,
-        );
+        let mut ctx = TestCtx {
+            pidfile: Some(pidfile.clone()),
+            cleanup_on_drop: false,
+            ..Default::default()
+        }
+        .build();
         ctx.cleanup();
         ctx.cleanup(); // second call should not panic
         assert!(!pidfile.exists());
@@ -763,23 +795,22 @@ mod tests {
 
     #[test]
     fn cleanup_noop_without_pidfile() {
-        let mut ctx = DaemonContext::new(None, None, None, None, None, None, None, None, false);
+        let mut ctx = TestCtx {
+            cleanup_on_drop: false,
+            ..Default::default()
+        }
+        .build();
         ctx.cleanup(); // should not panic
     }
 
     #[test]
     fn cleanup_ignores_missing_pidfile() {
-        let mut ctx = DaemonContext::new(
-            None,
-            None,
-            Some("/nonexistent_xyz/test.pid".into()),
-            None,
-            None,
-            None,
-            None,
-            None,
-            false,
-        );
+        let mut ctx = TestCtx {
+            pidfile: Some("/nonexistent_xyz/test.pid".into()),
+            cleanup_on_drop: false,
+            ..Default::default()
+        }
+        .build();
         ctx.cleanup(); // best-effort, should not panic
     }
 
@@ -790,17 +821,11 @@ mod tests {
         std::fs::write(&pidfile, "12345\n").unwrap();
 
         {
-            let _ctx = DaemonContext::new(
-                None,
-                None,
-                Some(pidfile.clone()),
-                None,
-                None,
-                None,
-                None,
-                None,
-                true,
-            );
+            let _ctx = TestCtx {
+                pidfile: Some(pidfile.clone()),
+                ..Default::default()
+            }
+            .build();
         }
         assert!(!pidfile.exists(), "pidfile should be removed on drop");
     }
@@ -812,17 +837,12 @@ mod tests {
         std::fs::write(&pidfile, "12345\n").unwrap();
 
         {
-            let _ctx = DaemonContext::new(
-                None,
-                None,
-                Some(pidfile.clone()),
-                None,
-                None,
-                None,
-                None,
-                None,
-                false,
-            );
+            let _ctx = TestCtx {
+                pidfile: Some(pidfile.clone()),
+                cleanup_on_drop: false,
+                ..Default::default()
+            }
+            .build();
         }
         assert!(
             pidfile.exists(),
@@ -837,17 +857,12 @@ mod tests {
         std::fs::write(&pidfile, "12345\n").unwrap();
 
         {
-            let mut ctx = DaemonContext::new(
-                None,
-                None,
-                Some(pidfile.clone()),
-                None,
-                None,
-                None,
-                None,
-                None,
-                false,
-            );
+            let mut ctx = TestCtx {
+                pidfile: Some(pidfile.clone()),
+                cleanup_on_drop: false,
+                ..Default::default()
+            }
+            .build();
             ctx.set_cleanup_on_drop(true);
         }
         assert!(
@@ -864,17 +879,13 @@ mod tests {
         std::fs::write(&pidfile, "12345\n").unwrap();
         std::fs::write(&lockfile_path, "").unwrap();
 
-        let mut ctx = DaemonContext::new(
-            None,
-            None,
-            Some(pidfile.clone()),
-            Some(lockfile_path.clone()),
-            None,
-            None,
-            None,
-            None,
-            false,
-        );
+        let mut ctx = TestCtx {
+            pidfile: Some(pidfile.clone()),
+            lockfile_path: Some(lockfile_path.clone()),
+            cleanup_on_drop: false,
+            ..Default::default()
+        }
+        .build();
         ctx.cleanup();
         assert!(!pidfile.exists(), "pidfile should be removed");
         assert!(

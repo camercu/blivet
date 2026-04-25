@@ -426,6 +426,13 @@ mod tests {
         let stdout_before = fstat(std::io::stdout()).unwrap();
         let stderr_before = fstat(std::io::stderr()).unwrap();
         redirect_to_devnull(false);
+
+        // stdin should be /dev/null
+        let devnull = fstat(open(c"/dev/null", OFlag::O_RDONLY, Mode::empty()).unwrap()).unwrap();
+        let stdin_after = fstat(std::io::stdin()).unwrap();
+        assert_eq!(stdin_after.st_dev, devnull.st_dev);
+        assert_eq!(stdin_after.st_ino, devnull.st_ino);
+
         // stdout and stderr should still point to the same files as before
         let stdout_after = fstat(std::io::stdout()).unwrap();
         let stderr_after = fstat(std::io::stderr()).unwrap();
