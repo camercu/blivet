@@ -248,3 +248,109 @@ fn clear_cloexec(fd: BorrowedFd<'_>) -> Result<(), nix::Error> {
     fcntl(fd, FcntlArg::F_SETFD(FdFlag::empty()))?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // --- parse_octal_mode ---
+
+    #[test]
+    fn parse_octal_mode_valid() {
+        let mode = parse_octal_mode("022").unwrap();
+        assert_eq!(mode.bits(), 0o022);
+    }
+
+    #[test]
+    fn parse_octal_mode_zero() {
+        let mode = parse_octal_mode("000").unwrap();
+        assert_eq!(mode.bits(), 0);
+    }
+
+    #[test]
+    fn parse_octal_mode_full() {
+        let mode = parse_octal_mode("777").unwrap();
+        assert_eq!(mode.bits(), 0o777);
+    }
+
+    #[test]
+    fn parse_octal_mode_invalid() {
+        assert!(parse_octal_mode("999").is_err());
+        assert!(parse_octal_mode("abc").is_err());
+        assert!(parse_octal_mode("").is_err());
+    }
+
+    // --- parse_env_pair ---
+
+    #[test]
+    fn parse_env_pair_key_value() {
+        assert_eq!(parse_env_pair("FOO=bar"), ("FOO".into(), "bar".into()));
+    }
+
+    #[test]
+    fn parse_env_pair_empty_value() {
+        assert_eq!(parse_env_pair("FOO="), ("FOO".into(), String::new()));
+    }
+
+    #[test]
+    fn parse_env_pair_no_equals() {
+        assert_eq!(parse_env_pair("FOO"), ("FOO".into(), String::new()));
+    }
+
+    #[test]
+    fn parse_env_pair_multiple_equals() {
+        assert_eq!(
+            parse_env_pair("FOO=bar=baz"),
+            ("FOO".into(), "bar=baz".into())
+        );
+    }
+
+    // --- derive_stderr_path ---
+
+    #[test]
+    fn derive_stderr_stdout_extension() {
+        let result = derive_stderr_path(Path::new("/var/log/app.stdout"));
+        assert_eq!(result, PathBuf::from("/var/log/app.stderr"));
+    }
+
+    #[test]
+    fn derive_stderr_out_extension() {
+        let result = derive_stderr_path(Path::new("/var/log/app.out"));
+        assert_eq!(result, PathBuf::from("/var/log/app.err"));
+    }
+
+    #[test]
+    fn derive_stderr_other_extension() {
+        let result = derive_stderr_path(Path::new("/var/log/app.log"));
+        assert_eq!(result, PathBuf::from("/var/log/app.log"));
+    }
+
+    #[test]
+    fn derive_stderr_no_extension() {
+        let result = derive_stderr_path(Path::new("/var/log/app"));
+        assert_eq!(result, PathBuf::from("/var/log/app"));
+    }
+
+    // --- clear_cloexec ---
+
+    #[test]
+    fn clear_cloexec_removes_flag() {
+        use nix::fcntl::{fcntl, open, FcntlArg, FdFlag, OFlag};
+        use nix::sys::stat::Mode;
+        use std::os::fd::AsFd;
+
+        let fd = open(
+            c"/dev/null",
+            OFlag::O_RDONLY | OFlag::O_CLOEXEC,
+            Mode::empty(),
+        )
+        .unwrap();
+        let flags = fcntl(fd.as_fd(), FcntlArg::F_GETFD).unwrap();
+        assert!(FdFlag::from_bits_truncate(flags).contains(FdFlag::FD_CLOEXEC));
+
+        clear_cloexec(fd.as_fd()).unwrap();
+
+        let flags = fcntl(fd.as_fd(), FcntlArg::F_GETFD).unwrap();
+        assert!(!FdFlag::from_bits_truncate(flags).contains(FdFlag::FD_CLOEXEC));
+    }
+}
