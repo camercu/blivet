@@ -1,4 +1,4 @@
-//! Daemonize a process using the double-fork method.
+//! A correct, full-featured Unix daemon library and CLI for Rust.
 //!
 //! A [blivet] is the "impossible fork" optical illusion, also known as the
 //! devil's tuning fork. Daemons are created by forking — and this crate

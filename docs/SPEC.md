@@ -891,7 +891,7 @@ continues; (2) split-phase with `chown_paths()` → `drop_privileges()`
 name = "blivet"
 version = "0.1.0"
 edition = "2021"
-description = "Daemonize a process using the double-fork method"
+description = "A correct, full-featured Unix daemon library and CLI for Rust"
 license = "MIT OR Apache-2.0"
 repository = "<repo-url>"
 keywords = ["daemon", "daemonize", "fork", "unix", "linux"]
