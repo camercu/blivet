@@ -1066,32 +1066,6 @@ fn foreground_mode_no_orphan() {
     );
 }
 
-// --- close_fds flag ---
-
-#[test]
-fn no_close_fds_flag_accepted() {
-    let dir = tempfile::tempdir().unwrap();
-    let pidfile = dir.path().join("test.pid");
-
-    let output = daemonize_cmd()
-        .args([
-            "-f",
-            "--no-close-fds",
-            "-p",
-            pidfile.to_str().unwrap(),
-            "--",
-            "true",
-        ])
-        .output()
-        .unwrap();
-
-    assert!(
-        output.status.success(),
-        "--no-close-fds should be accepted, stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-}
-
 // --- Group flag ---
 
 #[test]

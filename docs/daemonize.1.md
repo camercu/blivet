@@ -32,8 +32,7 @@ The daemonization sequence:
 6. Resets all signal dispositions to **SIG_DFL** and clears the signal mask.
 7. Applies environment variables and redirects stdout/stderr to files
    (if configured).
-8. Closes all inherited file descriptors (except the lock file), unless
-   **--no-close-fds** is given.
+8. Closes all inherited file descriptors (except the lock file).
 9. Transfers ownership of pidfile, lockfile, and output files to the target
    user/group (if configured) via **chown**(2).
 10. Switches user and group (if configured) via **setuid**(2), **setgid**(2),
@@ -115,13 +114,7 @@ dropped, so the daemon can continue to write to them after the switch.
     and **setsid**(2), but still applies all other setup steps (umask, chdir,
     signal reset, etc.). Stdout and stderr are left inherited (not
     redirected to */dev/null*) unless explicitly set with **-o**/**-e**.
-    Useful for systemd, containers, and debugging. Consider combining with
-    **--no-close-fds** to preserve supervisor-passed file descriptors.
-
-**--no-close-fds**
-:   Keep inherited file descriptors (3 and above) open. By default, all
-    inherited descriptors except the lock file are closed. Useful with
-    **-f** to preserve supervisor-passed file descriptors.
+    Useful for systemd, containers, and debugging.
 
 **-v**, **--verbose**
 :   Print diagnostic information to stderr before daemonizing.
@@ -203,7 +196,7 @@ Run as a specific user and group:
 
 Run in foreground mode (useful for systemd or containers):
 
-    daemonize --foreground --no-close-fds -p /var/run/myapp.pid -- /usr/bin/myapp
+    daemonize --foreground -p /var/run/myapp.pid -- /usr/bin/myapp
 
 Set environment variables and working directory:
 

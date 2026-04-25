@@ -38,8 +38,7 @@ signal mask.
 Applies environment variables and redirects stdout/stderr to files (if
 configured).
 .IP " 8." 4
-Closes all inherited file descriptors (except the lock file), unless
-\f[B]\(enno\-close\-fds\f[R] is given.
+Closes all inherited file descriptors (except the lock file).
 .IP " 9." 4
 Transfers ownership of pidfile, lockfile, and output files to the target
 user/group (if configured) via \f[B]chown\f[R](2).
@@ -142,16 +141,9 @@ Stay in the foreground instead of daemonizing.
 Skips the double\-fork and \f[B]setsid\f[R](2), but still applies all
 other setup steps (umask, chdir, signal reset, etc.).
 Stdout and stderr are left inherited (not redirected to
-\f[I]/dev/null\f[R]) unless explicitly set with \f[B]\-o\f[R]/\f[B]\-e\f[R].
+\f[I]/dev/null\f[R]) unless explicitly set with
+\f[B]\-o\f[R]/\f[B]\-e\f[R].
 Useful for systemd, containers, and debugging.
-Consider combining with \f[B]\(enno\-close\-fds\f[R] to preserve
-supervisor\-passed file descriptors.
-.TP
-\f[B]\(enno\-close\-fds\f[R]
-Keep inherited file descriptors (3 and above) open.
-By default, all inherited descriptors except the lock file are closed.
-Useful with \f[B]\-f\f[R] to preserve supervisor\-passed file
-descriptors.
 .TP
 \f[B]\-v\f[R], \f[B]\(enverbose\f[R]
 Print diagnostic information to stderr before daemonizing.
@@ -242,7 +234,7 @@ daemonize \-u www\-data \-g www\-data \(rs
 Run in foreground mode (useful for systemd or containers):
 .IP
 .EX
-daemonize \-\-foreground \-\-no\-close\-fds \-p /var/run/myapp.pid \-\- /usr/bin/myapp
+daemonize \-\-foreground \-p /var/run/myapp.pid \-\- /usr/bin/myapp
 .EE
 .PP
 Set environment variables and working directory:
