@@ -8,6 +8,13 @@ repos:
 
   - repo: local
     hooks:
+      - id: manpage-check
+        name: manpage up to date
+        entry: nix-shell --run 'just manpage'
+        language: system
+        files: 'docs/daemonize\.1(\.md)?$'
+        pass_filenames: false
+        stages: [pre-commit]
       - id: just-check
         name: just check
         entry: nix-shell --run 'just check'

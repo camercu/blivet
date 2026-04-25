@@ -37,6 +37,10 @@ docker-test:
     docker build -t blivet-test .
     docker run --rm --init --privileged blivet-test
 
+# Regenerate manpage from markdown source (requires pandoc)
+manpage:
+    pandoc docs/daemonize.1.md -s -t man -o docs/daemonize.1
+
 # Generate code coverage report (requires cargo-llvm-cov)
 coverage:
     cargo llvm-cov --html {{locked}}
