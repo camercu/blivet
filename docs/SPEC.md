@@ -631,7 +631,6 @@ for `--help` and `--version` are acceptable.
 | `-u`  | `--user`          | name or uid  | Run daemon as user                   |
 | `-g`  | `--group`         | name or gid  | Run daemon as group                  |
 | `-f`  | `--foreground`    |              | Stay in foreground (no fork)         |
-|       | `--no-close-fds`  |              | Do not close inherited fds           |
 | `-v`  | `--verbose`       |              | Diagnostic output before daemonizing |
 
 Assign all short flags explicitly to avoid collisions.
@@ -842,8 +841,6 @@ Spawn CLI binary, inspect /proc and files. Require Linux, /proc:
   `chown_paths()`).
 - **Foreground mode:** with `-f`, assert daemon runs in same
   process group; no fork occurs.
-- **No-close-fds:** with `--no-close-fds`, assert inherited fds
-  survive daemonization.
 - **Error exit codes:** one test per exit code table row.
 - **Verbose mode:** with/without `-v`, assert stderr content.
 - **Parent notification:** assert parent does not exit until daemon

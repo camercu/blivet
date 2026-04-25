@@ -53,13 +53,9 @@ struct Args {
     #[arg(short = 'g', long = "group")]
     group: Option<String>,
 
-    /// Stay in foreground (no fork); consider --no-close-fds to keep supervisor-passed fds
+    /// Stay in foreground (no fork)
     #[arg(short = 'f', long = "foreground")]
     foreground: bool,
-
-    /// Keep inherited file descriptors open (useful with --foreground for supervisor-passed fds)
-    #[arg(long = "no-close-fds")]
-    no_close_fds: bool,
 
     /// Diagnostic output before daemonizing
     #[arg(short = 'v', long = "verbose")]
@@ -131,7 +127,6 @@ fn main() -> ExitCode {
         config.group(g);
     }
     config.foreground(args.foreground);
-    config.close_fds(!args.no_close_fds);
 
     // Resolve program path before daemonization
     let program_path = resolve_program_path(&args.program[0]);
