@@ -459,11 +459,16 @@ mod tests {
     /// Tests that redirect fds or close inherited fds destroy the test harness.
     /// This helper re-invokes the test binary targeting a single `#[ignore]`
     /// test, with an env-var gate so it only runs when spawned from here.
+    ///
+    /// `--include-ignored` is required: without it the named `#[ignore]` test
+    /// is skipped, the subprocess exits 0, and this helper passes *vacuously*
+    /// without ever running the test body.
     fn run_subprocess(test_name: &str) {
         let exe = std::env::current_exe().unwrap();
         let status = std::process::Command::new(exe)
             .arg("--exact")
             .arg(test_name)
+            .arg("--include-ignored") // the target test is #[ignore]
             .arg("--nocapture")
             .env("__DAEMONIZE_SUBPROCESS_TEST", "1")
             .status()
