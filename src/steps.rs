@@ -763,14 +763,46 @@ mod tests {
         assert!(result.is_empty());
     }
 
-    // --- Step 13: close inherited fds (executor smoke test, serial) ---
+    // --- Step 13: close inherited fds (executor smoke test, subprocess-isolated) ---
+
+    /// Runs a single `#[ignore]` test in its own process.
+    ///
+    /// `close_inherited_fds` closes every non-skipped descriptor process-wide.
+    /// Run in the shared test process it clobbers file descriptors held by
+    /// tests executing in parallel (e.g. open lockfiles or `ReadDir` handles
+    /// during `tempdir` cleanup), producing spurious `EBADF` failures.
+    /// `#[serial]` does not help: it only orders this test against other
+    /// `#[serial]` tests, not the parallel non-serial ones. Re-invoking the
+    /// test binary for just this test isolates the side effect.
+    fn run_in_subprocess(test_name: &str) {
+        let exe = std::env::current_exe().unwrap();
+        let status = std::process::Command::new(exe)
+            .arg("--exact")
+            .arg(test_name)
+            .arg("--include-ignored") // the target test is #[ignore]
+            .arg("--nocapture")
+            .env("__BLIVET_FD_SUBPROCESS", "1")
+            .status()
+            .unwrap();
+        assert!(status.success(), "subprocess test failed: {status}");
+    }
 
     #[test]
-    #[serial]
     fn close_inherited_fds_preserves_skipped() {
         if std::env::var("CI").is_ok() {
             // Closing fds in-process triggers systemd's safe_close() EBADF
             // assertion on Ubuntu CI runners. Integration tests cover this path.
+            return;
+        }
+        run_in_subprocess("steps::tests::close_inherited_fds_preserves_skipped_subprocess");
+    }
+
+    #[test]
+    #[ignore = "closes fds process-wide; only safe in an isolated subprocess"]
+    fn close_inherited_fds_preserves_skipped_subprocess() {
+        // Guard so this never runs as a stray `--include-ignored` in the shared
+        // process; it executes only when spawned by run_in_subprocess.
+        if std::env::var("__BLIVET_FD_SUBPROCESS").is_err() {
             return;
         }
         // Save stdout/stderr so the test harness can still report results
