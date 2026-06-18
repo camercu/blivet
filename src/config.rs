@@ -72,6 +72,10 @@ impl DaemonConfig {
     }
 
     /// Sets the working directory. Default: `/`.
+    ///
+    /// Because the default is `/`, any **relative** path your daemon uses
+    /// afterward (log files, sockets, config) resolves against `/` and will
+    /// usually fail. Use absolute paths, or set this to your working directory.
     pub fn chdir(&mut self, path: impl Into<PathBuf>) -> &mut Self {
         self.chdir = path.into();
         self
@@ -84,12 +88,22 @@ impl DaemonConfig {
     }
 
     /// Sets the stdout redirect file path. Default: none (stays `/dev/null`).
+    ///
+    /// By default a daemon's stdout is `/dev/null`, so anything written to it
+    /// (including `println!`) is discarded silently. Set this to a file path to
+    /// capture it. In foreground mode, setting this overrides the inherited
+    /// terminal stdout.
     pub fn stdout(&mut self, path: impl Into<PathBuf>) -> &mut Self {
         self.stdout = Some(path.into());
         self
     }
 
     /// Sets the stderr redirect file path. Default: none (stays `/dev/null`).
+    ///
+    /// By default a daemon's stderr is `/dev/null`, so anything written to it
+    /// (including `eprintln!` and panic messages) is discarded silently. Set
+    /// this to a file path to capture it. In foreground mode, setting this
+    /// overrides the inherited terminal stderr.
     pub fn stderr(&mut self, path: impl Into<PathBuf>) -> &mut Self {
         self.stderr = Some(path.into());
         self
@@ -149,6 +163,14 @@ impl DaemonConfig {
 
     /// Sets whether to remove the pidfile on drop. Default: `true`.
     ///
+    /// **Caveat:** `Drop` does not run when the process is killed by a signal
+    /// (`SIGTERM`, `SIGINT`, `SIGKILL`, …), which is how daemons are normally
+    /// stopped — so with the default the pidfile is still left stale on signal
+    /// termination. To remove it on shutdown, install a signal handler that
+    /// exits the main loop cleanly (letting this context drop) or calls
+    /// [`DaemonContext::cleanup`](crate::DaemonContext::cleanup) explicitly. See
+    /// the `examples/echo_server.rs` example.
+    ///
     /// When `true`, dropping [`DaemonContext`](crate::DaemonContext) removes
     /// the pidfile from disk. Can be overridden at runtime via
     /// [`DaemonContext::set_cleanup_on_drop`](crate::DaemonContext::set_cleanup_on_drop).
@@ -165,6 +187,11 @@ impl DaemonConfig {
     }
 
     /// Validates the configuration.
+    ///
+    /// You do **not** need to call this yourself: [`daemonize`](crate::daemonize)
+    /// calls it internally before forking. It is exposed so you can validate a
+    /// config up front and report errors before daemonizing (e.g. to stderr
+    /// while still attached to a terminal).
     ///
     /// Performs minimal I/O: checks path existence, directory writability
     /// (via `faccessat(AT_EACCESS)`), and queries the effective UID when a

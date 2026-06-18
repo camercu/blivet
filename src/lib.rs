@@ -30,6 +30,83 @@
 //! # }
 //! ```
 //!
+//! # Choosing an entry point
+//!
+//! There are two ways to daemonize:
+//!
+//! - [`daemonize`] is `unsafe`: you must guarantee the process is
+//!   single-threaded at the call site (see [Threads and async
+//!   runtimes](#threads-and-async-runtimes)). Available on all Unix
+//!   platforms.
+//! - `daemonize_checked` is a safe wrapper that verifies
+//!   single-threadedness for you by reading `/proc/self/status`. It is
+//!   **Linux-only** (`#[cfg(target_os = "linux")]`) because it depends on
+//!   `/proc`. On macOS, the BSDs, and other Unixes it does not exist, and
+//!   you must call `unsafe { daemonize(&config) }` and uphold the
+//!   single-threaded contract yourself.
+//!
+//! For code that must compile on both Linux and other Unixes, gate the
+//! call:
+//!
+//! ```no_run
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! # let config = blivet::DaemonConfig::new();
+//! #[cfg(target_os = "linux")]
+//! let mut ctx = blivet::daemonize_checked(&config)?;
+//! #[cfg(not(target_os = "linux"))]
+//! // SAFETY: no threads spawned before this point.
+//! let mut ctx = unsafe { blivet::daemonize(&config)? };
+//! # ctx.notify_parent()?;
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! # Threads and async runtimes
+//!
+//! Daemonizing forks, and forking a multithreaded process is unsound:
+//! mutexes held by other threads stay locked forever in the child. The
+//! single-threaded requirement therefore applies **only at fork time**:
+//!
+//! ```text
+//! [single-threaded required]
+//!   daemonize() / daemonize_checked()   <- forks here
+//!   chown_paths()                        <- still single-threaded
+//!   drop_privileges()                    <- still single-threaded (calls setenv)
+//!   notify_parent()
+//! [now safe to spawn threads / start tokio / accept connections]
+//! ```
+//!
+//! Spawn threads, start an async runtime, or begin a thread-per-connection
+//! accept loop **after** [`notify_parent`](DaemonContext::notify_parent).
+//! Do not spawn threads between [`daemonize`] and
+//! [`drop_privileges`](DaemonContext::drop_privileges): the latter calls
+//! `setenv`, which is not thread-safe.
+//!
+//! # Output and the working directory
+//!
+//! Two defaults surprise newcomers:
+//!
+//! - **stdout/stderr go to `/dev/null` by default.** A `println!` after
+//!   daemonizing vanishes silently. To capture output, set
+//!   [`stdout`](DaemonConfig::stdout) and/or
+//!   [`stderr`](DaemonConfig::stderr) to log file paths, or use a logging
+//!   crate that writes to a file or syslog.
+//! - **the working directory defaults to `/`.** After daemonizing, every
+//!   relative path (log files, sockets, config) resolves against `/` and
+//!   will usually fail with a confusing "permission denied" or "no such
+//!   file". Use absolute paths for all files, or set
+//!   [`chdir`](DaemonConfig::chdir) to your desired working directory.
+//!
+//! # Pidfile cleanup on signals
+//!
+//! With [`cleanup_on_drop`](DaemonConfig::cleanup_on_drop) (the default),
+//! the pidfile is removed when [`DaemonContext`] is dropped — but `Drop`
+//! **does not run** when the process is killed by a signal such as
+//! `SIGTERM`, which is how daemons are normally stopped. Without a signal
+//! handler the pidfile is left stale on disk. See
+//! [`DaemonContext::cleanup`] and the `examples/echo_server.rs` example for
+//! the recommended pattern.
+//!
 //! # Split-phase design
 //!
 //! Many daemons need root privileges during startup — binding to a
@@ -110,13 +187,17 @@ use forker::{Forker, RealForker};
 
 /// Daemonize the current process.
 ///
+/// On Linux, prefer the safe wrapper `daemonize_checked`, which verifies
+/// the single-threaded requirement for you.
+///
 /// # Safety
 ///
 /// No other threads may be running when this function is called.
 /// Forking a multithreaded process leaves mutexes held by other
 /// threads permanently locked in the child, causing deadlocks or
 /// undefined behavior. Call before spawning threads, async runtimes,
-/// or libraries with background threads.
+/// or libraries with background threads. See [Threads and async
+/// runtimes](crate#threads-and-async-runtimes) for the full lifecycle.
 ///
 /// # Errors
 ///
@@ -140,6 +221,16 @@ pub unsafe fn daemonize(config: &DaemonConfig) -> Result<DaemonContext, Daemoniz
 /// Reads `/proc/self/status` and parses the `Threads:` line. If the thread
 /// count exceeds 1, or if `/proc/self/status` cannot be read or parsed,
 /// this function panics.
+///
+/// # Platform support
+///
+/// **Linux only** (`#[cfg(target_os = "linux")]`). This function depends on
+/// `/proc/self/status` to count threads, which other Unixes do not provide.
+/// On macOS, the BSDs, and other platforms this function does not exist; call
+/// `unsafe { `[`daemonize`]`(&config) }` and uphold the single-threaded
+/// contract yourself. For portable code, gate the call with
+/// `#[cfg(target_os = "linux")]` — see the
+/// [crate-level docs](crate#choosing-an-entry-point).
 ///
 /// # Panics
 ///

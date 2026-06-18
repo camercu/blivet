@@ -153,6 +153,22 @@ let mut ctx = daemonize_checked(&config)?; // panics if threads > 1
 ctx.notify_parent()?;
 ```
 
+`daemonize_checked` is **Linux-only** (it relies on `/proc`); on macOS and the
+BSDs it does not exist, and you must use `unsafe { daemonize(&config) }` and
+uphold the single-threaded contract yourself. For portable code, gate the call:
+
+```rust
+#[cfg(target_os = "linux")]
+let mut ctx = blivet::daemonize_checked(&config)?;
+#[cfg(not(target_os = "linux"))]
+// SAFETY: no threads spawned before this point.
+let mut ctx = unsafe { blivet::daemonize(&config)? };
+```
+
+> **Tip:** see [`examples/echo_server.rs`](examples/echo_server.rs) for a
+> complete, runnable daemonized TCP echo server with clean signal-based
+> shutdown and pidfile removal.
+
 ### Split-phase privilege dropping
 
 When your daemon needs to perform privileged operations (like binding to
