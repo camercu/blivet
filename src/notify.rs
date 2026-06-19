@@ -26,26 +26,12 @@ const UNNOTIFIED_MSG: &[u8] = b"daemon exited without signaling readiness";
 /// The single success byte (`0x00`).
 pub(crate) const SUCCESS: [u8; 1] = [0x00];
 
-/// Substituted for an exit code of 0 on the failure path, so a reported error
-/// can never collide with the [`SUCCESS`] byte. `70` is `EX_SOFTWARE`.
-const ZERO_CODE_FALLBACK: u8 = 70;
-
-/// The failure exit code for `err`, guaranteed non-zero.
-///
-/// A code of 0 (only reachable via a caller-built
-/// [`Application`](DaemonizeError::Application) error) would alias the success
-/// byte and exit 0, so it is remapped to [`ZERO_CODE_FALLBACK`]. Both the wire
-/// message and the daemon's own `_exit` go through here so they always agree.
-pub(crate) fn failure_code(err: &DaemonizeError) -> u8 {
-    match err.exit_code() {
-        0 => ZERO_CODE_FALLBACK,
-        c => c,
-    }
-}
-
 /// Encode a failure message: exit-code byte followed by the error's `Display`.
+///
+/// [`exit_code`](DaemonizeError::exit_code) is always non-zero, so the message
+/// can never collide with the [`SUCCESS`] byte.
 pub(crate) fn error_bytes(err: &DaemonizeError) -> Vec<u8> {
-    encode(failure_code(err), err.to_string().as_bytes())
+    encode(err.exit_code(), err.to_string().as_bytes())
 }
 
 /// Encode the "dropped without notifying the parent" failure message.
@@ -111,7 +97,8 @@ mod tests {
     #[test]
     fn application_zero_code_is_not_silently_success() {
         // A caller-chosen code of 0 would collide with the success byte and be
-        // decoded as readiness. error_bytes must remap it to a real failure.
+        // decoded as readiness. exit_code() remaps it, so the encoded message
+        // is still a real failure.
         let err = DaemonizeError::application(0, "boom");
         match decode(&error_bytes(&err)) {
             Outcome::Failure { code, message } => {

@@ -72,11 +72,13 @@ pub enum DaemonizeError {
     /// — typically via [`application`](DaemonizeError::application) — so they
     /// can surface their own startup errors to the parent through
     /// [`report_error`](crate::DaemonContext::report_error) with an exit code
-    /// of their choosing. The stored `code` is returned verbatim by
-    /// [`exit_code`](DaemonizeError::exit_code).
+    /// of their choosing. The stored `code` is surfaced by
+    /// [`exit_code`](DaemonizeError::exit_code), except that 0 is remapped to
+    /// `70` (`EX_SOFTWARE`) so it can never alias success.
     #[error("application error: {message}")]
     Application {
-        /// Exit code to report to the parent (typically a `sysexits.h` value).
+        /// Exit code to report to the parent (typically a non-zero `sysexits.h`
+        /// value; 0 is treated as `EX_SOFTWARE`).
         code: u8,
         /// Human-readable description of the failure.
         message: String,
@@ -110,6 +112,11 @@ impl DaemonizeError {
     }
 
     /// Returns the `sysexits.h` exit code for this error variant.
+    ///
+    /// Always non-zero, so it is safe to pass to `std::process::exit`: a
+    /// reported error can never be mistaken for success. A caller-supplied
+    /// [`Application`](DaemonizeError::Application) code of 0 is remapped to
+    /// `70` (`EX_SOFTWARE`).
     pub fn exit_code(&self) -> u8 {
         match self {
             DaemonizeError::ValidationError(_) => 64,  // EX_USAGE
@@ -126,7 +133,9 @@ impl DaemonizeError {
             DaemonizeError::OutputFileError(_) => 73,  // EX_CANTCREAT
             DaemonizeError::ChownError(_) => 73,       // EX_CANTCREAT
             DaemonizeError::ExecFailed(_) => 71,       // EX_OSERR
-            DaemonizeError::Application { code, .. } => *code, // caller-chosen
+            // Caller-chosen, but never 0: that would alias success.
+            DaemonizeError::Application { code: 0, .. } => 70, // EX_SOFTWARE
+            DaemonizeError::Application { code, .. } => *code,
         }
     }
 }

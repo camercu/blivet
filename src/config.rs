@@ -566,6 +566,9 @@ mod tests {
             DaemonizeError::application(75, "queued").exit_code(),
             75 // EX_TEMPFAIL, chosen by the caller
         );
+        // exit_code() is always non-zero: a 0 would make process::exit treat a
+        // reported error as success. It is remapped to EX_SOFTWARE.
+        assert_eq!(DaemonizeError::application(0, "boom").exit_code(), 70);
         assert_eq!(
             DaemonizeError::application(71, "bind failed").to_string(),
             "application error: bind failed"

@@ -301,7 +301,7 @@ impl DaemonContext {
         if self.config.cleanup_on_drop {
             self.cleanup();
         }
-        crate::unsafe_ops::raw_exit(crate::notify::failure_code(err) as i32)
+        crate::unsafe_ops::raw_exit(err.exit_code() as i32)
     }
 
     /// Reports an application-level failure to the parent process and exits.
