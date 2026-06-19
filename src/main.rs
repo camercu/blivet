@@ -9,7 +9,13 @@ use blivet::{DaemonConfig, DaemonizeError};
 
 /// Run a program as a Unix daemon.
 #[derive(Parser)]
-#[command(name = "daemonize", version, trailing_var_arg = true)]
+#[command(
+    name = "daemonize",
+    version,
+    trailing_var_arg = true,
+    after_help = "Installed by the `blivet` crate (`cargo install blivet`).\n\
+                  Home: https://github.com/camercu/blivet"
+)]
 struct Args {
     /// Pidfile path
     #[arg(short = 'p', long = "pidfile")]
@@ -280,6 +286,63 @@ fn clear_cloexec(fd: BorrowedFd<'_>) -> Result<(), nix::Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // --- README flag table parity ---
+
+    /// The README CLI flag table must list exactly the binary's flags. Keeps
+    /// clap as the single source of truth so the docs cannot silently drift.
+    #[test]
+    fn readme_flag_table_matches_clap() {
+        use clap::CommandFactory;
+
+        let cmd = Args::command();
+        let mut clap_longs: Vec<String> = cmd
+            .get_arguments()
+            .filter_map(|a| a.get_long())
+            // clap auto-adds --help/--version; they are not in the flag table.
+            .filter(|l| *l != "help" && *l != "version")
+            .map(String::from)
+            .collect();
+        clap_longs.sort();
+
+        const README: &str = include_str!("../README.md");
+        let mut readme_longs: Vec<String> = README
+            .lines()
+            // CLI flag-table rows start with a short flag cell, e.g. "| `-p`".
+            .filter(|line| line.starts_with("| `-"))
+            .filter_map(parse_long_flag)
+            .collect();
+        readme_longs.sort();
+        readme_longs.dedup();
+
+        assert_eq!(
+            clap_longs, readme_longs,
+            "README CLI flag table is out of sync with the binary's flags"
+        );
+    }
+
+    /// Extract the long-flag name from a README table row like
+    /// `| `-p` | `--pidfile PATH` | ... |`.
+    fn parse_long_flag(line: &str) -> Option<String> {
+        let start = line.find("`--")? + 3;
+        let name: String = line[start..]
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric() || *c == '-')
+            .collect();
+        (!name.is_empty()).then_some(name)
+    }
+
+    #[test]
+    fn parse_long_flag_extracts_name() {
+        assert_eq!(
+            parse_long_flag("| `-p` | `--pidfile PATH` | Write PID |").as_deref(),
+            Some("pidfile")
+        );
+        assert_eq!(
+            parse_long_flag("| `-f` | `--foreground` | Stay |").as_deref(),
+            Some("foreground")
+        );
+    }
 
     // --- parse_octal_mode ---
 

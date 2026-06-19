@@ -46,6 +46,9 @@ detach from their parent terminal.
 cargo install blivet
 ```
 
+This installs the **`daemonize`** command (the crate is `blivet`; the binary is
+`daemonize`). Verify with `daemonize --version`.
+
 Or add the library to your project:
 
 ```sh
@@ -99,19 +102,22 @@ so the daemon can continue to write to them after the switch.
 
 ### CLI flags
 
+Listed in `daemonize --help` order (a test keeps this table in sync with the
+binary):
+
 | Flag | Long                | Description |
 | ---- | ------------------- | --- |
 | `-p` | `--pidfile PATH`    | Write daemon PID to file |
-| `-l` | `--lock PATH`       | Exclusive lockfile (default: pidfile path, if set) |
 | `-c` | `--chdir PATH`      | Working directory (default: `/`) |
 | `-m` | `--umask MODE`      | Process umask in octal (e.g. `022`) |
 | `-o` | `--stdout PATH`     | Redirect stdout to file (also sets stderr if `-e` is not given) |
 | `-e` | `--stderr PATH`     | Redirect stderr to file (default: stdout path; `.stdout`→`.stderr`, `.out`→`.err`) |
 | `-a` | `--append`          | Append to stdout/stderr files instead of truncating |
+| `-l` | `--lock PATH`       | Exclusive lockfile (default: pidfile path, if set) |
+| `-E` | `--env NAME=VAL`    | Set environment variable (repeatable) |
 | `-u` | `--user NAME\|UID`  | Switch to user after daemonizing (requires root) |
 | `-g` | `--group NAME\|GID` | Switch to group after daemonizing (requires root) |
 | `-f` | `--foreground`      | Stay in foreground (no fork/setsid)                            |
-| `-E` | `--env NAME=VAL`    | Set environment variable (repeatable) |
 | `-v` | `--verbose`         | Print diagnostic info before daemonizing |
 
 ## Library quickstart
