@@ -38,24 +38,37 @@
 //!   single-threaded at the call site (see [Threads and async
 //!   runtimes](#threads-and-async-runtimes)). Available on all Unix
 //!   platforms.
-//! - `daemonize_checked` is a safe wrapper that verifies
-//!   single-threadedness for you by reading `/proc/self/status`. It is
-//!   **Linux-only** because it depends on `/proc`. On macOS, the BSDs, and
-//!   other Unixes it is a `#[deprecated]` stub that never daemonizes: calling
-//!   it warns with guidance (and is a hard compile error under `-D warnings` /
-//!   `#![deny(deprecated)]`), and panics loudly if invoked anyway. On those
-//!   platforms call `unsafe { daemonize(&config) }` and uphold the
-//!   single-threaded contract yourself.
+//! - [`daemonize_checked`] is a safe wrapper that verifies
+//!   single-threadedness for you, so no `unsafe` is needed. It is available on
+//!   **Linux, macOS, FreeBSD, NetBSD, and OpenBSD**, each using the kernel's
+//!   own thread count (`/proc/self/status` on Linux, `proc_pidinfo` on macOS,
+//!   `sysctl` on the BSDs). On any other target it is a `#[deprecated]` stub
+//!   that never daemonizes — a hard compile error under `-D warnings` /
+//!   `#![deny(deprecated)]` — so call `unsafe { daemonize(&config) }` there and
+//!   uphold the single-threaded contract yourself.
 //!
-//! For code that must compile on both Linux and other Unixes, gate the
-//! call:
+//! On the mainstream Unixes above you can call it directly:
 //!
 //! ```no_run
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! # let config = blivet::DaemonConfig::new();
-//! #[cfg(target_os = "linux")]
 //! let mut ctx = blivet::daemonize_checked(&config)?;
-//! #[cfg(not(target_os = "linux"))]
+//! # ctx.notify_parent()?;
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! To also compile on an exotic target without thread-count support, gate the
+//! call so the deprecated stub is never built:
+//!
+//! ```no_run
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! # let config = blivet::DaemonConfig::new();
+//! #[cfg(any(target_os = "linux", target_os = "macos", target_os = "freebsd",
+//!           target_os = "netbsd", target_os = "openbsd"))]
+//! let mut ctx = blivet::daemonize_checked(&config)?;
+//! #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "freebsd",
+//!               target_os = "netbsd", target_os = "openbsd")))]
 //! // SAFETY: no threads spawned before this point.
 //! let mut ctx = unsafe { blivet::daemonize(&config)? };
 //! # ctx.notify_parent()?;
@@ -257,49 +270,72 @@ pub unsafe fn daemonize(config: &DaemonConfig) -> Result<DaemonContext, Daemoniz
     daemonize_inner(config, &mut RealForker)
 }
 
+// The OSes where `daemonize_checked` can verify the thread count natively are
+// listed explicitly in each `cfg` below (function-like macros do not expand
+// inside `cfg` attributes): linux, macos, freebsd, netbsd, openbsd.
+
+/// Thread count of the current process. Linux reads `/proc/self/status`; the
+/// other supported targets query the kernel via [`unsafe_ops::thread_count`].
+#[cfg(target_os = "linux")]
+fn current_thread_count() -> std::io::Result<usize> {
+    let status = std::fs::read_to_string("/proc/self/status")?;
+    let line = status
+        .lines()
+        .find(|line| line.starts_with("Threads:"))
+        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidData, "no Threads: line"))?;
+    line.split_whitespace()
+        .nth(1)
+        .and_then(|n| n.parse().ok())
+        .ok_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::InvalidData, "malformed Threads: line")
+        })
+}
+
+#[cfg(all(
+    not(target_os = "linux"),
+    any(
+        target_os = "macos",
+        target_os = "freebsd",
+        target_os = "netbsd",
+        target_os = "openbsd"
+    )
+))]
+use unsafe_ops::thread_count as current_thread_count;
+
 /// Safe wrapper for [`daemonize`] that verifies the process is single-threaded.
 ///
-/// Reads `/proc/self/status` and parses the `Threads:` line. If the thread
-/// count exceeds 1, or if `/proc/self/status` cannot be read or parsed,
-/// this function panics.
+/// Counts the threads in the current process and panics if more than one is
+/// running, then calls [`daemonize`]. This upholds the single-threaded
+/// contract for you, so no `unsafe` block is needed.
 ///
 /// # Platform support
 ///
-/// **Linux only.** This function depends on `/proc/self/status` to count
-/// threads, which other Unixes do not provide. On macOS, the BSDs, and other
-/// platforms `daemonize_checked` is a `#[deprecated]` stub that never
-/// daemonizes — calling it warns with guidance (and is a hard compile error
-/// under `-D warnings` / `#![deny(deprecated)]`), and panics loudly if invoked
-/// anyway. On those platforms call [`daemonize`] yourself inside an `unsafe`
-/// block and uphold the single-threaded contract. For portable code, gate the
-/// call with
-/// `#[cfg(target_os = "linux")]` — see the
-/// [crate-level docs](crate#choosing-an-entry-point).
+/// Available on **Linux, macOS, FreeBSD, NetBSD, and OpenBSD**, each using the
+/// kernel's own thread count (`/proc/self/status` on Linux, `proc_pidinfo` on
+/// macOS, `sysctl` on the BSDs). On any other target it is a `#[deprecated]`
+/// stub that never daemonizes — calling it warns with guidance (and is a hard
+/// compile error under `-D warnings` / `#![deny(deprecated)]`), and panics if
+/// invoked anyway; call [`daemonize`] yourself there inside an `unsafe` block.
 ///
 /// # Panics
 ///
-/// Panics if the thread count is greater than 1, or if `/proc/self/status`
-/// is unavailable or unparseable.
-#[cfg(target_os = "linux")]
+/// Panics if the thread count is greater than 1, or if the thread count cannot
+/// be determined.
+#[cfg(any(
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "freebsd",
+    target_os = "netbsd",
+    target_os = "openbsd"
+))]
 pub fn daemonize_checked(config: &DaemonConfig) -> Result<DaemonContext, DaemonizeError> {
-    let status = std::fs::read_to_string("/proc/self/status")
-        .expect("failed to read /proc/self/status: cannot verify thread count");
-    let threads = status
-        .lines()
-        .find(|line| line.starts_with("Threads:"))
-        .expect("failed to find Threads: line in /proc/self/status");
-    let count: usize = threads
-        .split_whitespace()
-        .nth(1)
-        .expect("malformed Threads: line in /proc/self/status")
-        .parse()
-        .expect("failed to parse thread count from /proc/self/status");
+    let count = current_thread_count()
+        .expect("daemonize_checked: cannot determine thread count to verify single-threadedness");
     if count > 1 {
         panic!(
-            "daemonize_checked: {} threads running (expected 1). \
+            "daemonize_checked: {count} threads running (expected 1). \
              Call daemonize before spawning threads, async runtimes, \
-             or libraries with background threads.",
-            count
+             or libraries with background threads."
         );
     }
     #[allow(unsafe_code)]
@@ -308,15 +344,13 @@ pub fn daemonize_checked(config: &DaemonConfig) -> Result<DaemonContext, Daemoni
     }
 }
 
-/// Non-Linux stub for the Linux-only `daemonize_checked` that exists only to
-/// produce a clear, actionable diagnostic.
+/// Stub for targets where the thread count cannot be queried, so there is no
+/// safe wrapper to offer.
 ///
-/// The single-threaded check needs `/proc/self/status`, which non-Linux
-/// targets do not provide, so there is no safe wrapper to offer here. Rather
-/// than omit the symbol entirely (which yields a bare "cannot find function
-/// `daemonize_checked`" error that hides *why*), this stub is provided and
-/// marked `#[deprecated]`: using it warns with guidance by default, and is a
-/// hard compile error under `-D warnings` / `#![deny(deprecated)]`.
+/// Rather than omit the symbol entirely (which yields a bare "cannot find
+/// function `daemonize_checked`" error that hides *why*), this stub is provided
+/// and marked `#[deprecated]`: using it warns with guidance by default, and is
+/// a hard compile error under `-D warnings` / `#![deny(deprecated)]`.
 ///
 /// It never performs an unchecked daemonization. Call
 /// `unsafe { `[`daemonize`]`(&config) }` directly on this platform, ensuring
@@ -324,19 +358,24 @@ pub fn daemonize_checked(config: &DaemonConfig) -> Result<DaemonContext, Daemoni
 ///
 /// # Panics
 ///
-/// Always panics: the operation is unsupported on this target. This fails
-/// loud and fast rather than returning an error that could be ignored.
-#[cfg(not(target_os = "linux"))]
+/// Always panics: the operation is unsupported on this target.
+#[cfg(not(any(
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "freebsd",
+    target_os = "netbsd",
+    target_os = "openbsd"
+)))]
 #[deprecated(
-    note = "daemonize_checked is Linux-only (it needs /proc/self/status). On this \
-            target, call `unsafe { daemonize(&config) }` and ensure the process is \
+    note = "daemonize_checked cannot verify the thread count on this target. \
+            Call `unsafe { daemonize(&config) }` and ensure the process is \
             single-threaded yourself."
 )]
 pub fn daemonize_checked(_config: &DaemonConfig) -> Result<DaemonContext, DaemonizeError> {
     panic!(
-        "daemonize_checked is Linux-only (it needs /proc/self/status); on this \
-         platform call `unsafe {{ daemonize(&config) }}` and ensure the process \
-         is single-threaded yourself"
+        "daemonize_checked is unsupported on this target (cannot query the thread \
+         count); call `unsafe {{ daemonize(&config) }}` and ensure the process is \
+         single-threaded yourself"
     )
 }
 
@@ -521,15 +560,57 @@ mod tests {
         run_in_subprocess("tests::both_forks_child_succeeds_subprocess");
     }
 
-    /// On non-Linux targets the deprecated `daemonize_checked` stub must never
-    /// daemonize: it panics loudly rather than forwarding to unsafe code.
-    #[cfg(not(target_os = "linux"))]
+    /// The thread count backing `daemonize_checked` must reflect the kernel's
+    /// real thread count. Harness-independent: it only asserts the count *rises*
+    /// when threads are spawned (the test runner contributes its own threads to
+    /// the baseline, so an absolute value cannot be assumed).
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "freebsd",
+        target_os = "netbsd",
+        target_os = "openbsd"
+    ))]
     #[test]
-    #[should_panic(expected = "daemonize_checked is Linux-only")]
-    fn daemonize_checked_stub_panics_off_linux() {
-        let config = DaemonConfig::new();
-        #[allow(deprecated)]
-        let _ = daemonize_checked(&config);
+    fn current_thread_count_tracks_live_threads() {
+        use std::sync::mpsc;
+        use std::sync::{Arc, Barrier};
+
+        let base = current_thread_count().expect("thread count should be readable");
+        assert!(
+            base >= 1,
+            "expected at least the calling thread, got {base}"
+        );
+
+        const N: usize = 3;
+        // N workers + this thread all rendezvous on `release`, so the workers
+        // stay alive (blocked) while we re-read the count.
+        let release = Arc::new(Barrier::new(N + 1));
+        let (started_tx, started_rx) = mpsc::channel();
+        let mut handles = Vec::new();
+        for _ in 0..N {
+            let release = Arc::clone(&release);
+            let started_tx = started_tx.clone();
+            handles.push(std::thread::spawn(move || {
+                started_tx.send(()).unwrap();
+                release.wait();
+            }));
+        }
+        for _ in 0..N {
+            started_rx.recv().unwrap(); // all N are now running
+        }
+
+        let with_threads = current_thread_count().expect("thread count should be readable");
+        assert!(
+            with_threads >= base + N,
+            "expected >= {} threads with {N} spawned, got {with_threads}",
+            base + N
+        );
+
+        release.wait();
+        for h in handles {
+            h.join().unwrap();
+        }
     }
 
     #[test]

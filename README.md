@@ -148,8 +148,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-On Linux, `daemonize_checked` provides a safe wrapper that verifies the process
-is single-threaded (via `/proc/self/status`) before forking:
+`daemonize_checked` provides a safe wrapper that verifies the process is
+single-threaded before forking — no `unsafe` needed:
 
 ```rust
 use blivet::{DaemonConfig, daemonize_checked};
@@ -159,18 +159,19 @@ let mut ctx = daemonize_checked(&config)?; // panics if threads > 1
 ctx.notify_parent()?;
 ```
 
-`daemonize_checked` is **Linux-only** (it relies on `/proc`). On macOS and the
-BSDs it is a `#[deprecated]` stub that never daemonizes: calling it warns with
-guidance (and is a hard compile error under `-D warnings` /
-`#![deny(deprecated)]`), and panics loudly if invoked anyway — so use
-`unsafe { daemonize(&config) }` there and uphold the single-threaded contract
-yourself. For portable code, gate the call so the deprecated path is never
-compiled in:
+It is available on **Linux, macOS, FreeBSD, NetBSD, and OpenBSD**, each using
+the kernel's own thread count (`/proc/self/status` on Linux, `proc_pidinfo` on
+macOS, `sysctl` on the BSDs). On any other target it is a `#[deprecated]` stub
+that never daemonizes (a hard compile error under `-D warnings` /
+`#![deny(deprecated)]`) — use `unsafe { daemonize(&config) }` there. To also
+compile on such a target, gate the call so the stub is never built:
 
 ```rust
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "freebsd",
+          target_os = "netbsd", target_os = "openbsd"))]
 let mut ctx = blivet::daemonize_checked(&config)?;
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "freebsd",
+              target_os = "netbsd", target_os = "openbsd")))]
 // SAFETY: no threads spawned before this point.
 let mut ctx = unsafe { blivet::daemonize(&config)? };
 ```

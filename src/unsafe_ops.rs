@@ -174,6 +174,125 @@ pub(crate) fn install_pidfile_cleanup_signals(
     Ok(())
 }
 
+/// Number of threads in the current process, for the single-threaded check in
+/// [`daemonize_checked`](crate::daemonize_checked) on platforms without
+/// `/proc/self/status` (Linux uses `/proc`).
+///
+/// Each target reads the kernel's own thread count for this process:
+/// - **macOS:** `proc_pidinfo(PROC_PIDTASKINFO)` → `pti_threadnum`.
+/// - **FreeBSD:** `sysctl(KERN_PROC_PID)` → `kinfo_proc.ki_numthreads`.
+/// - **NetBSD:** `sysctl(KERN_PROC2/KERN_PROC_PID)` → `kinfo_proc2.p_nlwps`.
+/// - **OpenBSD:** `sysctl(KERN_PROC_PID | KERN_PROC_SHOW_THREADS)`; the kernel
+///   returns one record per thread, so the count is `oldlen / record_size`.
+#[cfg(target_os = "macos")]
+pub(crate) fn thread_count() -> std::io::Result<usize> {
+    let mut info: libc::proc_taskinfo = unsafe { std::mem::zeroed() };
+    let size = std::mem::size_of::<libc::proc_taskinfo>() as libc::c_int;
+    // SAFETY: writes up to `size` bytes into the zeroed, correctly sized
+    // proc_taskinfo; the return value is the byte count actually written.
+    let written = unsafe {
+        libc::proc_pidinfo(
+            libc::getpid(),
+            libc::PROC_PIDTASKINFO,
+            0,
+            (&mut info as *mut libc::proc_taskinfo).cast(),
+            size,
+        )
+    };
+    if written < size {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(info.pti_threadnum.max(0) as usize)
+}
+
+#[cfg(target_os = "freebsd")]
+pub(crate) fn thread_count() -> std::io::Result<usize> {
+    let mut kp: libc::kinfo_proc = unsafe { std::mem::zeroed() };
+    let mut size = std::mem::size_of::<libc::kinfo_proc>();
+    let mut mib = [
+        libc::CTL_KERN,
+        libc::KERN_PROC,
+        libc::KERN_PROC_PID,
+        unsafe { libc::getpid() },
+    ];
+    // SAFETY: standard sysctl call; `kp`/`size` are a correctly sized output
+    // buffer and its length.
+    let rc = unsafe {
+        libc::sysctl(
+            mib.as_mut_ptr(),
+            mib.len() as libc::c_uint,
+            (&mut kp as *mut libc::kinfo_proc).cast(),
+            &mut size,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    if rc != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(kp.ki_numthreads.max(0) as usize)
+}
+
+#[cfg(target_os = "netbsd")]
+pub(crate) fn thread_count() -> std::io::Result<usize> {
+    let mut kp: libc::kinfo_proc2 = unsafe { std::mem::zeroed() };
+    let mut size = std::mem::size_of::<libc::kinfo_proc2>();
+    let mut mib = [
+        libc::CTL_KERN,
+        libc::KERN_PROC2,
+        libc::KERN_PROC_PID,
+        unsafe { libc::getpid() },
+        size as libc::c_int,
+        1,
+    ];
+    // SAFETY: standard sysctl call with a correctly sized single-record buffer.
+    let rc = unsafe {
+        libc::sysctl(
+            mib.as_mut_ptr(),
+            mib.len() as libc::c_uint,
+            (&mut kp as *mut libc::kinfo_proc2).cast(),
+            &mut size,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    if rc != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok((kp.p_nlwps as i64).max(0) as usize)
+}
+
+#[cfg(target_os = "openbsd")]
+pub(crate) fn thread_count() -> std::io::Result<usize> {
+    let elem = std::mem::size_of::<libc::kinfo_proc>();
+    let mut size: libc::size_t = 0;
+    let mut mib = [
+        libc::CTL_KERN,
+        libc::KERN_PROC,
+        libc::KERN_PROC_PID | libc::KERN_PROC_SHOW_THREADS,
+        unsafe { libc::getpid() },
+        elem as libc::c_int,
+        0,
+    ];
+    // First call (oldp = null) returns the total byte size; with
+    // KERN_PROC_SHOW_THREADS the kernel emits one record per thread.
+    // SAFETY: standard sizing sysctl call; output pointer is null.
+    let rc = unsafe {
+        libc::sysctl(
+            mib.as_mut_ptr(),
+            mib.len() as libc::c_uint,
+            std::ptr::null_mut(),
+            &mut size,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    if rc != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(size / elem)
+}
+
 /// Returns a `BorrowedFd` for `AT_FDCWD`, the sentinel that means
 /// "resolve relative paths against the current working directory."
 pub(crate) fn at_fdcwd() -> std::os::fd::BorrowedFd<'static> {
