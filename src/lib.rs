@@ -439,18 +439,8 @@ pub(crate) fn daemonize_inner(
         steps::close_inherited_fds(&skip_fds);
     }
 
-    // Step 14: Return DaemonContext with cloned config fields
-    Ok(DaemonContext::new(
-        lockfile,
-        pipe_wr,
-        config.pidfile.clone(),
-        config.lockfile.clone(),
-        config.stdout.clone(),
-        config.stderr.clone(),
-        config.user.clone(),
-        config.group.clone(),
-        config.cleanup_on_drop,
-    ))
+    // Step 14: Return DaemonContext (clones the config-derived fields it needs)
+    Ok(DaemonContext::new(config, lockfile, pipe_wr))
 }
 
 /// Parent-side pipe reader. Reads from the pipe and exits accordingly.

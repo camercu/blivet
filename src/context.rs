@@ -8,6 +8,7 @@ use std::path::PathBuf;
 
 use nix::fcntl::Flock;
 
+use crate::config::DaemonConfig;
 use crate::error::DaemonizeError;
 
 /// Context returned by a successful daemonization.
@@ -96,28 +97,25 @@ impl fmt::Debug for DaemonContext {
 }
 
 impl DaemonContext {
-    #[allow(clippy::too_many_arguments)]
+    /// Builds a context from the validated config plus the two runtime
+    /// resources acquired during daemonization: the held lockfile and the
+    /// notification pipe's write end. The config-derived fields are cloned
+    /// from `config`.
     pub(crate) fn new(
+        config: &DaemonConfig,
         lockfile: Option<Flock<OwnedFd>>,
         notify_pipe: Option<OwnedFd>,
-        pidfile: Option<PathBuf>,
-        lockfile_path: Option<PathBuf>,
-        stdout: Option<PathBuf>,
-        stderr: Option<PathBuf>,
-        user: Option<String>,
-        group: Option<String>,
-        cleanup_on_drop: bool,
     ) -> Self {
         Self {
             lockfile,
             notify_pipe,
-            pidfile,
-            lockfile_path,
-            stdout,
-            stderr,
-            user,
-            group,
-            cleanup_on_drop,
+            pidfile: config.pidfile.clone(),
+            lockfile_path: config.lockfile.clone(),
+            stdout: config.stdout.clone(),
+            stderr: config.stderr.clone(),
+            user: config.user.clone(),
+            group: config.group.clone(),
+            cleanup_on_drop: config.cleanup_on_drop,
             cleaned_up: false,
         }
     }
@@ -444,17 +442,27 @@ mod tests {
 
     impl TestCtx {
         fn build(self) -> DaemonContext {
-            DaemonContext::new(
-                self.lockfile,
-                self.notify_pipe,
-                self.pidfile,
-                self.lockfile_path,
-                self.stdout,
-                self.stderr,
-                self.user,
-                self.group,
-                self.cleanup_on_drop,
-            )
+            let mut config = DaemonConfig::new();
+            if let Some(ref p) = self.pidfile {
+                config.pidfile(p);
+            }
+            if let Some(ref p) = self.lockfile_path {
+                config.lockfile(p);
+            }
+            if let Some(ref p) = self.stdout {
+                config.stdout(p);
+            }
+            if let Some(ref p) = self.stderr {
+                config.stderr(p);
+            }
+            if let Some(ref u) = self.user {
+                config.user(u);
+            }
+            if let Some(ref g) = self.group {
+                config.group(g);
+            }
+            config.cleanup_on_drop(self.cleanup_on_drop);
+            DaemonContext::new(&config, self.lockfile, self.notify_pipe)
         }
     }
 
