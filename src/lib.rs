@@ -174,6 +174,9 @@ pub(crate) mod unsafe_ops;
 mod steps;
 pub(crate) mod util;
 
+#[cfg(test)]
+mod test_support;
+
 pub use config::DaemonConfig;
 pub use context::DaemonContext;
 pub use error::DaemonizeError;
@@ -227,8 +230,8 @@ pub unsafe fn daemonize(config: &DaemonConfig) -> Result<DaemonContext, Daemoniz
 /// **Linux only** (`#[cfg(target_os = "linux")]`). This function depends on
 /// `/proc/self/status` to count threads, which other Unixes do not provide.
 /// On macOS, the BSDs, and other platforms this function does not exist; call
-/// `unsafe { `[`daemonize`]`(&config) }` and uphold the single-threaded
-/// contract yourself. For portable code, gate the call with
+/// [`daemonize`] yourself inside an `unsafe` block and uphold the
+/// single-threaded contract yourself. For portable code, gate the call with
 /// `#[cfg(target_os = "linux")]` — see the
 /// [crate-level docs](crate#choosing-an-entry-point).
 ///
@@ -452,37 +455,12 @@ fn write_error_to_pipe(pipe_wr: &Option<OwnedFd>, err: &DaemonizeError) {
 mod tests {
     use super::*;
     use crate::forker::null_forker::NullForker;
+    use crate::test_support::{is_subprocess, run_in_subprocess};
     use std::panic::catch_unwind;
-
-    /// Run a `#[ignore]` test in an isolated subprocess.
-    ///
-    /// Tests that redirect fds or close inherited fds destroy the test harness.
-    /// This helper re-invokes the test binary targeting a single `#[ignore]`
-    /// test, with an env-var gate so it only runs when spawned from here.
-    ///
-    /// `--include-ignored` is required: without it the named `#[ignore]` test
-    /// is skipped, the subprocess exits 0, and this helper passes *vacuously*
-    /// without ever running the test body.
-    fn run_subprocess(test_name: &str) {
-        let exe = std::env::current_exe().unwrap();
-        let status = std::process::Command::new(exe)
-            .arg("--exact")
-            .arg(test_name)
-            .arg("--include-ignored") // the target test is #[ignore]
-            .arg("--nocapture")
-            .env("__DAEMONIZE_SUBPROCESS_TEST", "1")
-            .status()
-            .unwrap();
-        assert!(status.success(), "subprocess test failed: {status}");
-    }
-
-    fn is_subprocess() -> bool {
-        std::env::var("__DAEMONIZE_SUBPROCESS_TEST").is_ok()
-    }
 
     #[test]
     fn both_forks_child_succeeds() {
-        run_subprocess("tests::both_forks_child_succeeds_subprocess");
+        run_in_subprocess("tests::both_forks_child_succeeds_subprocess");
     }
 
     #[test]
@@ -590,7 +568,7 @@ mod tests {
 
     #[test]
     fn foreground_mode_skips_fork() {
-        run_subprocess("tests::foreground_mode_skips_fork_subprocess");
+        run_in_subprocess("tests::foreground_mode_skips_fork_subprocess");
     }
 
     #[test]
@@ -609,7 +587,7 @@ mod tests {
 
     #[test]
     fn foreground_mode_notify_parent_noop() {
-        run_subprocess("tests::foreground_mode_notify_parent_noop_subprocess");
+        run_in_subprocess("tests::foreground_mode_notify_parent_noop_subprocess");
     }
 
     #[test]
@@ -627,7 +605,7 @@ mod tests {
 
     #[test]
     fn close_fds_false_preserves_fds() {
-        run_subprocess("tests::close_fds_false_preserves_fds_subprocess");
+        run_in_subprocess("tests::close_fds_false_preserves_fds_subprocess");
     }
 
     #[test]
@@ -656,7 +634,7 @@ mod tests {
 
     #[test]
     fn context_carries_config_fields() {
-        run_subprocess("tests::context_carries_config_fields_subprocess");
+        run_in_subprocess("tests::context_carries_config_fields_subprocess");
     }
 
     #[test]
