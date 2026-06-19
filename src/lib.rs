@@ -131,9 +131,8 @@
 //!     let config = DaemonConfig::new();
 //!     let mut ctx = unsafe { daemonize(&config)? };
 //!     // ... application init ...
-//!     ctx.notify_parent().map_err(|e| {
-//!         DaemonizeError::application(71, format!("notify failed: {e}"))
-//!     })?;
+//!     // notify_parent() returns DaemonizeError, so `?` preserves the exit code.
+//!     ctx.notify_parent()?;
 //!     Ok(())
 //! }
 //! ```

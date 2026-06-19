@@ -184,9 +184,13 @@ the daemonization sequence.
 
 **Notification methods:**
 
-`notify_parent(&mut self) -> Result<(), io::Error>` writes a success
-byte (`0x00`) to the notification pipe and closes it. The parent reads
-this byte and exits 0. After this call, `notify_pipe` is `None`. This
+`notify_parent(&mut self) -> Result<(), DaemonizeError>` writes a success
+byte (`0x00`) to the notification pipe and closes it. A pipe write error
+is returned as `DaemonizeError::NotifyFailed` (exit code 71) so callers
+get one error type with a preserved exit code. The companion
+`notify_parent_or_report(&mut self)` does the same but reports the error
+to the parent and `_exit`s instead of returning it. The parent reads the
+success byte and exits 0. After this call, `notify_pipe` is `None`. This
 is the API for library consumers to signal readiness.
 
 `report_error(&mut self, err: &DaemonizeError) -> !` writes the error

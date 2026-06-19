@@ -63,6 +63,13 @@ pub enum DaemonizeError {
     #[error("exec failed: {0}")]
     ExecFailed(String),
 
+    /// Writing the readiness byte to the parent notification pipe failed.
+    ///
+    /// Produced by [`notify_parent`](crate::DaemonContext::notify_parent) when
+    /// the pipe write returns an `io::Error`.
+    #[error("failed to notify parent: {0}")]
+    NotifyFailed(#[source] std::io::Error),
+
     /// Application-level failure during the privileged init window, reported by
     /// the caller (e.g. a socket bind or database connect that failed after
     /// [`daemonize`](crate::daemonize) but before
@@ -133,6 +140,7 @@ impl DaemonizeError {
             DaemonizeError::OutputFileError(_) => 73,  // EX_CANTCREAT
             DaemonizeError::ChownError(_) => 73,       // EX_CANTCREAT
             DaemonizeError::ExecFailed(_) => 71,       // EX_OSERR
+            DaemonizeError::NotifyFailed(_) => 71,     // EX_OSERR
             // Caller-chosen, but never 0: that would alias success.
             DaemonizeError::Application { code: 0, .. } => 70, // EX_SOFTWARE
             DaemonizeError::Application { code, .. } => *code,

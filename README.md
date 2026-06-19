@@ -303,7 +303,8 @@ pipe, and config state needed for privilege operations.
 | `set_cleanup_on_drop(bool)`| Override `cleanup_on_drop` at runtime                        |
 | `chown_paths()`            | Transfer pidfile/lockfile/log ownership to target user/group |
 | `drop_privileges()`        | Switch user/group (`initgroups` + `setgid` + `setuid`)       |
-| `notify_parent()`          | Signal readiness -- parent exits 0                           |
+| `notify_parent()`          | Signal readiness -- parent exits 0 (`Result<(), DaemonizeError>`) |
+| `notify_parent_or_report()`| Signal readiness; on failure report to parent and `_exit`    |
 | `report_error(err)`        | Report error to parent and `_exit`                           |
 | `lockfile_fd()`            | Borrow the lockfile fd (if configured)                       |
 
@@ -314,9 +315,9 @@ Note that `Drop` does not run on signal termination — see
 
 ### `DaemonizeError`
 
-Fifteen variants covering validation, fork, setsid, lock, permission, chown,
-and exec failures, plus a caller-supplied `Application` variant. Each maps to a
-`sysexits.h` exit code via `exit_code()`.
+Sixteen variants covering validation, fork, setsid, lock, permission, chown,
+exec, and parent-notify failures, plus a caller-supplied `Application` variant.
+Each maps to a `sysexits.h` exit code via `exit_code()`.
 
 | Variant            | Exit code   | Meaning                                  |
 | ------------------ | ----------- | ---------------------------------------- |
@@ -334,6 +335,7 @@ and exec failures, plus a caller-supplied `Application` variant. Each maps to a
 | `ChdirFailed`      | 71          | `chdir()` error                          |
 | `PermissionDenied` | 77          | Not root, or setuid/setgid failed        |
 | `ExecFailed`       | 71          | CLI: `exec` of target program failed     |
+| `NotifyFailed`     | 71          | Writing readiness byte to parent failed  |
 | `Application`      | caller's    | App-level failure you report yourself    |
 
 #### Reporting your own failures
@@ -370,9 +372,9 @@ fn run() -> Result<(), DaemonizeError> {
     let config = DaemonConfig::new();
     let mut ctx = unsafe { daemonize(&config)? };
     // ... application init ...
-    // notify_parent() returns io::Error; wrap it to keep one error type:
-    ctx.notify_parent()
-        .map_err(|e| DaemonizeError::application(71, format!("notify failed: {e}")))?;
+    // notify_parent() returns DaemonizeError (NotifyFailed, exit 71), so `?`
+    // keeps a single error type and preserves the exit code.
+    ctx.notify_parent()?;
     Ok(())
 }
 ```

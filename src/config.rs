@@ -602,6 +602,11 @@ mod tests {
         );
         assert_eq!(DaemonizeError::ChownError(String::new()).exit_code(), 73);
         assert_eq!(DaemonizeError::ExecFailed(String::new()).exit_code(), 71);
+        assert_eq!(
+            DaemonizeError::NotifyFailed(std::io::Error::from(std::io::ErrorKind::BrokenPipe))
+                .exit_code(),
+            71
+        );
         // Application errors carry a caller-chosen sysexits code.
         assert_eq!(
             DaemonizeError::application(75, "queued").exit_code(),

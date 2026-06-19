@@ -2,7 +2,6 @@
 //! privilege dropping, and path ownership.
 
 use std::fmt;
-use std::io;
 use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
 use std::path::PathBuf;
 
@@ -268,13 +267,33 @@ impl DaemonContext {
     ///
     /// # Errors
     ///
-    /// Returns `io::Error` if writing to the pipe fails.
+    /// Returns [`DaemonizeError::NotifyFailed`] (exit code 71, `EX_OSERR`) if
+    /// writing to the pipe fails. Returning `DaemonizeError` — rather than a
+    /// bare `io::Error` — lets a `fn run() -> Result<(), DaemonizeError>` use
+    /// `?` here without wrapping, and preserves the exit code via
+    /// [`exit_code`](DaemonizeError::exit_code).
     #[must_use = "the parent process blocks until notified; ignoring this Result may leave it waiting"]
-    pub fn notify_parent(&mut self) -> Result<(), io::Error> {
+    pub fn notify_parent(&mut self) -> Result<(), DaemonizeError> {
         if let Some(pipe) = self.notify_pipe.take() {
-            pipe.signal_ready()?;
+            pipe.signal_ready().map_err(DaemonizeError::NotifyFailed)?;
         }
         Ok(())
+    }
+
+    /// Signals readiness like [`notify_parent`](Self::notify_parent), but on
+    /// failure reports the error to the parent and `_exit`s instead of
+    /// returning it.
+    ///
+    /// Useful when there is nothing sensible to do on a notify failure but
+    /// surface it upstream and abort — it never returns on error, so it does
+    /// not force the caller to thread a `Result` through `main`. On success it
+    /// returns normally.
+    pub fn notify_parent_or_report(&mut self) {
+        if let Some(pipe) = self.notify_pipe.take() {
+            if let Err(e) = pipe.signal_ready() {
+                self.report_error(&DaemonizeError::NotifyFailed(e));
+            }
+        }
     }
 
     /// Reports an error to the parent process and exits.
@@ -379,6 +398,14 @@ mod tests {
         let (rd, wr) = make_pipe();
         let mut ctx = ctx(&DaemonConfig::new(), None, Some(NotifyPipe::new(wr)));
         ctx.notify_parent().unwrap();
+        assert_eq!(read_pipe(rd), vec![0x00]);
+    }
+
+    #[test]
+    fn notify_parent_or_report_writes_success_byte() {
+        let (rd, wr) = make_pipe();
+        let mut ctx = ctx(&DaemonConfig::new(), None, Some(NotifyPipe::new(wr)));
+        ctx.notify_parent_or_report(); // success path returns normally
         assert_eq!(read_pipe(rd), vec![0x00]);
     }
 
