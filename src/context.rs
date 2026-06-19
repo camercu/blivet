@@ -296,7 +296,7 @@ impl DaemonContext {
     pub fn notify_parent(&mut self) -> Result<(), io::Error> {
         if let Some(fd) = self.notify_pipe.take() {
             let mut file = io::BufWriter::new(std::fs::File::from(fd));
-            file.write_all(&[0x00])?;
+            file.write_all(&crate::notify::SUCCESS)?;
             file.flush()?;
         }
         Ok(())
@@ -314,12 +314,7 @@ impl DaemonContext {
     pub fn report_error(&mut self, err: &DaemonizeError) -> ! {
         if let Some(fd) = self.notify_pipe.take() {
             let mut file = io::BufWriter::new(std::fs::File::from(fd));
-            let msg = err.to_string();
-            let code = err.exit_code();
-            let mut buf = Vec::with_capacity(1 + msg.len());
-            buf.push(code);
-            buf.extend_from_slice(msg.as_bytes());
-            let _ = file.write_all(&buf);
+            let _ = file.write_all(&crate::notify::error_bytes(err));
             let _ = file.flush();
         }
         crate::unsafe_ops::raw_exit(err.exit_code() as i32)
@@ -330,11 +325,7 @@ impl Drop for DaemonContext {
     fn drop(&mut self) {
         if let Some(fd) = self.notify_pipe.take() {
             let mut file = io::BufWriter::new(std::fs::File::from(fd));
-            let msg = b"daemon exited without signaling readiness";
-            let mut buf = Vec::with_capacity(1 + msg.len());
-            buf.push(1u8);
-            buf.extend_from_slice(msg);
-            let _ = file.write_all(&buf);
+            let _ = file.write_all(&crate::notify::unnotified_bytes());
             let _ = file.flush();
         }
         if self.cleanup_on_drop {

@@ -173,6 +173,7 @@ mod error;
 pub(crate) mod forker;
 pub(crate) mod unsafe_ops;
 
+mod notify;
 mod steps;
 pub(crate) mod util;
 
@@ -458,33 +459,20 @@ fn parent_pipe_reader(rd: OwnedFd, forker: &impl Forker) -> ! {
     let mut buf = Vec::new();
     let _ = file.read_to_end(&mut buf);
 
-    if buf.is_empty() {
-        // EOF: exec succeeded (CLOEXEC closed pipe)
-        forker.exit(0);
+    match notify::decode(&buf) {
+        notify::Outcome::Success => forker.exit(0),
+        notify::Outcome::Failure { code, message } => {
+            eprintln!("{message}");
+            forker.exit(code);
+        }
     }
-
-    let code = buf[0];
-    if code == 0x00 {
-        // Success byte
-        forker.exit(0);
-    }
-
-    // Error: code byte + message
-    let msg = String::from_utf8_lossy(&buf[1..]);
-    eprintln!("{msg}");
-    forker.exit(code as i32);
 }
 
 /// Write error protocol to notification pipe (best-effort).
 fn write_error_to_pipe(pipe_wr: &Option<OwnedFd>, err: &DaemonizeError) {
     if let Some(ref fd) = pipe_wr {
-        // Write directly via borrowed fd to avoid consuming the OwnedFd
-        let msg = err.to_string();
-        let code = err.exit_code();
-        let mut buf = Vec::with_capacity(1 + msg.len());
-        buf.push(code);
-        buf.extend_from_slice(msg.as_bytes());
-        let _ = nix::unistd::write(fd, &buf);
+        // Write directly via the borrowed fd to avoid consuming the OwnedFd.
+        let _ = nix::unistd::write(fd, &notify::error_bytes(err));
     }
 }
 
