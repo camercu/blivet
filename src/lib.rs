@@ -405,43 +405,51 @@ pub(crate) fn daemonize_inner(
         pipe_wr
     };
 
-    // Macro for post-fork error handling: write to pipe + exit
-    macro_rules! post_fork_try {
-        ($result:expr) => {
-            match $result {
-                Ok(val) => val,
-                Err(e) => {
-                    signal_error_to_parent(&mut pipe_wr, &e);
-                    forker.exit(e.exit_code() as i32);
-                }
-            }
-        };
+    // Steps 4–14 run in the final daemon process and report failures as a
+    // single Result. Funnel any error through one place: notify the parent and
+    // exit. `pipe_wr` stays available so the error path can still signal it.
+    match run_post_fork(config, &mut pipe_wr) {
+        Ok(ctx) => Ok(ctx),
+        Err(e) => {
+            signal_error_to_parent(&mut pipe_wr, &e);
+            forker.exit(e.exit_code() as i32);
+        }
     }
+}
 
+/// Steps 4–14: apply the configuration in the final daemon process.
+///
+/// Forker-free and fallible: every step returns its error rather than touching
+/// the notification pipe, leaving the single error-to-parent seam in
+/// [`daemonize_inner`]. On success the notification pipe write end is moved into
+/// the returned [`DaemonContext`]; `pipe_wr` is left `None`.
+fn run_post_fork(
+    config: &DaemonConfig,
+    pipe_wr: &mut Option<NotifyPipe>,
+) -> Result<DaemonContext, DaemonizeError> {
     // Step 4: Set umask
     steps::set_umask(config.umask);
 
     // Step 5: chdir
-    post_fork_try!(steps::change_dir(&config.chdir));
+    steps::change_dir(&config.chdir)?;
 
     // Step 6: Redirect stdin to /dev/null (always); redirect stdout/stderr
     // to /dev/null only when not in foreground mode (foreground leaves them
     // inherited so output reaches the terminal or supervisor).
-    steps::redirect_to_devnull(!foreground);
+    steps::redirect_to_devnull(!config.foreground);
 
-    // Step 7: Open and lock lockfile (match required: macro uses divergent control flow)
-    #[allow(clippy::manual_map)]
+    // Step 7: Open and lock lockfile
     let lockfile = match config.lockfile.as_ref() {
-        Some(path) => Some(post_fork_try!(steps::open_and_lock(path))),
+        Some(path) => Some(steps::open_and_lock(path)?),
         None => None,
     };
 
     // Step 8: Write pidfile
     if let Some(ref pidfile_path) = config.pidfile {
-        post_fork_try!(steps::write_pidfile(
+        steps::write_pidfile(
             pidfile_path,
             config.lockfile.as_deref().zip(lockfile.as_ref()),
-        ));
+        )?;
     }
 
     // Step 9: Reset signal dispositions
@@ -455,11 +463,11 @@ pub(crate) fn daemonize_inner(
 
     // Step 12: Redirect stdout/stderr to configured files
     if config.stdout.is_some() || config.stderr.is_some() {
-        post_fork_try!(steps::redirect_output(
+        steps::redirect_output(
             config.stdout.as_deref(),
             config.stderr.as_deref(),
             config.append,
-        ));
+        )?;
     }
 
     // Step 13: Close inherited fds (if enabled)
@@ -475,7 +483,7 @@ pub(crate) fn daemonize_inner(
     }
 
     // Step 14: Return DaemonContext (clones the config-derived fields it needs)
-    Ok(DaemonContext::new(config, lockfile, pipe_wr))
+    Ok(DaemonContext::new(config, lockfile, pipe_wr.take()))
 }
 
 /// Parent-side pipe reader. Reads from the pipe and exits accordingly.
