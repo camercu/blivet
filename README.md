@@ -225,7 +225,14 @@ When `cleanup_on_drop` is `true` (the default), the pidfile is removed when
 `DaemonContext` is dropped. However, **`Drop` does not run when the process is
 killed by a signal** (`SIGTERM`, `SIGKILL`, etc.) — which is how most daemons
 are stopped. To clean up the pidfile on signal termination, install a signal
-handler that either calls `cleanup()` or lets `DaemonContext` drop:
+handler that either calls `cleanup()` or lets `DaemonContext` drop.
+
+The example below uses the [`signal_hook`](https://crates.io/crates/signal-hook)
+crate for the handler; `blivet` does not re-export it, so add it yourself:
+
+```sh
+cargo add signal_hook
+```
 
 ```rust
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -272,7 +279,7 @@ validation is deferred to `validate()`.
 | `close_fds(bool)`  | `true`  | Close inherited fds 3+                                |
 | `cleanup_on_drop(bool)` | `true` | Remove pidfile when `DaemonContext` is dropped   |
 | `env(key, val)`    | None    | Set env var (accumulates, last-write-wins)            |
-| `validate()`       | --      | Check paths, permissions, overlaps before forking     |
+| `validate()`       | --      | Check paths/permissions/overlaps (optional; `daemonize()` runs it) |
 
 ### `daemonize(&config) -> Result<DaemonContext, DaemonizeError>`
 
@@ -307,25 +314,68 @@ Note that `Drop` does not run on signal termination — see
 
 ### `DaemonizeError`
 
-Fourteen variants covering validation, fork, setsid, lock, permission, chown,
-and exec failures. Each maps to a `sysexits.h` exit code via `exit_code()`.
+Fifteen variants covering validation, fork, setsid, lock, permission, chown,
+and exec failures, plus a caller-supplied `Application` variant. Each maps to a
+`sysexits.h` exit code via `exit_code()`.
 
-| Variant            | Exit code | Meaning                                  |
-| ------------------ | --------- | ---------------------------------------- |
-| `ValidationError`  | 64        | Bad config (paths, env keys, overlaps)   |
-| `ProgramNotFound`  | 66        | CLI: program missing or not executable   |
-| `UserNotFound`     | 67        | User doesn't exist                       |
-| `GroupNotFound`    | 67        | Group doesn't exist                      |
-| `LockConflict`     | 69        | Lockfile held by another process         |
-| `LockfileError`    | 73        | Can't open lockfile                      |
-| `PidfileError`     | 73        | Can't write pidfile                      |
-| `OutputFileError`  | 73        | Can't open/redirect output file          |
-| `ChownError`       | 73        | Can't chown pidfile/lockfile/output file |
-| `ForkFailed`       | 71        | `fork()` error                           |
-| `SetsidFailed`     | 71        | `setsid()` error                         |
-| `ChdirFailed`      | 71        | `chdir()` error                          |
-| `PermissionDenied` | 77        | Not root, or setuid/setgid failed        |
-| `ExecFailed`       | 71        | CLI: `exec` of target program failed     |
+| Variant            | Exit code   | Meaning                                  |
+| ------------------ | ----------- | ---------------------------------------- |
+| `ValidationError`  | 64          | Bad config (paths, env keys, overlaps)   |
+| `ProgramNotFound`  | 66          | CLI: program missing or not executable   |
+| `UserNotFound`     | 67          | User doesn't exist                       |
+| `GroupNotFound`    | 67          | Group doesn't exist                      |
+| `LockConflict`     | 69          | Lockfile held by another process         |
+| `LockfileError`    | 73          | Can't open lockfile                      |
+| `PidfileError`     | 73          | Can't write pidfile                      |
+| `OutputFileError`  | 73          | Can't open/redirect output file          |
+| `ChownError`       | 73          | Can't chown pidfile/lockfile/output file |
+| `ForkFailed`       | 71          | `fork()` error                           |
+| `SetsidFailed`     | 71          | `setsid()` error                         |
+| `ChdirFailed`      | 71          | `chdir()` error                          |
+| `PermissionDenied` | 77          | Not root, or setuid/setgid failed        |
+| `ExecFailed`       | 71          | CLI: `exec` of target program failed     |
+| `Application`      | caller's    | App-level failure you report yourself    |
+
+#### Reporting your own failures
+
+If startup work in the privileged init window fails (a socket bind, a database
+connect), report it to the parent with a `sysexits.h` code of your choosing via
+`report_error_msg` — no need to construct a `DaemonizeError` by hand:
+
+```rust
+let listener = match TcpListener::bind("0.0.0.0:80") {
+    Ok(l) => l,
+    // 71 == EX_OSERR; the parent prints the message and exits with this code.
+    Err(e) => ctx.report_error_msg(71, format!("bind failed: {e}")),
+};
+```
+
+#### Propagating exit codes from `main`
+
+The `sysexits.h` codes only reach the shell if you use them. The idiomatic
+`fn main() -> Result<(), E>` prints the error via `Termination` and exits **1**,
+ignoring `exit_code()`. To preserve the codes, drive `exit_code()` yourself:
+
+```rust
+use blivet::{daemonize, DaemonConfig, DaemonizeError};
+
+fn main() {
+    if let Err(e) = run() {
+        eprintln!("{e}");
+        std::process::exit(e.exit_code() as i32); // e.g. 77 for PermissionDenied
+    }
+}
+
+fn run() -> Result<(), DaemonizeError> {
+    let config = DaemonConfig::new();
+    let mut ctx = unsafe { daemonize(&config)? };
+    // ... application init ...
+    // notify_parent() returns io::Error; wrap it to keep one error type:
+    ctx.notify_parent()
+        .map_err(|e| DaemonizeError::application(71, format!("notify failed: {e}")))?;
+    Ok(())
+}
+```
 
 ## Minimum supported Rust version
 

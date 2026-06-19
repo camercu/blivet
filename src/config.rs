@@ -12,6 +12,22 @@ use crate::util::paths_same;
 /// All fields are private; use builder methods to configure.
 /// All builder methods are infallible; validation is centralized in [`validate`](DaemonConfig::validate).
 ///
+/// This is a **non-consuming** builder: setters take `&mut self` and return
+/// `&mut Self`, so you mutate a binding in place rather than chaining off
+/// [`new`](DaemonConfig::new). Because of that, `DaemonConfig::new().pidfile(..)`
+/// evaluates to `&mut DaemonConfig`, not an owned value — to build a config in a
+/// helper, mutate a local and return it by value (or `.clone()` a shared one):
+///
+/// ```
+/// use blivet::DaemonConfig;
+///
+/// fn make_config(pid: &str) -> DaemonConfig {
+///     let mut config = DaemonConfig::new();
+///     config.pidfile(pid).chdir("/tmp");
+///     config
+/// }
+/// ```
+///
 /// # Example
 ///
 /// ```

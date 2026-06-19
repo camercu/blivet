@@ -109,6 +109,40 @@
 //! [`DaemonContext::cleanup`] and the `examples/echo_server.rs` example for
 //! the recommended pattern.
 //!
+//! # Exit codes
+//!
+//! [`DaemonizeError::exit_code`] maps each error to a `sysexits.h` code, but
+//! those codes only reach the shell if you use them. The idiomatic
+//! `fn main() -> Result<(), E>` prints the error via `Termination` and exits
+//! **1**, ignoring `exit_code()`. To preserve the codes, call `exit_code()`
+//! yourself:
+//!
+//! ```no_run
+//! use blivet::{daemonize, DaemonConfig, DaemonizeError};
+//!
+//! fn main() {
+//!     if let Err(e) = run() {
+//!         eprintln!("{e}");
+//!         std::process::exit(e.exit_code() as i32);
+//!     }
+//! }
+//!
+//! fn run() -> Result<(), DaemonizeError> {
+//!     let config = DaemonConfig::new();
+//!     let mut ctx = unsafe { daemonize(&config)? };
+//!     // ... application init ...
+//!     ctx.notify_parent().map_err(|e| {
+//!         DaemonizeError::application(71, format!("notify failed: {e}"))
+//!     })?;
+//!     Ok(())
+//! }
+//! ```
+//!
+//! To report a failure from your own init code (e.g. a socket bind) to the
+//! parent with a chosen code, use
+//! [`report_error_msg`](DaemonContext::report_error_msg) or the
+//! [`DaemonizeError::Application`] variant.
+//!
 //! # Split-phase design
 //!
 //! Many daemons need root privileges during startup — binding to a
