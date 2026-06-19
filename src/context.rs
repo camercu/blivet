@@ -355,28 +355,22 @@ struct ResolvedUser {
 fn resolve_user(spec: &str) -> Result<ResolvedUser, DaemonizeError> {
     use nix::unistd::User;
 
-    if let Ok(uid_num) = spec.parse::<u32>() {
+    let user = if let Ok(uid_num) = spec.parse::<u32>() {
         let uid = nix::unistd::Uid::from_raw(uid_num);
-        let user = User::from_uid(uid)
+        User::from_uid(uid)
             .map_err(|e| DaemonizeError::UserNotFound(format!("getpwuid({uid_num}): {e}")))?
-            .ok_or_else(|| DaemonizeError::UserNotFound(format!("uid {uid_num}")))?;
-        Ok(ResolvedUser {
-            name: user.name,
-            uid: user.uid,
-            gid: user.gid,
-            dir: user.dir,
-        })
+            .ok_or_else(|| DaemonizeError::UserNotFound(format!("uid {uid_num}")))?
     } else {
-        let user = User::from_name(spec)
+        User::from_name(spec)
             .map_err(|e| DaemonizeError::UserNotFound(format!("getpwnam({spec}): {e}")))?
-            .ok_or_else(|| DaemonizeError::UserNotFound(spec.to_string()))?;
-        Ok(ResolvedUser {
-            name: user.name,
-            uid: user.uid,
-            gid: user.gid,
-            dir: user.dir,
-        })
-    }
+            .ok_or_else(|| DaemonizeError::UserNotFound(spec.to_string()))?
+    };
+    Ok(ResolvedUser {
+        name: user.name,
+        uid: user.uid,
+        gid: user.gid,
+        dir: user.dir,
+    })
 }
 
 /// Resolve a group spec (name or numeric GID string) to a GID.
