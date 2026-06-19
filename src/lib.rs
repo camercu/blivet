@@ -171,6 +171,7 @@ mod config;
 mod context;
 mod error;
 pub(crate) mod forker;
+mod identity;
 pub(crate) mod unsafe_ops;
 
 mod notify;

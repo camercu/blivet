@@ -10,6 +10,7 @@ use nix::fcntl::Flock;
 
 use crate::config::DaemonConfig;
 use crate::error::DaemonizeError;
+use crate::identity::ResolvedIdentity;
 
 /// Context returned by a successful daemonization.
 ///
@@ -174,10 +175,9 @@ impl DaemonContext {
             return Ok(());
         }
 
-        let (uid, gid) =
-            resolve_uid_gid(self.config.user.as_deref(), self.config.group.as_deref())?;
-        let owner = Some(nix::unistd::Uid::from_raw(uid));
-        let group = Some(nix::unistd::Gid::from_raw(gid));
+        let identity =
+            ResolvedIdentity::resolve(self.config.user.as_deref(), self.config.group.as_deref())?;
+        let (owner, group) = identity.chown_ids();
 
         let paths: Vec<&PathBuf> = [
             &self.config.pidfile,
@@ -227,39 +227,25 @@ impl DaemonContext {
     /// Returns `DaemonizeError::PermissionDenied` if `initgroups`, `setgid`,
     /// or `setuid` fails.
     pub fn drop_privileges(&mut self) -> Result<(), DaemonizeError> {
-        use std::ffi::CString;
-
         if self.config.user.is_none() && self.config.group.is_none() {
             return Ok(());
         }
 
-        let user_info = match self.config.user.as_deref() {
-            Some(spec) => Some(resolve_user(spec)?),
-            None => None,
-        };
+        let identity =
+            ResolvedIdentity::resolve(self.config.user.as_deref(), self.config.group.as_deref())?;
 
-        let group_gid = match self.config.group.as_deref() {
-            Some(spec) => Some(resolve_group_gid(spec)?),
-            None => None,
-        };
-
-        if let Some(ref info) = user_info {
-            let cname = CString::new(info.name.as_str())
-                .map_err(|e| DaemonizeError::UserNotFound(format!("invalid username: {e}")))?;
-
-            crate::unsafe_ops::raw_initgroups(&cname, info.gid.as_raw())
+        if let Some(info) = identity.user() {
+            crate::unsafe_ops::raw_initgroups(&info.cname()?, info.gid.as_raw())
                 .map_err(|e| DaemonizeError::PermissionDenied(format!("initgroups: {e}")))?;
         }
 
-        // setgid: use explicit group if set, otherwise user's primary group
-        let effective_gid = group_gid.or(user_info.as_ref().map(|u| u.gid));
-        if let Some(gid) = effective_gid {
+        // setgid: explicit group if set, otherwise the user's primary group.
+        if let Some(gid) = identity.effective_gid() {
             nix::unistd::setgid(gid)
                 .map_err(|e| DaemonizeError::PermissionDenied(format!("setgid: {e}")))?;
         }
 
-        // setuid
-        if let Some(ref info) = user_info {
+        if let Some(info) = identity.user() {
             nix::unistd::setuid(info.uid)
                 .map_err(|e| DaemonizeError::PermissionDenied(format!("setuid: {e}")))?;
 
@@ -322,69 +308,6 @@ impl Drop for DaemonContext {
             self.cleanup();
         }
     }
-}
-
-/// Resolved user info from getpwnam or numeric UID.
-struct ResolvedUser {
-    name: String,
-    uid: nix::unistd::Uid,
-    gid: nix::unistd::Gid,
-    dir: std::path::PathBuf,
-}
-
-/// Resolve a user spec (name or numeric UID string).
-fn resolve_user(spec: &str) -> Result<ResolvedUser, DaemonizeError> {
-    use nix::unistd::User;
-
-    let user = if let Ok(uid_num) = spec.parse::<u32>() {
-        let uid = nix::unistd::Uid::from_raw(uid_num);
-        User::from_uid(uid)
-            .map_err(|e| DaemonizeError::UserNotFound(format!("getpwuid({uid_num}): {e}")))?
-            .ok_or_else(|| DaemonizeError::UserNotFound(format!("uid {uid_num}")))?
-    } else {
-        User::from_name(spec)
-            .map_err(|e| DaemonizeError::UserNotFound(format!("getpwnam({spec}): {e}")))?
-            .ok_or_else(|| DaemonizeError::UserNotFound(spec.to_string()))?
-    };
-    Ok(ResolvedUser {
-        name: user.name,
-        uid: user.uid,
-        gid: user.gid,
-        dir: user.dir,
-    })
-}
-
-/// Resolve a group spec (name or numeric GID string) to a GID.
-fn resolve_group_gid(spec: &str) -> Result<nix::unistd::Gid, DaemonizeError> {
-    use nix::unistd::Group;
-
-    if let Ok(gid_num) = spec.parse::<u32>() {
-        Ok(nix::unistd::Gid::from_raw(gid_num))
-    } else {
-        let group = Group::from_name(spec)
-            .map_err(|e| DaemonizeError::GroupNotFound(format!("getgrnam({spec}): {e}")))?
-            .ok_or_else(|| DaemonizeError::GroupNotFound(spec.to_string()))?;
-        Ok(group.gid)
-    }
-}
-
-/// Resolve user/group specs to (uid_t, gid_t) for chown.
-/// Returns `(u32::MAX, u32::MAX)` for fields that should be unchanged.
-fn resolve_uid_gid(
-    user: Option<&str>,
-    group: Option<&str>,
-) -> Result<(libc::uid_t, libc::gid_t), DaemonizeError> {
-    let resolved_user = match user {
-        Some(spec) => Some(resolve_user(spec)?),
-        None => None,
-    };
-    let uid = resolved_user.as_ref().map_or(u32::MAX, |u| u.uid.as_raw());
-    let gid = match group {
-        Some(spec) => resolve_group_gid(spec)?.as_raw(),
-        // If user is set but group isn't, use user's primary group
-        None => resolved_user.as_ref().map_or(u32::MAX, |u| u.gid.as_raw()),
-    };
-    Ok((uid, gid))
 }
 
 #[cfg(test)]
@@ -552,26 +475,6 @@ mod tests {
     }
 
     #[test]
-    fn resolve_user_numeric() {
-        // UID 0 should resolve to root on all Unix systems
-        let user = resolve_user("0").unwrap();
-        assert_eq!(user.uid.as_raw(), 0);
-        assert_eq!(user.name, "root");
-    }
-
-    #[test]
-    fn resolve_user_name() {
-        let user = resolve_user("root").unwrap();
-        assert_eq!(user.uid.as_raw(), 0);
-    }
-
-    #[test]
-    fn resolve_group_gid_numeric() {
-        let gid = resolve_group_gid("0").unwrap();
-        assert_eq!(gid.as_raw(), 0);
-    }
-
-    #[test]
     fn context_stores_config_fields() {
         let mut config = DaemonConfig::new();
         config
@@ -586,59 +489,6 @@ mod tests {
         assert!(debug.contains("test.pid"));
         assert!(debug.contains("nobody"));
         assert!(debug.contains("nogroup"));
-    }
-
-    #[test]
-    fn resolve_user_nonexistent_name() {
-        if std::env::var("CI").is_ok() {
-            return;
-        }
-        let result = resolve_user("nonexistent_daemonize_test_user_xyz");
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn resolve_group_gid_by_name() {
-        // "root" on Linux, "wheel" on macOS/BSD — try root first to avoid
-        // NSS lookup hangs for nonexistent groups in CI.
-        let result = resolve_group_gid("root").or_else(|_| resolve_group_gid("wheel"));
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn resolve_group_gid_nonexistent_name() {
-        if std::env::var("CI").is_ok() {
-            return;
-        }
-        let result = resolve_group_gid("nonexistent_daemonize_test_group_xyz");
-        assert!(matches!(
-            result,
-            Err(crate::DaemonizeError::GroupNotFound(_))
-        ));
-    }
-
-    #[test]
-    fn resolve_uid_gid_user_only() {
-        // User only: should return user's UID and primary GID
-        let (uid, gid) = resolve_uid_gid(Some("root"), None).unwrap();
-        assert_eq!(uid, 0);
-        assert_eq!(gid, 0); // root's primary group
-    }
-
-    #[test]
-    fn resolve_uid_gid_neither() {
-        // Neither: should return u32::MAX for both (no change)
-        let (uid, gid) = resolve_uid_gid(None, None).unwrap();
-        assert_eq!(uid, u32::MAX);
-        assert_eq!(gid, u32::MAX);
-    }
-
-    #[test]
-    fn resolve_uid_gid_group_only_numeric() {
-        // Group only with numeric GID
-        let (uid, gid) = resolve_uid_gid(None, Some("0")).unwrap();
-        assert_eq!(uid, u32::MAX); // no user change
-        assert_eq!(gid, 0);
     }
 
     /// Config carrying a pidfile, with `cleanup_on_drop` disabled so tests
