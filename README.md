@@ -153,9 +153,13 @@ let mut ctx = daemonize_checked(&config)?; // panics if threads > 1
 ctx.notify_parent()?;
 ```
 
-`daemonize_checked` is **Linux-only** (it relies on `/proc`); on macOS and the
-BSDs it does not exist, and you must use `unsafe { daemonize(&config) }` and
-uphold the single-threaded contract yourself. For portable code, gate the call:
+`daemonize_checked` is **Linux-only** (it relies on `/proc`). On macOS and the
+BSDs it is a `#[deprecated]` stub that never daemonizes: calling it warns with
+guidance (and is a hard compile error under `-D warnings` /
+`#![deny(deprecated)]`), and panics loudly if invoked anyway — so use
+`unsafe { daemonize(&config) }` there and uphold the single-threaded contract
+yourself. For portable code, gate the call so the deprecated path is never
+compiled in:
 
 ```rust
 #[cfg(target_os = "linux")]

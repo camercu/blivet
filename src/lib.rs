@@ -40,9 +40,11 @@
 //!   platforms.
 //! - `daemonize_checked` is a safe wrapper that verifies
 //!   single-threadedness for you by reading `/proc/self/status`. It is
-//!   **Linux-only** (`#[cfg(target_os = "linux")]`) because it depends on
-//!   `/proc`. On macOS, the BSDs, and other Unixes it does not exist, and
-//!   you must call `unsafe { daemonize(&config) }` and uphold the
+//!   **Linux-only** because it depends on `/proc`. On macOS, the BSDs, and
+//!   other Unixes it is a `#[deprecated]` stub that never daemonizes: calling
+//!   it warns with guidance (and is a hard compile error under `-D warnings` /
+//!   `#![deny(deprecated)]`), and panics loudly if invoked anyway. On those
+//!   platforms call `unsafe { daemonize(&config) }` and uphold the
 //!   single-threaded contract yourself.
 //!
 //! For code that must compile on both Linux and other Unixes, gate the
@@ -227,11 +229,14 @@ pub unsafe fn daemonize(config: &DaemonConfig) -> Result<DaemonContext, Daemoniz
 ///
 /// # Platform support
 ///
-/// **Linux only** (`#[cfg(target_os = "linux")]`). This function depends on
-/// `/proc/self/status` to count threads, which other Unixes do not provide.
-/// On macOS, the BSDs, and other platforms this function does not exist; call
-/// [`daemonize`] yourself inside an `unsafe` block and uphold the
-/// single-threaded contract yourself. For portable code, gate the call with
+/// **Linux only.** This function depends on `/proc/self/status` to count
+/// threads, which other Unixes do not provide. On macOS, the BSDs, and other
+/// platforms `daemonize_checked` is a `#[deprecated]` stub that never
+/// daemonizes — calling it warns with guidance (and is a hard compile error
+/// under `-D warnings` / `#![deny(deprecated)]`), and panics loudly if invoked
+/// anyway. On those platforms call [`daemonize`] yourself inside an `unsafe`
+/// block and uphold the single-threaded contract. For portable code, gate the
+/// call with
 /// `#[cfg(target_os = "linux")]` — see the
 /// [crate-level docs](crate#choosing-an-entry-point).
 ///
@@ -265,6 +270,38 @@ pub fn daemonize_checked(config: &DaemonConfig) -> Result<DaemonContext, Daemoni
     unsafe {
         daemonize(config)
     }
+}
+
+/// Non-Linux stub for the Linux-only `daemonize_checked` that exists only to
+/// produce a clear, actionable diagnostic.
+///
+/// The single-threaded check needs `/proc/self/status`, which non-Linux
+/// targets do not provide, so there is no safe wrapper to offer here. Rather
+/// than omit the symbol entirely (which yields a bare "cannot find function
+/// `daemonize_checked`" error that hides *why*), this stub is provided and
+/// marked `#[deprecated]`: using it warns with guidance by default, and is a
+/// hard compile error under `-D warnings` / `#![deny(deprecated)]`.
+///
+/// It never performs an unchecked daemonization. Call
+/// `unsafe { `[`daemonize`]`(&config) }` directly on this platform, ensuring
+/// the process is single-threaded first.
+///
+/// # Panics
+///
+/// Always panics: the operation is unsupported on this target. This fails
+/// loud and fast rather than returning an error that could be ignored.
+#[cfg(not(target_os = "linux"))]
+#[deprecated(
+    note = "daemonize_checked is Linux-only (it needs /proc/self/status). On this \
+            target, call `unsafe { daemonize(&config) }` and ensure the process is \
+            single-threaded yourself."
+)]
+pub fn daemonize_checked(_config: &DaemonConfig) -> Result<DaemonContext, DaemonizeError> {
+    panic!(
+        "daemonize_checked is Linux-only (it needs /proc/self/status); on this \
+         platform call `unsafe {{ daemonize(&config) }}` and ensure the process \
+         is single-threaded yourself"
+    )
 }
 
 /// Internal daemonization logic, generic over the Forker trait for testability.
@@ -461,6 +498,17 @@ mod tests {
     #[test]
     fn both_forks_child_succeeds() {
         run_in_subprocess("tests::both_forks_child_succeeds_subprocess");
+    }
+
+    /// On non-Linux targets the deprecated `daemonize_checked` stub must never
+    /// daemonize: it panics loudly rather than forwarding to unsafe code.
+    #[cfg(not(target_os = "linux"))]
+    #[test]
+    #[should_panic(expected = "daemonize_checked is Linux-only")]
+    fn daemonize_checked_stub_panics_off_linux() {
+        let config = DaemonConfig::new();
+        #[allow(deprecated)]
+        let _ = daemonize_checked(&config);
     }
 
     #[test]
