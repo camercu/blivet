@@ -2,8 +2,6 @@
 
 use std::path::PathBuf;
 
-use nix::sys::stat::Mode;
-
 use crate::error::DaemonizeError;
 use crate::util::paths_same;
 
@@ -40,7 +38,9 @@ use crate::util::paths_same;
 pub struct DaemonConfig {
     pub(crate) pidfile: Option<PathBuf>,
     pub(crate) chdir: PathBuf,
-    pub(crate) umask: Mode,
+    /// Process umask as an octal permission value (`<= 0o7777`). Range is
+    /// enforced by [`validate`](DaemonConfig::validate).
+    pub(crate) umask: u32,
     pub(crate) stdout: Option<PathBuf>,
     pub(crate) stderr: Option<PathBuf>,
     pub(crate) append: bool,
@@ -58,7 +58,7 @@ impl Default for DaemonConfig {
         Self {
             pidfile: None,
             chdir: PathBuf::from("/"),
-            umask: Mode::empty(),
+            umask: 0,
             stdout: None,
             stderr: None,
             append: false,
@@ -97,8 +97,22 @@ impl DaemonConfig {
         self
     }
 
-    /// Sets the process umask. Default: `Mode::empty()` (0).
-    pub fn umask(&mut self, mode: Mode) -> &mut Self {
+    /// Sets the process umask as an octal permission value, e.g. `0o022`.
+    /// Default: `0`.
+    ///
+    /// Takes a plain integer so callers need no third-party type (and no
+    /// matching `nix` version) just to set a umask. The value must fit in the
+    /// 12 permission bits (`<= 0o7777`); larger values are rejected by
+    /// [`validate`](DaemonConfig::validate) with a
+    /// [`ValidationError`](crate::DaemonizeError::ValidationError).
+    ///
+    /// ```
+    /// use blivet::DaemonConfig;
+    ///
+    /// let mut config = DaemonConfig::new();
+    /// config.umask(0o022);
+    /// ```
+    pub fn umask(&mut self, mode: u32) -> &mut Self {
         self.umask = mode;
         self
     }
@@ -288,6 +302,14 @@ impl DaemonConfig {
             }
         }
 
+        // Umask must fit in the 12 permission bits.
+        if self.umask & !0o7777 != 0 {
+            return Err(DaemonizeError::ValidationError(format!(
+                "umask must be <= 0o7777, got {:#o}",
+                self.umask
+            )));
+        }
+
         // Environment key validation
         for (key, _) in &self.env {
             if key.is_empty() {
@@ -363,7 +385,7 @@ mod tests {
         let config = DaemonConfig::default();
         assert_eq!(config.pidfile, None);
         assert_eq!(config.chdir, PathBuf::from("/"));
-        assert_eq!(config.umask, Mode::empty());
+        assert_eq!(config.umask, 0);
         assert_eq!(config.stdout, None);
         assert_eq!(config.stderr, None);
         assert!(!config.append);
@@ -504,6 +526,25 @@ mod tests {
         assert!(matches!(
             config.validate(),
             Err(DaemonizeError::ValidationError(_))
+        ));
+    }
+
+    #[test]
+    fn validate_umask_in_range_ok() {
+        let mut config = DaemonConfig::new();
+        config.umask(0o7777);
+        assert!(
+            !matches!(&config.validate(), Err(DaemonizeError::ValidationError(msg)) if msg.contains("umask"))
+        );
+    }
+
+    #[test]
+    fn validate_umask_out_of_range_rejected() {
+        let mut config = DaemonConfig::new();
+        config.umask(0o10000);
+        assert!(matches!(
+            config.validate(),
+            Err(DaemonizeError::ValidationError(msg)) if msg.contains("umask")
         ));
     }
 

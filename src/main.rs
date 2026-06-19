@@ -4,7 +4,6 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::Parser;
-use nix::sys::stat::Mode;
 
 use blivet::{DaemonConfig, DaemonizeError};
 
@@ -22,7 +21,7 @@ struct Args {
 
     /// Process umask (octal, e.g. 022)
     #[arg(short = 'm', long = "umask", value_parser = parse_octal_mode)]
-    umask: Option<Mode>,
+    umask: Option<u32>,
 
     /// Redirect stdout to file (also sets stderr if --stderr is not given)
     #[arg(short = 'o', long = "stdout")]
@@ -65,9 +64,12 @@ struct Args {
     program: Vec<String>,
 }
 
-fn parse_octal_mode(s: &str) -> Result<Mode, String> {
+fn parse_octal_mode(s: &str) -> Result<u32, String> {
     let bits = u32::from_str_radix(s, 8).map_err(|e| format!("invalid octal umask: {e}"))?;
-    Ok(Mode::from_bits_truncate(bits as libc::mode_t))
+    if bits & !0o7777 != 0 {
+        return Err(format!("umask out of range (max 7777): {s}"));
+    }
+    Ok(bits)
 }
 
 fn parse_env_pair(s: &str) -> (String, String) {
@@ -150,7 +152,7 @@ fn main() -> ExitCode {
             eprintln!("daemonize: chdir={}", p.display());
         }
         if let Some(m) = args.umask {
-            eprintln!("daemonize: umask={:03o}", m.bits());
+            eprintln!("daemonize: umask={m:03o}");
         }
         if let Some(ref p) = args.stdout {
             eprintln!("daemonize: stdout={}", p.display());
@@ -283,20 +285,17 @@ mod tests {
 
     #[test]
     fn parse_octal_mode_valid() {
-        let mode = parse_octal_mode("022").unwrap();
-        assert_eq!(mode.bits(), 0o022);
+        assert_eq!(parse_octal_mode("022").unwrap(), 0o022);
     }
 
     #[test]
     fn parse_octal_mode_zero() {
-        let mode = parse_octal_mode("000").unwrap();
-        assert_eq!(mode.bits(), 0);
+        assert_eq!(parse_octal_mode("000").unwrap(), 0);
     }
 
     #[test]
     fn parse_octal_mode_full() {
-        let mode = parse_octal_mode("777").unwrap();
-        assert_eq!(mode.bits(), 0o777);
+        assert_eq!(parse_octal_mode("7777").unwrap(), 0o7777);
     }
 
     #[test]
@@ -304,6 +303,12 @@ mod tests {
         assert!(parse_octal_mode("999").is_err());
         assert!(parse_octal_mode("abc").is_err());
         assert!(parse_octal_mode("").is_err());
+    }
+
+    #[test]
+    fn parse_octal_mode_out_of_range() {
+        // Valid octal but wider than the 12 permission bits.
+        assert!(parse_octal_mode("10000").is_err());
     }
 
     // --- parse_env_pair ---

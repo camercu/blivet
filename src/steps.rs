@@ -40,8 +40,12 @@ pub(crate) struct OutputRedirectPlan {
 }
 
 /// Step 4: Set process umask.
-pub(crate) fn set_umask(mode: Mode) {
-    nix::sys::stat::umask(mode);
+///
+/// `mode` is an octal permission value (validated `<= 0o7777` by
+/// [`DaemonConfig::validate`](crate::DaemonConfig::validate)); the cast to
+/// `mode_t` is therefore lossless.
+pub(crate) fn set_umask(mode: u32) {
+    nix::sys::stat::umask(Mode::from_bits_truncate(mode as libc::mode_t));
 }
 
 /// Step 5: Change working directory.
@@ -381,7 +385,7 @@ mod tests {
     #[serial]
     fn set_umask_applies_and_can_be_read_back() {
         let old = nix::sys::stat::umask(Mode::from_bits_truncate(0o077));
-        set_umask(Mode::from_bits_truncate(0o022));
+        set_umask(0o022);
         let readback = nix::sys::stat::umask(old); // restore
         assert_eq!(readback, Mode::from_bits_truncate(0o022));
         nix::sys::stat::umask(old); // double-restore

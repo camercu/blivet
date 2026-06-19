@@ -17,11 +17,10 @@ Latest stable Rust, edition 2021. Crate name is `blivet`. License:
 `MIT OR Apache-2.0`; include both `LICENSE-MIT` and `LICENSE-APACHE`
 files.
 
-> The crate exposes `nix::sys::stat::Mode` in the public API (the
-> `umask()` builder). Since nix is pre-1.0 (0.29), this crate must
-> remain pre-1.0 (0.x) until nix stabilizes or `Mode` is removed from
-> the public surface. A newtype wrapper adds friction for users who
-> already depend on nix and provides no safety benefit.
+> The public API exposes no third-party types. `umask()` takes a plain
+> `u32` octal value (range-checked in `validate()`), so callers need no
+> `nix` dependency or version match to set a umask. `nix` types stay
+> internal to the implementation.
 
 Dependencies: nix (0.31, features: `fs`, `signal`, `process`,
 `user`, `resource`), clap, thiserror, libc. Dev: tempfile,
@@ -72,7 +71,7 @@ All fields are private; callers use builder methods.
 | ------------ | ----------------------- | -------------------- | -------------------- | -------------------------- | ----------- |
 | `pidfile`    | `Option<PathBuf>`       | `None`               | `.pidfile(path)`     | `impl Into<PathBuf>`       | Setter      |
 | `chdir`      | `PathBuf`               | `PathBuf::from("/")` | `.chdir(path)`       | `impl Into<PathBuf>`       | Setter      |
-| `umask`      | `nix::sys::stat::Mode`  | `Mode::empty()` (0)  | `.umask(mode)`       | `nix::sys::stat::Mode`     | Setter      |
+| `umask`      | `u32`                   | `0`                  | `.umask(mode)`       | `u32` (octal, `<= 0o7777`) | Setter      |
 | `stdout`     | `Option<PathBuf>`       | `None`               | `.stdout(path)`      | `impl Into<PathBuf>`       | Setter      |
 | `stderr`     | `Option<PathBuf>`       | `None`               | `.stderr(path)`      | `impl Into<PathBuf>`       | Setter      |
 | `append`     | `bool`                  | `false`              | `.append(bool)`      | `bool`                     | Setter      |
@@ -639,8 +638,9 @@ After flags: positional program path (absolute or relative) followed by
 zero or more arguments. Parsed with `trailing_var_arg(true)` +
 `allow_hyphen_values(true)`. `--` accepted but not required.
 
-**`-m`** parses octal via `u32::from_str_radix(s, 8)`, converts to
-`nix::sys::stat::Mode`. Invalid octal is a clap parse error.
+**`-m`** parses octal via `u32::from_str_radix(s, 8)` and passes the
+`u32` to `.umask()`. Invalid octal, or a value wider than `0o7777`, is a
+clap parse error.
 
 **`-E`** splits on the first `=`. Missing `=` means empty value
 (`-E FOO` = `-E FOO=`).

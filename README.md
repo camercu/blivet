@@ -269,7 +269,7 @@ validation is deferred to `validate()`.
 | `pidfile(path)`    | None    | Write PID to file                                     |
 | `lockfile(path)`   | None    | Exclusive flock-based lockfile                        |
 | `chdir(path)`      | `/`     | Working directory                                     |
-| `umask(mode)`      | `0`     | Process umask                                         |
+| `umask(mode)`      | `0`     | Process umask, octal `u32` e.g. `0o022` (`<= 0o7777`) |
 | `stdout(path)`     | None    | Redirect stdout (stays `/dev/null` if unset)          |
 | `stderr(path)`     | None    | Redirect stderr (stays `/dev/null` if unset)          |
 | `append(bool)`     | `false` | Append vs truncate output files                       |
