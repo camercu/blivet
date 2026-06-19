@@ -636,6 +636,44 @@ fn exec_failure_reports_to_parent() {
     );
 }
 
+#[test]
+fn reported_error_after_fork_removes_pidfile() {
+    // A post-fork failure reaches report_error, which _exits and bypasses Drop.
+    // The pidfile (written during daemonize, before the failure) must still be
+    // cleaned up — otherwise a daemon that fails to start strands a stale file.
+    //
+    // Trigger: a script with a missing interpreter passes the pre-fork
+    // executability check but fails execvp with ENOENT (no shell fallback),
+    // yielding ExecFailed (71) via report_error after the pidfile is written.
+    let dir = tempfile::tempdir().unwrap();
+    let script = dir.path().join("script");
+    std::fs::write(&script, "#!/nonexistent/interpreter\n").unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let pidfile = dir.path().join("test.pid");
+
+    let output = daemonize_cmd()
+        .args([
+            "-p",
+            pidfile.to_str().unwrap(),
+            "--",
+            script.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert_eq!(
+        output.status.code(),
+        Some(71),
+        "missing interpreter should exit 71 (ExecFailed), stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        !pidfile.exists(),
+        "report_error must remove the pidfile; found it stranded at {}",
+        pidfile.display()
+    );
+}
+
 // --- Error exit codes per table row (R51) ---
 
 #[test]

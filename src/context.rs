@@ -287,11 +287,19 @@ impl DaemonContext {
     /// Uses `libc::_exit` rather than `std::process::exit` to avoid running
     /// atexit handlers or flushing stdio buffers inherited from the pre-fork
     /// parent, which could cause double-flush corruption or deadlocks.
+    ///
+    /// Because `_exit` bypasses [`Drop`], this replicates the drop-time pidfile
+    /// cleanup itself (gated on
+    /// [`cleanup_on_drop`](crate::DaemonConfig::cleanup_on_drop)): a daemon that
+    /// aborts startup must not leave a stale pidfile behind.
     pub fn report_error(&mut self, err: &DaemonizeError) -> ! {
         if let Some(fd) = self.notify_pipe.take() {
             let mut file = io::BufWriter::new(std::fs::File::from(fd));
             let _ = file.write_all(&crate::notify::error_bytes(err));
             let _ = file.flush();
+        }
+        if self.config.cleanup_on_drop {
+            self.cleanup();
         }
         crate::unsafe_ops::raw_exit(crate::notify::failure_code(err) as i32)
     }
