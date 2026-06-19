@@ -54,15 +54,12 @@ use crate::error::DaemonizeError;
 /// ```
 #[non_exhaustive]
 pub struct DaemonContext {
+    /// The validated config, carried whole. The single source of truth for
+    /// post-daemonization fields (pidfile, user, group, …) rather than
+    /// mirroring each one into a parallel field set.
+    config: DaemonConfig,
     lockfile: Option<Flock<OwnedFd>>,
     notify_pipe: Option<OwnedFd>,
-    pidfile: Option<PathBuf>,
-    lockfile_path: Option<PathBuf>,
-    stdout: Option<PathBuf>,
-    stderr: Option<PathBuf>,
-    user: Option<String>,
-    group: Option<String>,
-    cleanup_on_drop: bool,
     cleaned_up: bool,
 }
 
@@ -85,13 +82,13 @@ impl fmt::Debug for DaemonContext {
                 "notify_pipe",
                 &OptFmt(&self.notify_pipe.as_ref().map(|_| "open")),
             )
-            .field("pidfile", &OptFmt(&self.pidfile))
-            .field("lockfile_path", &OptFmt(&self.lockfile_path))
-            .field("stdout", &OptFmt(&self.stdout))
-            .field("stderr", &OptFmt(&self.stderr))
-            .field("user", &OptFmt(&self.user))
-            .field("group", &OptFmt(&self.group))
-            .field("cleanup_on_drop", &self.cleanup_on_drop)
+            .field("pidfile", &OptFmt(&self.config.pidfile))
+            .field("lockfile_path", &OptFmt(&self.config.lockfile))
+            .field("stdout", &OptFmt(&self.config.stdout))
+            .field("stderr", &OptFmt(&self.config.stderr))
+            .field("user", &OptFmt(&self.config.user))
+            .field("group", &OptFmt(&self.config.group))
+            .field("cleanup_on_drop", &self.config.cleanup_on_drop)
             .finish()
     }
 }
@@ -107,15 +104,9 @@ impl DaemonContext {
         notify_pipe: Option<OwnedFd>,
     ) -> Self {
         Self {
+            config: config.clone(),
             lockfile,
             notify_pipe,
-            pidfile: config.pidfile.clone(),
-            lockfile_path: config.lockfile.clone(),
-            stdout: config.stdout.clone(),
-            stderr: config.stderr.clone(),
-            user: config.user.clone(),
-            group: config.group.clone(),
-            cleanup_on_drop: config.cleanup_on_drop,
             cleaned_up: false,
         }
     }
@@ -135,7 +126,7 @@ impl DaemonContext {
     /// Overrides the value set by
     /// [`DaemonConfig::cleanup_on_drop`](crate::DaemonConfig::cleanup_on_drop).
     pub fn set_cleanup_on_drop(&mut self, cleanup: bool) {
-        self.cleanup_on_drop = cleanup;
+        self.config.cleanup_on_drop = cleanup;
     }
 
     /// Removes the pidfile from disk (best-effort).
@@ -160,7 +151,7 @@ impl DaemonContext {
         }
         self.cleaned_up = true;
 
-        if let Some(ref path) = self.pidfile {
+        if let Some(ref path) = self.config.pidfile {
             let _ = std::fs::remove_file(path);
         }
     }
@@ -179,19 +170,20 @@ impl DaemonContext {
     /// Returns `DaemonizeError::UserNotFound` or `DaemonizeError::GroupNotFound`
     /// if the configured user/group cannot be resolved.
     pub fn chown_paths(&mut self) -> Result<(), DaemonizeError> {
-        if self.user.is_none() && self.group.is_none() {
+        if self.config.user.is_none() && self.config.group.is_none() {
             return Ok(());
         }
 
-        let (uid, gid) = resolve_uid_gid(self.user.as_deref(), self.group.as_deref())?;
+        let (uid, gid) =
+            resolve_uid_gid(self.config.user.as_deref(), self.config.group.as_deref())?;
         let owner = Some(nix::unistd::Uid::from_raw(uid));
         let group = Some(nix::unistd::Gid::from_raw(gid));
 
         let paths: Vec<&PathBuf> = [
-            &self.pidfile,
-            &self.lockfile_path,
-            &self.stdout,
-            &self.stderr,
+            &self.config.pidfile,
+            &self.config.lockfile,
+            &self.config.stdout,
+            &self.config.stderr,
         ]
         .iter()
         .filter_map(|p| p.as_ref())
@@ -237,16 +229,16 @@ impl DaemonContext {
     pub fn drop_privileges(&mut self) -> Result<(), DaemonizeError> {
         use std::ffi::CString;
 
-        if self.user.is_none() && self.group.is_none() {
+        if self.config.user.is_none() && self.config.group.is_none() {
             return Ok(());
         }
 
-        let user_info = match self.user.as_deref() {
+        let user_info = match self.config.user.as_deref() {
             Some(spec) => Some(resolve_user(spec)?),
             None => None,
         };
 
-        let group_gid = match self.group.as_deref() {
+        let group_gid = match self.config.group.as_deref() {
             Some(spec) => Some(resolve_group_gid(spec)?),
             None => None,
         };
@@ -326,7 +318,7 @@ impl Drop for DaemonContext {
             let _ = file.write_all(&crate::notify::unnotified_bytes());
             let _ = file.flush();
         }
-        if self.cleanup_on_drop {
+        if self.config.cleanup_on_drop {
             self.cleanup();
         }
     }
@@ -411,69 +403,26 @@ mod tests {
         buf
     }
 
-    /// Test helper to reduce 9-arg `DaemonContext::new` boilerplate.
-    struct TestCtx {
+    /// Build a context directly from a configured `DaemonConfig` plus the
+    /// optional runtime resources. Mirrors `DaemonContext::new` without a
+    /// parallel field set — tests configure via the real builder.
+    fn ctx(
+        config: &DaemonConfig,
         lockfile: Option<Flock<OwnedFd>>,
         notify_pipe: Option<OwnedFd>,
-        pidfile: Option<PathBuf>,
-        lockfile_path: Option<PathBuf>,
-        stdout: Option<PathBuf>,
-        stderr: Option<PathBuf>,
-        user: Option<String>,
-        group: Option<String>,
-        cleanup_on_drop: bool,
+    ) -> DaemonContext {
+        DaemonContext::new(config, lockfile, notify_pipe)
     }
 
-    impl Default for TestCtx {
-        fn default() -> Self {
-            Self {
-                lockfile: None,
-                notify_pipe: None,
-                pidfile: None,
-                lockfile_path: None,
-                stdout: None,
-                stderr: None,
-                user: None,
-                group: None,
-                cleanup_on_drop: true,
-            }
-        }
-    }
-
-    impl TestCtx {
-        fn build(self) -> DaemonContext {
-            let mut config = DaemonConfig::new();
-            if let Some(ref p) = self.pidfile {
-                config.pidfile(p);
-            }
-            if let Some(ref p) = self.lockfile_path {
-                config.lockfile(p);
-            }
-            if let Some(ref p) = self.stdout {
-                config.stdout(p);
-            }
-            if let Some(ref p) = self.stderr {
-                config.stderr(p);
-            }
-            if let Some(ref u) = self.user {
-                config.user(u);
-            }
-            if let Some(ref g) = self.group {
-                config.group(g);
-            }
-            config.cleanup_on_drop(self.cleanup_on_drop);
-            DaemonContext::new(&config, self.lockfile, self.notify_pipe)
-        }
+    /// Context with all defaults and no runtime resources.
+    fn default_ctx() -> DaemonContext {
+        ctx(&DaemonConfig::new(), None, None)
     }
 
     #[test]
     fn notify_parent_writes_success_byte() {
         let (rd, wr) = make_pipe();
-        let mut ctx = TestCtx {
-            notify_pipe: Some(wr),
-            ..Default::default()
-        }
-        .build();
+        let mut ctx = ctx(&DaemonConfig::new(), None, Some(wr));
         ctx.notify_parent().unwrap();
         assert_eq!(read_pipe(rd), vec![0x00]);
     }
@@ -481,11 +430,7 @@ mod tests {
     #[test]
     fn notify_parent_idempotent() {
         let (_rd, wr) = make_pipe();
-        let mut ctx = TestCtx {
-            notify_pipe: Some(wr),
-            ..Default::default()
-        }
-        .build();
+        let mut ctx = ctx(&DaemonConfig::new(), None, Some(wr));
         ctx.notify_parent().unwrap();
         ctx.notify_parent().unwrap();
     }
@@ -494,11 +439,7 @@ mod tests {
     fn drop_writes_failure_when_not_notified() {
         let (rd, wr) = make_pipe();
         {
-            let _ctx = TestCtx {
-                notify_pipe: Some(wr),
-                ..Default::default()
-            }
-            .build();
+            let _ctx = ctx(&DaemonConfig::new(), None, Some(wr));
         }
 
         let buf = read_pipe(rd);
@@ -513,11 +454,7 @@ mod tests {
     fn drop_no_write_after_notify() {
         let (rd, wr) = make_pipe();
         {
-            let mut ctx = TestCtx {
-                notify_pipe: Some(wr),
-                ..Default::default()
-            }
-            .build();
+            let mut ctx = ctx(&DaemonConfig::new(), None, Some(wr));
             ctx.notify_parent().unwrap();
         }
         assert_eq!(read_pipe(rd), vec![0x00]);
@@ -525,7 +462,7 @@ mod tests {
 
     #[test]
     fn debug_format() {
-        let ctx = TestCtx::default().build();
+        let ctx = default_ctx();
         let debug = format!("{:?}", ctx);
         assert!(
             debug.contains("none"),
@@ -543,7 +480,7 @@ mod tests {
 
     #[test]
     fn notify_parent_noop_without_pipe() {
-        let mut ctx = TestCtx::default().build();
+        let mut ctx = default_ctx();
         assert!(ctx.notify_parent().is_ok());
     }
 
@@ -561,30 +498,26 @@ mod tests {
         )
         .unwrap();
         let flock = Flock::lock(fd, FlockArg::LockExclusiveNonblock).unwrap();
-        let ctx = TestCtx {
-            lockfile: Some(flock),
-            ..Default::default()
-        }
-        .build();
+        let ctx = ctx(&DaemonConfig::new(), Some(flock), None);
         assert!(ctx.lockfile_fd().is_some());
         drop(ctx);
     }
 
     #[test]
     fn lockfile_fd_returns_none_without_lockfile() {
-        let ctx = TestCtx::default().build();
+        let ctx = default_ctx();
         assert!(ctx.lockfile_fd().is_none());
     }
 
     #[test]
     fn drop_privileges_noop_without_user_or_group() {
-        let mut ctx = TestCtx::default().build();
+        let mut ctx = default_ctx();
         assert!(ctx.drop_privileges().is_ok());
     }
 
     #[test]
     fn chown_paths_noop_without_user_or_group() {
-        let mut ctx = TestCtx::default().build();
+        let mut ctx = default_ctx();
         assert!(ctx.chown_paths().is_ok());
     }
 
@@ -593,11 +526,9 @@ mod tests {
         if std::env::var("CI").is_ok() {
             return; // NSS lookups for nonexistent users can hang in CI
         }
-        let mut ctx = TestCtx {
-            user: Some("nonexistent_daemonize_test_user_xyz".into()),
-            ..Default::default()
-        }
-        .build();
+        let mut config = DaemonConfig::new();
+        config.user("nonexistent_daemonize_test_user_xyz");
+        let mut ctx = ctx(&config, None, None);
         let result = ctx.drop_privileges();
         assert!(matches!(
             result,
@@ -610,11 +541,9 @@ mod tests {
         if std::env::var("CI").is_ok() {
             return; // NSS lookups for nonexistent groups can hang in CI
         }
-        let mut ctx = TestCtx {
-            group: Some("nonexistent_daemonize_test_group_xyz".into()),
-            ..Default::default()
-        }
-        .build();
+        let mut config = DaemonConfig::new();
+        config.group("nonexistent_daemonize_test_group_xyz");
+        let mut ctx = ctx(&config, None, None);
         let result = ctx.drop_privileges();
         assert!(matches!(
             result,
@@ -644,16 +573,15 @@ mod tests {
 
     #[test]
     fn context_stores_config_fields() {
-        let ctx = TestCtx {
-            pidfile: Some("/var/run/test.pid".into()),
-            lockfile_path: Some("/var/run/test.lock".into()),
-            stdout: Some("/var/log/test.out".into()),
-            stderr: Some("/var/log/test.err".into()),
-            user: Some("nobody".into()),
-            group: Some("nogroup".into()),
-            ..Default::default()
-        }
-        .build();
+        let mut config = DaemonConfig::new();
+        config
+            .pidfile("/var/run/test.pid")
+            .lockfile("/var/run/test.lock")
+            .stdout("/var/log/test.out")
+            .stderr("/var/log/test.err")
+            .user("nobody")
+            .group("nogroup");
+        let ctx = ctx(&config, None, None);
         let debug = format!("{:?}", ctx);
         assert!(debug.contains("test.pid"));
         assert!(debug.contains("nobody"));
@@ -713,28 +641,32 @@ mod tests {
         assert_eq!(gid, 0);
     }
 
+    /// Config carrying a pidfile, with `cleanup_on_drop` disabled so tests
+    /// control cleanup explicitly.
+    fn pidfile_config(pidfile: impl Into<PathBuf>) -> DaemonConfig {
+        let mut config = DaemonConfig::new();
+        config.pidfile(pidfile).cleanup_on_drop(false);
+        config
+    }
+
     #[test]
     fn chown_paths_skips_nonexistent_files() {
-        let mut ctx = TestCtx {
-            pidfile: Some("/nonexistent_daemonize_test_xyz/test.pid".into()),
-            user: Some("root".into()),
-            cleanup_on_drop: false,
-            ..Default::default()
-        }
-        .build();
+        let mut config = pidfile_config("/nonexistent_daemonize_test_xyz/test.pid");
+        config.user("root");
+        let mut ctx = ctx(&config, None, None);
         assert!(ctx.chown_paths().is_ok());
     }
 
     #[test]
     fn chown_paths_idempotent() {
-        let mut ctx = TestCtx::default().build();
+        let mut ctx = default_ctx();
         assert!(ctx.chown_paths().is_ok());
         assert!(ctx.chown_paths().is_ok());
     }
 
     #[test]
     fn drop_privileges_idempotent_noop() {
-        let mut ctx = TestCtx::default().build();
+        let mut ctx = default_ctx();
         assert!(ctx.drop_privileges().is_ok());
         assert!(ctx.drop_privileges().is_ok());
     }
@@ -759,12 +691,7 @@ mod tests {
         let pidfile = dir.path().join("test.pid");
         std::fs::write(&pidfile, "12345\n").unwrap();
 
-        let mut ctx = TestCtx {
-            pidfile: Some(pidfile.clone()),
-            cleanup_on_drop: false,
-            ..Default::default()
-        }
-        .build();
+        let mut ctx = ctx(&pidfile_config(&pidfile), None, None);
         ctx.cleanup();
         assert!(!pidfile.exists(), "pidfile should be removed after cleanup");
     }
@@ -775,12 +702,7 @@ mod tests {
         let pidfile = dir.path().join("test.pid");
         std::fs::write(&pidfile, "12345\n").unwrap();
 
-        let mut ctx = TestCtx {
-            pidfile: Some(pidfile.clone()),
-            cleanup_on_drop: false,
-            ..Default::default()
-        }
-        .build();
+        let mut ctx = ctx(&pidfile_config(&pidfile), None, None);
         ctx.cleanup();
         ctx.cleanup(); // second call should not panic
         assert!(!pidfile.exists());
@@ -788,22 +710,15 @@ mod tests {
 
     #[test]
     fn cleanup_noop_without_pidfile() {
-        let mut ctx = TestCtx {
-            cleanup_on_drop: false,
-            ..Default::default()
-        }
-        .build();
+        let mut config = DaemonConfig::new();
+        config.cleanup_on_drop(false);
+        let mut ctx = ctx(&config, None, None);
         ctx.cleanup(); // should not panic
     }
 
     #[test]
     fn cleanup_ignores_missing_pidfile() {
-        let mut ctx = TestCtx {
-            pidfile: Some("/nonexistent_xyz/test.pid".into()),
-            cleanup_on_drop: false,
-            ..Default::default()
-        }
-        .build();
+        let mut ctx = ctx(&pidfile_config("/nonexistent_xyz/test.pid"), None, None);
         ctx.cleanup(); // best-effort, should not panic
     }
 
@@ -814,11 +729,9 @@ mod tests {
         std::fs::write(&pidfile, "12345\n").unwrap();
 
         {
-            let _ctx = TestCtx {
-                pidfile: Some(pidfile.clone()),
-                ..Default::default()
-            }
-            .build();
+            let mut config = DaemonConfig::new();
+            config.pidfile(&pidfile); // cleanup_on_drop defaults to true
+            let _ctx = ctx(&config, None, None);
         }
         assert!(!pidfile.exists(), "pidfile should be removed on drop");
     }
@@ -830,12 +743,7 @@ mod tests {
         std::fs::write(&pidfile, "12345\n").unwrap();
 
         {
-            let _ctx = TestCtx {
-                pidfile: Some(pidfile.clone()),
-                cleanup_on_drop: false,
-                ..Default::default()
-            }
-            .build();
+            let _ctx = ctx(&pidfile_config(&pidfile), None, None);
         }
         assert!(
             pidfile.exists(),
@@ -850,12 +758,7 @@ mod tests {
         std::fs::write(&pidfile, "12345\n").unwrap();
 
         {
-            let mut ctx = TestCtx {
-                pidfile: Some(pidfile.clone()),
-                cleanup_on_drop: false,
-                ..Default::default()
-            }
-            .build();
+            let mut ctx = ctx(&pidfile_config(&pidfile), None, None);
             ctx.set_cleanup_on_drop(true);
         }
         assert!(
@@ -872,13 +775,9 @@ mod tests {
         std::fs::write(&pidfile, "12345\n").unwrap();
         std::fs::write(&lockfile_path, "").unwrap();
 
-        let mut ctx = TestCtx {
-            pidfile: Some(pidfile.clone()),
-            lockfile_path: Some(lockfile_path.clone()),
-            cleanup_on_drop: false,
-            ..Default::default()
-        }
-        .build();
+        let mut config = pidfile_config(&pidfile);
+        config.lockfile(&lockfile_path);
+        let mut ctx = ctx(&config, None, None);
         ctx.cleanup();
         assert!(!pidfile.exists(), "pidfile should be removed");
         assert!(
