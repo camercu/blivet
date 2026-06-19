@@ -114,6 +114,66 @@ pub(crate) fn raw_exit(code: i32) -> ! {
     unsafe { libc::_exit(code) }
 }
 
+/// Path to unlink from inside the async-signal-safe cleanup handler.
+///
+/// Set by [`install_pidfile_cleanup_signals`] to a leaked, NUL-terminated C
+/// string that lives for the rest of the process, so the handler can read it
+/// without touching freed memory. The handler only loads this pointer.
+static CLEANUP_PIDFILE: std::sync::atomic::AtomicPtr<libc::c_char> =
+    std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
+
+/// Async-signal-safe handler that removes the pidfile, then re-raises the
+/// signal so the default action (process termination) still runs.
+extern "C" fn pidfile_cleanup_handler(signum: i32) {
+    use std::sync::atomic::Ordering;
+
+    let ptr = CLEANUP_PIDFILE.load(Ordering::Acquire);
+    if !ptr.is_null() {
+        // SAFETY: `ptr` is null or a valid NUL-terminated C string leaked in
+        // `install_pidfile_cleanup_signals` (never freed), so it stays valid
+        // for the life of the process. `unlink` is async-signal-safe.
+        unsafe { libc::unlink(ptr) };
+    }
+    // The disposition was reset to default by SA_RESETHAND before this handler
+    // ran; re-raise so the process terminates with a status reflecting the
+    // signal. `raise` is async-signal-safe.
+    unsafe { libc::raise(signum) };
+}
+
+/// Install [`pidfile_cleanup_handler`] for each signal in `signals`.
+///
+/// Stores `pidfile` (leaked, so it outlives any later free) for the handler to
+/// unlink. Uses `SA_RESETHAND` so the handler runs once and the re-raise hits
+/// the default action. Returns the OS error if `sigaction` fails (e.g. EINVAL
+/// for a signal that cannot be caught, like SIGKILL/SIGSTOP).
+pub(crate) fn install_pidfile_cleanup_signals(
+    pidfile: &std::ffi::CStr,
+    signals: &[i32],
+) -> std::io::Result<()> {
+    use std::sync::atomic::Ordering;
+
+    // Leak a stable copy of the path. Repeated installs leak the prior copy,
+    // a small bounded cost for a rarely-repeated setup call.
+    let leaked: *mut libc::c_char = pidfile.to_owned().into_raw();
+    CLEANUP_PIDFILE.store(leaked, Ordering::Release);
+
+    for &sig in signals {
+        let mut sa: libc::sigaction = unsafe { std::mem::zeroed() };
+        // Coerce to a fn pointer before the usize cast (a bare fn-item cast
+        // trips clippy::fn_to_numeric_cast); sa_sigaction is pointer-sized.
+        let handler = pidfile_cleanup_handler as extern "C" fn(i32);
+        sa.sa_sigaction = handler as usize;
+        unsafe { libc::sigemptyset(&mut sa.sa_mask) };
+        sa.sa_flags = libc::SA_RESETHAND;
+
+        let ret = unsafe { libc::sigaction(sig, &sa, std::ptr::null_mut()) };
+        if ret != 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+    }
+    Ok(())
+}
+
 /// Returns a `BorrowedFd` for `AT_FDCWD`, the sentinel that means
 /// "resolve relative paths against the current working directory."
 pub(crate) fn at_fdcwd() -> std::os::fd::BorrowedFd<'static> {

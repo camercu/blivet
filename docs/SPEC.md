@@ -881,6 +881,12 @@ continues; (2) split-phase with `chown_paths()` → `drop_privileges()`
 - `report_error()`: writes error protocol and calls `_exit()`.
 - All builder methods: what the field controls, default value.
 - `cleanup()`: best-effort, idempotent, standalone lockfiles preserved.
+- `cleanup_on_term_signals()` / `cleanup_on_signals(&[i32])`: opt-in,
+  install async-signal-safe handlers that `unlink` the pidfile and
+  re-raise (SA_RESETHAND) so the default termination action still runs.
+  Library-only — the CLI's `exec` resets handlers. No-op without a
+  pidfile; `ValidationError` on a NUL path or an uncatchable/invalid
+  signal.
 - `set_cleanup_on_drop()`: runtime override for cleanup-on-drop.
 - `DaemonContext`: drop releases lock, writes failure to pipe if
   `notify_parent()` was not called, removes pidfile if

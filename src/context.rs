@@ -1,8 +1,10 @@
 //! Post-daemonization context: parent notification, lockfile management,
 //! privilege dropping, and path ownership.
 
+use std::ffi::CString;
 use std::fmt;
 use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
+use std::os::unix::ffi::OsStrExt;
 use std::path::PathBuf;
 
 use nix::fcntl::Flock;
@@ -155,6 +157,66 @@ impl DaemonContext {
         if let Some(ref path) = self.config.pidfile {
             let _ = std::fs::remove_file(path);
         }
+    }
+
+    /// Installs handlers that remove the pidfile when `SIGINT` or `SIGTERM` is
+    /// delivered, then re-raise so the process still terminates.
+    ///
+    /// Convenience wrapper over [`cleanup_on_signals`](Self::cleanup_on_signals)
+    /// for the common case. This is the supported fix for the fact that
+    /// [`cleanup`](Self::cleanup) does **not** run on signal termination
+    /// (`Drop` is skipped when a signal kills the process), which otherwise
+    /// leaves a stale pidfile after the usual `kill`/Ctrl-C shutdown.
+    ///
+    /// Opt-in: call once after [`daemonize`](crate::daemonize). No-op if no
+    /// pidfile is configured.
+    ///
+    /// # Errors
+    ///
+    /// See [`cleanup_on_signals`](Self::cleanup_on_signals).
+    pub fn cleanup_on_term_signals(&self) -> Result<(), DaemonizeError> {
+        self.cleanup_on_signals(&[libc::SIGINT, libc::SIGTERM])
+    }
+
+    /// Installs async-signal-safe handlers that remove the pidfile when any of
+    /// `signals` is delivered, then restore the default disposition and
+    /// re-raise so the process terminates with a status reflecting the signal.
+    ///
+    /// `signals` are raw signal numbers (e.g. `15` for `SIGTERM`, or
+    /// `libc::SIGTERM` if you depend on `libc`). For the usual termination
+    /// signals prefer [`cleanup_on_term_signals`](Self::cleanup_on_term_signals),
+    /// which needs no signal constants.
+    ///
+    /// The handler does nothing but `unlink` the pidfile and re-raise, so it is
+    /// safe to run from signal context. Only the pidfile is removed; standalone
+    /// lockfiles are left on disk (the flock releases when the process exits).
+    ///
+    /// Opt-in, and **library-only**: it has no effect for the `daemonize` CLI,
+    /// whose `exec` of the target program resets all custom handlers to their
+    /// default disposition. A process that `exec`s must clean up its own
+    /// pidfile.
+    ///
+    /// No-op if no pidfile is configured or `signals` is empty.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DaemonizeError::ValidationError`] if the pidfile path contains
+    /// a NUL byte, or if installing a handler fails — most likely `EINVAL` from
+    /// passing a signal that cannot be caught (`SIGKILL`, `SIGSTOP`) or an
+    /// invalid signal number.
+    pub fn cleanup_on_signals(&self, signals: &[i32]) -> Result<(), DaemonizeError> {
+        let Some(ref pidfile) = self.config.pidfile else {
+            return Ok(());
+        };
+        if signals.is_empty() {
+            return Ok(());
+        }
+        let c_path = CString::new(pidfile.as_os_str().as_bytes()).map_err(|_| {
+            DaemonizeError::ValidationError("pidfile path contains NUL byte".into())
+        })?;
+        crate::unsafe_ops::install_pidfile_cleanup_signals(&c_path, signals).map_err(|e| {
+            DaemonizeError::ValidationError(format!("failed to install signal handler: {e}"))
+        })
     }
 
     /// Changes ownership of all configured path-based resources to the target
@@ -407,6 +469,74 @@ mod tests {
         let mut ctx = ctx(&DaemonConfig::new(), None, Some(NotifyPipe::new(wr)));
         ctx.notify_parent_or_report(); // success path returns normally
         assert_eq!(read_pipe(rd), vec![0x00]);
+    }
+
+    #[test]
+    fn cleanup_on_signals_noop_without_pidfile() {
+        // No pidfile -> nothing to clean -> Ok and no handler installed
+        // (so the test process's SIGTERM disposition is left untouched).
+        let dctx = default_ctx();
+        assert!(dctx.cleanup_on_signals(&[libc::SIGTERM]).is_ok());
+        assert!(dctx.cleanup_on_term_signals().is_ok());
+        // Empty signal list is also a no-op.
+        let dir = tempfile::tempdir().unwrap();
+        let mut cfg = DaemonConfig::new();
+        cfg.pidfile(dir.path().join("x.pid"));
+        assert!(ctx(&cfg, None, None).cleanup_on_signals(&[]).is_ok());
+    }
+
+    #[test]
+    fn cleanup_on_signals_uncatchable_signal_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut cfg = DaemonConfig::new();
+        cfg.pidfile(dir.path().join("x.pid"));
+        // SIGKILL cannot be caught -> sigaction EINVAL -> ValidationError.
+        assert!(matches!(
+            ctx(&cfg, None, None).cleanup_on_signals(&[libc::SIGKILL]),
+            Err(DaemonizeError::ValidationError(_))
+        ));
+    }
+
+    // Installs a real SIGTERM handler and raises it, so it must run in its own
+    // process: it self-spawns a child (via an env marker) that dies from the
+    // signal, then the parent asserts the pidfile was removed by the handler
+    // and the child terminated *via* SIGTERM (proving the re-raise).
+    #[test]
+    fn cleanup_on_signals_removes_pidfile_on_signal() {
+        const PIDFILE_ENV: &str = "__BLIVET_CLEANUP_PIDFILE";
+
+        if let Ok(path) = std::env::var(PIDFILE_ENV) {
+            std::fs::write(&path, "123").unwrap();
+            let mut cfg = DaemonConfig::new();
+            cfg.pidfile(&path);
+            let ctx = ctx(&cfg, None, None);
+            ctx.cleanup_on_signals(&[libc::SIGTERM]).unwrap();
+            nix::sys::signal::raise(nix::sys::signal::Signal::SIGTERM).unwrap();
+            std::thread::sleep(std::time::Duration::from_secs(5));
+            unreachable!("should have been killed by the re-raised SIGTERM");
+        }
+
+        use std::os::unix::process::ExitStatusExt;
+        let dir = tempfile::tempdir().unwrap();
+        let pidfile = dir.path().join("daemon.pid");
+        let exe = std::env::current_exe().unwrap();
+        let status = std::process::Command::new(exe)
+            .arg("--exact")
+            .arg("context::tests::cleanup_on_signals_removes_pidfile_on_signal")
+            .arg("--nocapture")
+            .env(PIDFILE_ENV, &pidfile)
+            .status()
+            .unwrap();
+
+        assert_eq!(
+            status.signal(),
+            Some(libc::SIGTERM),
+            "child should terminate via the re-raised SIGTERM"
+        );
+        assert!(
+            !pidfile.exists(),
+            "handler should have removed the pidfile before re-raising"
+        );
     }
 
     #[test]

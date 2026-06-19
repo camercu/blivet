@@ -224,11 +224,39 @@ config
 When `cleanup_on_drop` is `true` (the default), the pidfile is removed when
 `DaemonContext` is dropped. However, **`Drop` does not run when the process is
 killed by a signal** (`SIGTERM`, `SIGKILL`, etc.) — which is how most daemons
-are stopped. To clean up the pidfile on signal termination, install a signal
-handler that either calls `cleanup()` or lets `DaemonContext` drop.
+are stopped, so the pidfile would be left behind.
 
-The example below uses the [`signal_hook`](https://crates.io/crates/signal-hook)
-crate for the handler; `blivet` does not re-export it, so add it yourself:
+The simplest fix is the built-in `cleanup_on_term_signals()`, which installs
+async-signal-safe handlers that remove the pidfile on `SIGINT`/`SIGTERM` and
+then re-raise so the process still terminates normally:
+
+```rust
+use blivet::{DaemonConfig, daemonize};
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let mut config = DaemonConfig::new();
+    config.pidfile("/var/run/myapp.pid");
+    let mut ctx = unsafe { daemonize(&config)? };
+
+    // Remove the pidfile on SIGINT/SIGTERM (pass custom signal numbers to
+    // `cleanup_on_signals(&[...])` instead, if needed).
+    ctx.cleanup_on_term_signals()?;
+
+    ctx.notify_parent()?;
+    // ... daemon work ...
+    Ok(())
+}
+```
+
+> **Note:** this is library-only. The `daemonize` **CLI** cannot do this: it
+> `exec`s the target program, and `exec` resets all custom signal handlers to
+> their default disposition. A program launched via the CLI must clean up its
+> own pidfile.
+
+If you already run a signal loop (e.g. to drive a graceful shutdown), you can
+instead clear the flag yourself and call `cleanup()` / let `ctx` drop. The
+example below uses the [`signal_hook`](https://crates.io/crates/signal-hook)
+crate for that; `blivet` does not re-export it, so add it yourself:
 
 ```sh
 cargo add signal_hook
@@ -300,6 +328,8 @@ pipe, and config state needed for privilege operations.
 | Method                     | Description                                                  |
 | -------------------------- | ------------------------------------------------------------ |
 | `cleanup()`                | Remove pidfile from disk (best-effort, idempotent)           |
+| `cleanup_on_term_signals()`| Remove pidfile on `SIGINT`/`SIGTERM`, then re-raise (library-only) |
+| `cleanup_on_signals(&[i32])`| Same, for caller-chosen signal numbers                      |
 | `set_cleanup_on_drop(bool)`| Override `cleanup_on_drop` at runtime                        |
 | `chown_paths()`            | Transfer pidfile/lockfile/log ownership to target user/group |
 | `drop_privileges()`        | Switch user/group (`initgroups` + `setgid` + `setuid`)       |
