@@ -225,6 +225,7 @@ use std::os::fd::{AsRawFd, OwnedFd};
 use nix::unistd::ForkResult;
 
 use forker::{Forker, RealForker};
+use notify::NotifyPipe;
 
 /// Daemonize the current process.
 ///
@@ -349,13 +350,13 @@ pub(crate) fn daemonize_inner(
     let foreground = config.foreground;
 
     // Steps 1–3: Fork sequence (skipped in foreground mode)
-    let pipe_wr = if foreground {
+    let mut pipe_wr = if foreground {
         None
     } else {
         // Step 1: Create notification pipe and first fork
         let pipe = forker.create_notification_pipe();
-        let (pipe_rd, pipe_wr) = match pipe {
-            Some((rd, wr)) => (Some(rd), Some(wr)),
+        let (pipe_rd, mut pipe_wr) = match pipe {
+            Some((rd, wr)) => (Some(rd), Some(NotifyPipe::new(wr))),
             None => (None, None),
         };
 
@@ -379,9 +380,8 @@ pub(crate) fn daemonize_inner(
         }
 
         // Step 2: setsid
-        let pipe_wr_ref = &pipe_wr;
         if let Err(e) = forker.setsid() {
-            write_error_to_pipe(pipe_wr_ref, &e);
+            signal_error_to_parent(&mut pipe_wr, &e);
             forker.exit(e.exit_code() as i32);
         }
 
@@ -397,7 +397,7 @@ pub(crate) fn daemonize_inner(
                 // Grandchild continues
             }
             Err(e) => {
-                write_error_to_pipe(pipe_wr_ref, &e);
+                signal_error_to_parent(&mut pipe_wr, &e);
                 forker.exit(e.exit_code() as i32);
             }
         }
@@ -411,7 +411,7 @@ pub(crate) fn daemonize_inner(
             match $result {
                 Ok(val) => val,
                 Err(e) => {
-                    write_error_to_pipe(&pipe_wr, &e);
+                    signal_error_to_parent(&mut pipe_wr, &e);
                     forker.exit(e.exit_code() as i32);
                 }
             }
@@ -469,7 +469,7 @@ pub(crate) fn daemonize_inner(
             skip_fds.push(flock.as_raw_fd());
         }
         if let Some(ref wr) = pipe_wr {
-            skip_fds.push(wr.as_raw_fd());
+            skip_fds.push(wr.as_fd().as_raw_fd());
         }
         steps::close_inherited_fds(&skip_fds);
     }
@@ -493,11 +493,12 @@ fn parent_pipe_reader(rd: OwnedFd, forker: &impl Forker) -> ! {
     }
 }
 
-/// Write error protocol to notification pipe (best-effort).
-fn write_error_to_pipe(pipe_wr: &Option<OwnedFd>, err: &DaemonizeError) {
-    if let Some(ref fd) = pipe_wr {
-        // Write directly via the borrowed fd to avoid consuming the OwnedFd.
-        let _ = nix::unistd::write(fd, &notify::error_bytes(err));
+/// Report a daemonization error to the parent via the notification pipe
+/// (best-effort), consuming the write end if present. Used by the fork-sequence
+/// and post-fork error paths that abort with `forker.exit` immediately after.
+fn signal_error_to_parent(pipe_wr: &mut Option<NotifyPipe>, err: &DaemonizeError) {
+    if let Some(pipe) = pipe_wr.take() {
+        pipe.signal_error(err);
     }
 }
 
@@ -604,17 +605,17 @@ mod tests {
     }
 
     #[test]
-    fn write_error_to_pipe_noop_with_none() {
-        write_error_to_pipe(&None, &DaemonizeError::ForkFailed("test".into()));
+    fn signal_error_to_parent_noop_with_none() {
+        signal_error_to_parent(&mut None, &DaemonizeError::ForkFailed("test".into()));
     }
 
     #[test]
-    fn write_error_to_pipe_writes_protocol() {
+    fn signal_error_to_parent_writes_protocol() {
         let (rd, wr) = nix::unistd::pipe().unwrap();
-        let pipe_wr = Some(wr);
+        let mut pipe_wr = Some(NotifyPipe::new(wr));
         let err = DaemonizeError::ForkFailed("test error".into());
-        write_error_to_pipe(&pipe_wr, &err);
-        drop(pipe_wr);
+        signal_error_to_parent(&mut pipe_wr, &err);
+        assert!(pipe_wr.is_none(), "write end consumed after signalling");
 
         let mut file = std::fs::File::from(rd);
         let mut buf = Vec::new();

@@ -2,7 +2,7 @@
 //! privilege dropping, and path ownership.
 
 use std::fmt;
-use std::io::{self, Write};
+use std::io;
 use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
 use std::path::PathBuf;
 
@@ -11,6 +11,7 @@ use nix::fcntl::Flock;
 use crate::config::DaemonConfig;
 use crate::error::DaemonizeError;
 use crate::identity::ResolvedIdentity;
+use crate::notify::NotifyPipe;
 
 /// Context returned by a successful daemonization.
 ///
@@ -60,7 +61,7 @@ pub struct DaemonContext {
     /// mirroring each one into a parallel field set.
     config: DaemonConfig,
     lockfile: Option<Flock<OwnedFd>>,
-    notify_pipe: Option<OwnedFd>,
+    notify_pipe: Option<NotifyPipe>,
     cleaned_up: bool,
 }
 
@@ -102,7 +103,7 @@ impl DaemonContext {
     pub(crate) fn new(
         config: &DaemonConfig,
         lockfile: Option<Flock<OwnedFd>>,
-        notify_pipe: Option<OwnedFd>,
+        notify_pipe: Option<NotifyPipe>,
     ) -> Self {
         Self {
             config: config.clone(),
@@ -270,10 +271,8 @@ impl DaemonContext {
     /// Returns `io::Error` if writing to the pipe fails.
     #[must_use = "the parent process blocks until notified; ignoring this Result may leave it waiting"]
     pub fn notify_parent(&mut self) -> Result<(), io::Error> {
-        if let Some(fd) = self.notify_pipe.take() {
-            let mut file = io::BufWriter::new(std::fs::File::from(fd));
-            file.write_all(&crate::notify::SUCCESS)?;
-            file.flush()?;
+        if let Some(pipe) = self.notify_pipe.take() {
+            pipe.signal_ready()?;
         }
         Ok(())
     }
@@ -293,10 +292,8 @@ impl DaemonContext {
     /// [`cleanup_on_drop`](crate::DaemonConfig::cleanup_on_drop)): a daemon that
     /// aborts startup must not leave a stale pidfile behind.
     pub fn report_error(&mut self, err: &DaemonizeError) -> ! {
-        if let Some(fd) = self.notify_pipe.take() {
-            let mut file = io::BufWriter::new(std::fs::File::from(fd));
-            let _ = file.write_all(&crate::notify::error_bytes(err));
-            let _ = file.flush();
+        if let Some(pipe) = self.notify_pipe.take() {
+            pipe.signal_error(err);
         }
         if self.config.cleanup_on_drop {
             self.cleanup();
@@ -336,10 +333,8 @@ impl DaemonContext {
 
 impl Drop for DaemonContext {
     fn drop(&mut self) {
-        if let Some(fd) = self.notify_pipe.take() {
-            let mut file = io::BufWriter::new(std::fs::File::from(fd));
-            let _ = file.write_all(&crate::notify::unnotified_bytes());
-            let _ = file.flush();
+        if let Some(pipe) = self.notify_pipe.take() {
+            pipe.signal_unnotified();
         }
         if self.config.cleanup_on_drop {
             self.cleanup();
@@ -369,7 +364,7 @@ mod tests {
     fn ctx(
         config: &DaemonConfig,
         lockfile: Option<Flock<OwnedFd>>,
-        notify_pipe: Option<OwnedFd>,
+        notify_pipe: Option<NotifyPipe>,
     ) -> DaemonContext {
         DaemonContext::new(config, lockfile, notify_pipe)
     }
@@ -382,7 +377,7 @@ mod tests {
     #[test]
     fn notify_parent_writes_success_byte() {
         let (rd, wr) = make_pipe();
-        let mut ctx = ctx(&DaemonConfig::new(), None, Some(wr));
+        let mut ctx = ctx(&DaemonConfig::new(), None, Some(NotifyPipe::new(wr)));
         ctx.notify_parent().unwrap();
         assert_eq!(read_pipe(rd), vec![0x00]);
     }
@@ -390,7 +385,7 @@ mod tests {
     #[test]
     fn notify_parent_idempotent() {
         let (_rd, wr) = make_pipe();
-        let mut ctx = ctx(&DaemonConfig::new(), None, Some(wr));
+        let mut ctx = ctx(&DaemonConfig::new(), None, Some(NotifyPipe::new(wr)));
         ctx.notify_parent().unwrap();
         ctx.notify_parent().unwrap();
     }
@@ -399,7 +394,7 @@ mod tests {
     fn drop_writes_failure_when_not_notified() {
         let (rd, wr) = make_pipe();
         {
-            let _ctx = ctx(&DaemonConfig::new(), None, Some(wr));
+            let _ctx = ctx(&DaemonConfig::new(), None, Some(NotifyPipe::new(wr)));
         }
 
         let buf = read_pipe(rd);
@@ -414,7 +409,7 @@ mod tests {
     fn drop_no_write_after_notify() {
         let (rd, wr) = make_pipe();
         {
-            let mut ctx = ctx(&DaemonConfig::new(), None, Some(wr));
+            let mut ctx = ctx(&DaemonConfig::new(), None, Some(NotifyPipe::new(wr)));
             ctx.notify_parent().unwrap();
         }
         assert_eq!(read_pipe(rd), vec![0x00]);

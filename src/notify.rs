@@ -14,7 +14,67 @@
 //! Centralizing the byte layout here keeps the three writers (success, error,
 //! drop-without-notify) and the single reader from drifting out of sync.
 
+use std::io::{self, Write};
+use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
+
 use crate::error::DaemonizeError;
+
+/// The write end of the parent-readiness notification pipe.
+///
+/// Owns the single act of writing one wire-protocol message (see the module
+/// docs) and closing the pipe. The pipe is **one-shot**: each `signal_*` method
+/// consumes `self`, after which the write end is closed (the parent reads the
+/// message, then EOF).
+///
+/// Holding this in an `Option` lets a caller treat "still `Some`" as "the daemon
+/// has not signalled yet" — which is exactly how [`DaemonContext`] decides, on
+/// drop, whether to report an unnotified exit.
+///
+/// [`DaemonContext`]: crate::DaemonContext
+pub(crate) struct NotifyPipe(OwnedFd);
+
+impl NotifyPipe {
+    /// Wrap the write end of a notification pipe.
+    pub(crate) fn new(fd: OwnedFd) -> Self {
+        NotifyPipe(fd)
+    }
+
+    /// Borrow the underlying fd, e.g. to exempt it from
+    /// [`close_inherited_fds`](crate::steps::close_inherited_fds).
+    pub(crate) fn as_fd(&self) -> BorrowedFd<'_> {
+        self.0.as_fd()
+    }
+
+    /// Signal readiness: write the success byte and close the pipe.
+    ///
+    /// # Errors
+    ///
+    /// Returns `io::Error` if writing to the pipe fails.
+    #[must_use = "the parent process blocks until notified; ignoring this Result may leave it waiting"]
+    pub(crate) fn signal_ready(self) -> io::Result<()> {
+        self.write_all(&SUCCESS)
+    }
+
+    /// Signal a daemonization failure: write the error's exit-code byte and
+    /// message, then close the pipe. Best-effort — write errors are ignored
+    /// because the process is aborting regardless.
+    pub(crate) fn signal_error(self, err: &DaemonizeError) {
+        let _ = self.write_all(&error_bytes(err));
+    }
+
+    /// Signal that the daemon exited without ever calling
+    /// [`notify_parent`](crate::DaemonContext::notify_parent). Best-effort.
+    pub(crate) fn signal_unnotified(self) {
+        let _ = self.write_all(&unnotified_bytes());
+    }
+
+    /// Write all bytes to the pipe and flush, consuming and closing it.
+    fn write_all(self, bytes: &[u8]) -> io::Result<()> {
+        let mut file = io::BufWriter::new(std::fs::File::from(self.0));
+        file.write_all(bytes)?;
+        file.flush()
+    }
+}
 
 /// Exit-code byte written when a [`DaemonContext`](crate::DaemonContext) is
 /// dropped before the daemon signalled readiness.
@@ -70,6 +130,55 @@ pub(crate) fn decode(buf: &[u8]) -> Outcome {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Read;
+
+    /// Create a pipe and return its (read, write) ends.
+    fn make_pipe() -> (OwnedFd, OwnedFd) {
+        nix::unistd::pipe().unwrap()
+    }
+
+    /// Drain the read end to EOF.
+    fn read_pipe(rd: OwnedFd) -> Vec<u8> {
+        let mut buf = Vec::new();
+        std::fs::File::from(rd).read_to_end(&mut buf).unwrap();
+        buf
+    }
+
+    #[test]
+    fn signal_ready_writes_success_byte() {
+        let (rd, wr) = make_pipe();
+        NotifyPipe::new(wr).signal_ready().unwrap();
+        assert_eq!(read_pipe(rd), SUCCESS);
+    }
+
+    #[test]
+    fn signal_error_writes_protocol() {
+        let (rd, wr) = make_pipe();
+        let err = DaemonizeError::ForkFailed("boom".into());
+        NotifyPipe::new(wr).signal_error(&err);
+        assert_eq!(decode(&read_pipe(rd)), decode(&error_bytes(&err)));
+    }
+
+    #[test]
+    fn signal_unnotified_writes_protocol() {
+        let (rd, wr) = make_pipe();
+        NotifyPipe::new(wr).signal_unnotified();
+        assert_eq!(
+            decode(&read_pipe(rd)),
+            Outcome::Failure {
+                code: UNNOTIFIED_CODE as i32,
+                message: "daemon exited without signaling readiness".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn signal_ready_errors_on_closed_reader() {
+        let (rd, wr) = make_pipe();
+        drop(rd); // reader gone: write end sees EPIPE
+        let result = NotifyPipe::new(wr).signal_ready();
+        assert!(result.is_err());
+    }
 
     #[test]
     fn decode_success_byte() {
