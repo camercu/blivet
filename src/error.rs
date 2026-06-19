@@ -62,9 +62,53 @@ pub enum DaemonizeError {
     /// CLI-only: exec of target program failed.
     #[error("exec failed: {0}")]
     ExecFailed(String),
+
+    /// Application-level failure during the privileged init window, reported by
+    /// the caller (e.g. a socket bind or database connect that failed after
+    /// [`daemonize`](crate::daemonize) but before
+    /// [`notify_parent`](crate::DaemonContext::notify_parent)).
+    ///
+    /// Unlike the other variants, this one is meant to be constructed by users
+    /// — typically via [`application`](DaemonizeError::application) — so they
+    /// can surface their own startup errors to the parent through
+    /// [`report_error`](crate::DaemonContext::report_error) with an exit code
+    /// of their choosing. The stored `code` is returned verbatim by
+    /// [`exit_code`](DaemonizeError::exit_code).
+    #[error("application error: {message}")]
+    Application {
+        /// Exit code to report to the parent (typically a `sysexits.h` value).
+        code: u8,
+        /// Human-readable description of the failure.
+        message: String,
+    },
 }
 
 impl DaemonizeError {
+    /// Constructs an [`Application`](DaemonizeError::Application) error with a
+    /// caller-chosen exit `code` and `message`.
+    ///
+    /// Use this to report a failure that happens in the privileged init window
+    /// (after [`daemonize`](crate::daemonize), before
+    /// [`notify_parent`](crate::DaemonContext::notify_parent)) to the parent
+    /// process via [`report_error`](crate::DaemonContext::report_error):
+    ///
+    /// ```no_run
+    /// # use blivet::DaemonizeError;
+    /// # fn bind() -> std::io::Result<()> { Ok(()) }
+    /// // `75` is EX_TEMPFAIL; pick whichever sysexits code fits the failure.
+    /// if let Err(e) = bind() {
+    ///     let err = DaemonizeError::application(75, format!("bind failed: {e}"));
+    ///     // ctx.report_error(&err);
+    ///     # let _ = err;
+    /// }
+    /// ```
+    pub fn application(code: u8, message: impl Into<String>) -> Self {
+        DaemonizeError::Application {
+            code,
+            message: message.into(),
+        }
+    }
+
     /// Returns the `sysexits.h` exit code for this error variant.
     pub fn exit_code(&self) -> u8 {
         match self {
@@ -82,6 +126,7 @@ impl DaemonizeError {
             DaemonizeError::OutputFileError(_) => 73,  // EX_CANTCREAT
             DaemonizeError::ChownError(_) => 73,       // EX_CANTCREAT
             DaemonizeError::ExecFailed(_) => 71,       // EX_OSERR
+            DaemonizeError::Application { code, .. } => *code, // caller-chosen
         }
     }
 }

@@ -293,7 +293,36 @@ impl DaemonContext {
             let _ = file.write_all(&crate::notify::error_bytes(err));
             let _ = file.flush();
         }
-        crate::unsafe_ops::raw_exit(err.exit_code() as i32)
+        crate::unsafe_ops::raw_exit(crate::notify::failure_code(err) as i32)
+    }
+
+    /// Reports an application-level failure to the parent process and exits.
+    ///
+    /// Convenience wrapper over [`report_error`](Self::report_error) for the
+    /// common case of surfacing your own startup error (e.g. a socket bind or
+    /// database connect that failed in the privileged init window) without
+    /// having to construct a [`DaemonizeError`] by hand. Equivalent to
+    /// `self.report_error(&DaemonizeError::application(code, message))`.
+    ///
+    /// `code` is reported to the parent verbatim and used as the process exit
+    /// code; pick a `sysexits.h` value that fits the failure (e.g. `71` for
+    /// `EX_OSERR`, `75` for `EX_TEMPFAIL`).
+    ///
+    /// ```no_run
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let config = blivet::DaemonConfig::new();
+    /// # let mut ctx = unsafe { blivet::daemonize(&config)? };
+    /// let listener = match std::net::TcpListener::bind("0.0.0.0:80") {
+    ///     Ok(l) => l,
+    ///     Err(e) => ctx.report_error_msg(71, format!("bind failed: {e}")),
+    /// };
+    /// # let _ = listener;
+    /// # ctx.notify_parent()?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn report_error_msg(&mut self, code: u8, message: impl Into<String>) -> ! {
+        self.report_error(&DaemonizeError::application(code, message))
     }
 }
 

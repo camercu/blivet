@@ -545,6 +545,15 @@ mod tests {
         );
         assert_eq!(DaemonizeError::ChownError(String::new()).exit_code(), 73);
         assert_eq!(DaemonizeError::ExecFailed(String::new()).exit_code(), 71);
+        // Application errors carry a caller-chosen sysexits code.
+        assert_eq!(
+            DaemonizeError::application(75, "queued").exit_code(),
+            75 // EX_TEMPFAIL, chosen by the caller
+        );
+        assert_eq!(
+            DaemonizeError::application(71, "bind failed").to_string(),
+            "application error: bind failed"
+        );
     }
 
     #[test]
