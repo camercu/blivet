@@ -49,7 +49,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // On Linux you could use the safe `daemonize_checked(&config)?` instead;
     // it is not available on other Unixes, so this example uses the portable
     // `unsafe` entry point. We have spawned no threads yet, so this is sound.
-    #[allow(unused_unsafe)]
     let mut ctx = unsafe { daemonize(&config)? };
 
     // Privileged init phase: bind the listening socket.
@@ -73,6 +72,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         match listener.accept() {
             Ok((stream, peer)) => {
                 println!("connection from {peer}");
+                // The listener is non-blocking; on the BSDs and macOS the
+                // accepted socket inherits that flag, which would make the
+                // blocking reads in handle_client fail with WouldBlock. Reset
+                // it so each connection uses ordinary blocking I/O.
+                if let Err(e) = stream.set_nonblocking(false) {
+                    eprintln!("failed to reset socket to blocking: {e}");
+                    continue;
+                }
                 std::thread::spawn(move || {
                     if let Err(e) = handle_client(stream) {
                         eprintln!("client error: {e}");
