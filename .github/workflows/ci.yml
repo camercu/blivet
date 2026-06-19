@@ -153,6 +153,11 @@ jobs:
             kill "$PID"
             echo "PASS: smoke test on ${{ matrix.os.name }}"
 
+            # Run the library unit tests natively so the daemonize_checked
+            # thread-count path (sysctl on the BSDs) is proven on this OS.
+            cargo test --locked --lib
+            echo "PASS: library tests on ${{ matrix.os.name }}"
+
   # NetBSD 10.1 ships Rust 1.82, below our MSRV (1.85). Cross-compile on the
   # Ubuntu host and run the binary inside the VM.
   netbsd-smoke:
@@ -177,7 +182,10 @@ jobs:
             -C link-arg=--target=x86_64-unknown-netbsd
             -C link-arg=--sysroot=/tmp/netbsd-sysroot
             -C link-arg=-fuse-ld=lld
-        run: cargo build --locked --target x86_64-unknown-netbsd
+        run: |
+          cargo build --locked --target x86_64-unknown-netbsd
+          # Cross-build the library test harness too, to run inside the VM.
+          cargo test --no-run --locked --lib --target x86_64-unknown-netbsd
       - name: Run smoke test in NetBSD VM
         uses: cross-platform-actions/action@v1.0.0
         with:
@@ -199,6 +207,13 @@ jobs:
             kill -0 "$PID" || { echo "FAIL: daemon not running"; exit 1; }
             kill "$PID"
             echo "PASS: smoke test on netbsd"
+
+            # Run the cross-built library test harness to prove the NetBSD
+            # daemonize_checked thread-count path (sysctl KERN_PROC2) at runtime.
+            TESTBIN=$(ls target/x86_64-unknown-netbsd/debug/deps/blivet-* | grep -v '\.d$' | head -1)
+            test -x "$TESTBIN" || { echo "FAIL: test binary not found"; exit 1; }
+            "$TESTBIN" current_thread_count_tracks_live_threads --nocapture
+            echo "PASS: library thread-count test on netbsd"
 
   # OmniOS smoke test disabled: cross-platform-actions/action returns 404
   # downloading OmniOS resources. Re-enable when upstream fixes the issue.
