@@ -255,36 +255,19 @@ impl DaemonConfig {
             validate_parent_writable(p, "lockfile")?;
         }
 
-        // Path overlap checks: lockfile/pidfile must not equal stdout/stderr
-        if let Some(ref lockfile) = self.lockfile {
-            if let Some(ref stdout) = self.stdout {
-                if paths_same(lockfile, stdout) {
-                    return Err(DaemonizeError::ValidationError(
-                        "lockfile and stdout must not be the same path".into(),
-                    ));
-                }
-            }
-            if let Some(ref stderr) = self.stderr {
-                if paths_same(lockfile, stderr) {
-                    return Err(DaemonizeError::ValidationError(
-                        "lockfile and stderr must not be the same path".into(),
-                    ));
-                }
-            }
-        }
-        if let Some(ref pidfile) = self.pidfile {
-            if let Some(ref stdout) = self.stdout {
-                if paths_same(pidfile, stdout) {
-                    return Err(DaemonizeError::ValidationError(
-                        "pidfile and stdout must not be the same path".into(),
-                    ));
-                }
-            }
-            if let Some(ref stderr) = self.stderr {
-                if paths_same(pidfile, stderr) {
-                    return Err(DaemonizeError::ValidationError(
-                        "pidfile and stderr must not be the same path".into(),
-                    ));
+        // Path overlap checks: lockfile/pidfile must not equal stdout/stderr.
+        let overlap_checks = [
+            (&self.lockfile, "lockfile", &self.stdout, "stdout"),
+            (&self.lockfile, "lockfile", &self.stderr, "stderr"),
+            (&self.pidfile, "pidfile", &self.stdout, "stdout"),
+            (&self.pidfile, "pidfile", &self.stderr, "stderr"),
+        ];
+        for (first, first_name, second, second_name) in overlap_checks {
+            if let (Some(first), Some(second)) = (first, second) {
+                if paths_same(first, second) {
+                    return Err(DaemonizeError::ValidationError(format!(
+                        "{first_name} and {second_name} must not be the same path"
+                    )));
                 }
             }
         }
