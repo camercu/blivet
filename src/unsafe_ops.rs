@@ -292,8 +292,15 @@ pub(crate) fn thread_count() -> std::io::Result<usize> {
     if rc != 0 {
         return Err(std::io::Error::last_os_error());
     }
+    // A live process always has at least its own thread, so a zero-size sizing
+    // result is an anomaly, not a real "zero threads". Surface it as an error
+    // rather than Ok(0): daemonize_checked treats an undeterminable count as a
+    // hard failure, which is the safe response to a count it cannot trust.
     if size == 0 {
-        return Ok(0);
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "sysctl(KERN_PROC_SHOW_THREADS) returned no thread records",
+        ));
     }
 
     // Fetch call into a real buffer. `mib[5]` is the number of records the
