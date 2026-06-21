@@ -7,7 +7,6 @@ mod helpers;
 
 use helpers::*;
 use std::process::Command;
-use std::time::Duration;
 
 fn daemonize_cmd() -> Command {
     Command::new(daemonize_bin())
@@ -64,9 +63,9 @@ fn user_switch_sets_uid_and_gid() {
     );
 
     let pid = wait_for_pidfile(&pidfile).expect("pidfile should appear");
-    std::thread::sleep(Duration::from_millis(500));
 
-    // Verify the daemon's UID/GID via ps
+    // The daemon has already dropped privileges and exec'd by the time the
+    // parent exits (above), so its UID/GID are queryable immediately.
     let info = query_process(pid).expect("daemon process should exist");
 
     // Resolve expected UID/GID for testuser
@@ -91,8 +90,8 @@ fn user_switch_sets_uid_and_gid() {
     assert_eq!(info.uid, expected_uid, "daemon UID should match testuser");
     assert_eq!(info.gid, expected_gid, "daemon GID should match testuser");
 
-    // Verify the id output from inside the daemon matches
-    let id_output = std::fs::read_to_string(&env_file).unwrap_or_default();
+    // Verify the id output from inside the daemon matches (poll for it).
+    let id_output = wait_for_file_content(&env_file, &expected_uid.to_string());
     let lines: Vec<&str> = id_output.lines().collect();
     if lines.len() >= 2 {
         assert_eq!(
@@ -151,9 +150,8 @@ fn user_switch_sets_env_vars() {
     );
 
     let pid = wait_for_pidfile(&pidfile).expect("pidfile should appear");
-    std::thread::sleep(Duration::from_millis(500));
-
-    let content = std::fs::read_to_string(&env_file).unwrap_or_default();
+    // Poll for the daemon's output instead of a fixed sleep.
+    let content = wait_for_file_content(&env_file, "USER=testuser");
 
     // R28: USER and LOGNAME should be set to target user
     assert!(
@@ -221,7 +219,10 @@ fn output_file_owned_by_target_user() {
     );
 
     let pid = wait_for_pidfile(&pidfile).expect("pidfile should appear");
-    std::thread::sleep(Duration::from_millis(500));
+    // Poll for the daemon's output instead of a fixed sleep; this also confirms
+    // both redirect files are present before the ownership checks.
+    wait_for_file_content(&stdout_file, "hello");
+    wait_for_file_content(&stderr_file, "err");
 
     // Resolve testuser's UID
     let expected = Command::new("id")
@@ -404,9 +405,17 @@ fn user_switch_sets_supplementary_groups() {
     );
 
     let pid = wait_for_pidfile(&pidfile).expect("pidfile should appear");
-    std::thread::sleep(Duration::from_millis(500));
 
-    let content = std::fs::read_to_string(&groups_file).unwrap_or_default();
+    // Expected groups for testuser. Computed first so we can poll the daemon's
+    // output for them instead of sleeping a fixed interval.
+    let expected = Command::new("id")
+        .args(["-G", "testuser"])
+        .output()
+        .unwrap();
+    let expected_str = String::from_utf8_lossy(&expected.stdout).trim().to_string();
+    let mut exp_groups: Vec<&str> = expected_str.split_whitespace().collect();
+
+    let content = wait_for_file_content(&groups_file, exp_groups.first().copied().unwrap_or(""));
 
     // Should have at least the primary group
     let groups: Vec<&str> = content.split_whitespace().collect();
@@ -415,18 +424,9 @@ fn user_switch_sets_supplementary_groups() {
         "daemon should have at least one group, got: {content}"
     );
 
-    // Get expected groups for testuser
-    let expected = Command::new("id")
-        .args(["-G", "testuser"])
-        .output()
-        .unwrap();
-    let expected_str = String::from_utf8_lossy(&expected.stdout).trim().to_string();
-    let expected_groups: Vec<&str> = expected_str.split_whitespace().collect();
-
     // The daemon's groups should match the expected groups for testuser
     let mut daemon_groups = groups.clone();
     daemon_groups.sort();
-    let mut exp_groups = expected_groups;
     exp_groups.sort();
     assert_eq!(
         daemon_groups, exp_groups,
