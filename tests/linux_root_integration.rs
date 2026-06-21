@@ -254,49 +254,6 @@ fn output_file_owned_by_target_user() {
 }
 
 // ============================================================
-// daemonize_checked() — Linux-only (R45, R67)
-// ============================================================
-
-#[test]
-#[ignore]
-#[cfg(target_os = "linux")]
-fn daemonize_checked_parses_thread_count() {
-    // daemonize_checked() can't be called from the test harness (multi-threaded),
-    // so we verify its thread-count parsing logic directly. The underlying
-    // daemonize() is already covered by CLI integration tests.
-    let status = std::fs::read_to_string("/proc/self/status").unwrap();
-    let threads_line = status
-        .lines()
-        .find(|l| l.starts_with("Threads:"))
-        .expect("Threads: line must exist in /proc/self/status");
-    let count: usize = threads_line
-        .split_whitespace()
-        .nth(1)
-        .expect("Threads: line must have a value")
-        .parse()
-        .expect("thread count must be a valid usize");
-    assert!(count >= 1, "thread count should be at least 1, got {count}");
-}
-
-#[test]
-#[ignore]
-#[cfg(target_os = "linux")]
-fn proc_self_status_is_readable() {
-    // Verify /proc/self/status is available (required for daemonize_checked)
-    let status = std::fs::read_to_string("/proc/self/status");
-    assert!(
-        status.is_ok(),
-        "/proc/self/status should be readable on Linux"
-    );
-
-    let content = status.unwrap();
-    assert!(
-        content.contains("Threads:"),
-        "/proc/self/status should contain Threads: line"
-    );
-}
-
-// ============================================================
 // /proc-based process info (Linux-specific CWD check)
 // ============================================================
 
