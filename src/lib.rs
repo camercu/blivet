@@ -561,9 +561,11 @@ mod tests {
     }
 
     /// The thread count backing `daemonize_checked` must reflect the kernel's
-    /// real thread count. Harness-independent: it only asserts the count *rises*
-    /// when threads are spawned (the test runner contributes its own threads to
-    /// the baseline, so an absolute value cannot be assumed).
+    /// real thread count. Runs in an isolated subprocess: the assertion is
+    /// relative (the count must *rise* by the number of threads spawned), which
+    /// only holds when nothing else changes the count between readings. In the
+    /// normal test run libtest's own worker pool fluctuates, so this must be
+    /// the only test executing — hence the subprocess.
     #[cfg(any(
         target_os = "linux",
         target_os = "macos",
@@ -573,6 +575,22 @@ mod tests {
     ))]
     #[test]
     fn current_thread_count_tracks_live_threads() {
+        run_in_subprocess("tests::current_thread_count_tracks_live_threads_subprocess");
+    }
+
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "freebsd",
+        target_os = "netbsd",
+        target_os = "openbsd"
+    ))]
+    #[test]
+    #[ignore]
+    fn current_thread_count_tracks_live_threads_subprocess() {
+        if !is_subprocess() {
+            return;
+        }
         use std::sync::mpsc;
         use std::sync::{Arc, Barrier};
 
