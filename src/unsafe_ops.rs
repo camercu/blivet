@@ -259,7 +259,7 @@ pub(crate) fn thread_count() -> std::io::Result<usize> {
     if rc != 0 {
         return Err(std::io::Error::last_os_error());
     }
-    Ok((kp.p_nlwps as i64).max(0) as usize)
+    Ok(kp.p_nlwps as usize) // p_nlwps is u64
 }
 
 #[cfg(target_os = "openbsd")]
