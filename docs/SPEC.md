@@ -299,21 +299,32 @@ The library does not accept a program path or call exec.
 ### daemonize_checked()
 
 ```rust
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "freebsd",
+          target_os = "netbsd", target_os = "openbsd"))]
 pub fn daemonize_checked(
     config: &DaemonConfig,
 ) -> Result<DaemonContext, DaemonizeError>
 ```
 
-Safe wrapper. Reads `/proc/self/status`, parses the `Threads:` line.
-If the count exceeds 1, panics with a message naming the problem and
-the fix. If `/proc/self/status` cannot be read or parsed, also panics.
-Then calls `unsafe { daemonize(config) }`.
+Safe wrapper. Reads the current process's thread count, panicking (with
+a message naming the problem and fix) if it exceeds 1 or cannot be
+determined, then calls `unsafe { daemonize(config) }`. The thread count
+source is per-OS:
 
-> On Linux with a single thread, the observation "thread count is 1"
-> is stable: incrementing the count requires an existing thread to call
-> `pthread_create`, but no other thread exists. The check-then-fork
-> sequence has no race.
+| OS      | Source                                                      |
+| ------- | ----------------------------------------------------------- |
+| Linux   | `/proc/self/status` `Threads:` line                         |
+| macOS   | `proc_pidinfo(PROC_PIDTASKINFO)` → `pti_threadnum`          |
+| FreeBSD | `sysctl(KERN_PROC_PID)` → `kinfo_proc.ki_numthreads`        |
+| NetBSD  | `sysctl(KERN_PROC2/KERN_PROC_PID)` → `kinfo_proc2.p_nlwps`  |
+| OpenBSD | `sysctl(KERN_PROC_PID \| KERN_PROC_SHOW_THREADS)`; count = bytes / record |
+
+On any other target it is a `#[deprecated]` stub that panics (no
+thread-count source). All FFI lives in `unsafe_ops`.
+
+> With a single thread, the observation "thread count is 1" is stable:
+> incrementing it requires an existing thread to call `pthread_create`,
+> but no other thread exists. The check-then-fork sequence has no race.
 
 ### validate()
 
@@ -869,8 +880,9 @@ continues; (2) split-phase with `chown_paths()` → `drop_privileges()`
 
 - `daemonize()`: `# Safety` (threading), `# Errors` (all variants),
   `# Panics` (broken-OS conditions). Document foreground mode behavior.
-- `daemonize_checked()`: `# Panics` (thread count > 1, /proc
-  unavailable).
+- `daemonize_checked()`: `# Panics` (thread count > 1, or thread count
+  undeterminable). Document the per-OS thread-count source and the
+  deprecated stub on unsupported targets.
 - `validate()`: `# Errors`.
 - `lockfile_fd()`: CLOEXEC clearing use case, lifetime semantics.
 - `chown_paths()`: must be called while privileged, no-op without
@@ -1033,7 +1045,8 @@ verification points.
 - R84. All builder methods: `&mut self` → `&mut Self`, infallible.
 - R85. `daemonize()` calls `validate()` before forking.
 - R86. `daemonize()` is `pub unsafe fn`.
-- R87. `daemonize_checked()` is `pub fn`, `#[cfg(target_os = "linux")]`.
+- R87. `daemonize_checked()` is `pub fn` on linux/macos/freebsd/netbsd/
+  openbsd; a `#[deprecated]` panic stub on other targets.
 - R88. Crate root: `#![deny(unsafe_code)]`.
 - R89. All `unsafe` blocks confined to `unsafe_ops` module.
 - R90. `daemonize()` delegates to `daemonize_inner()` with
