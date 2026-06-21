@@ -278,7 +278,7 @@ pub unsafe fn daemonize(config: &DaemonConfig) -> Result<DaemonContext, Daemoniz
 
 /// Safe wrapper for [`daemonize`] that verifies the process is single-threaded.
 ///
-/// Counts the threads in the current process and panics if more than one is
+/// Counts the threads in the current process and panics unless exactly one is
 /// running, then calls [`daemonize`]. This upholds the single-threaded
 /// contract for you, so no `unsafe` block is needed.
 ///
@@ -293,8 +293,33 @@ pub unsafe fn daemonize(config: &DaemonConfig) -> Result<DaemonContext, Daemoniz
 ///
 /// # Panics
 ///
-/// Panics if the thread count is greater than 1, or if the thread count cannot
-/// be determined.
+/// Panics if the thread count is anything other than exactly 1, or if the
+/// thread count cannot be determined.
+/// Returns the panic message if `count` is not exactly one thread, else `None`.
+///
+/// `daemonize_checked` requires *exactly* one thread (R45): forking a
+/// multi-threaded process strands the child's non-forking threads with their
+/// locks held forever. Any count other than 1 is a violation — including an
+/// anomalous `0`, which a healthy process can never report and so signals an
+/// unreliable thread-count query. Failing closed there keeps the safety guard
+/// from green-lighting a fork on a count it cannot trust.
+#[cfg(any(
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "freebsd",
+    target_os = "netbsd",
+    target_os = "openbsd"
+))]
+fn single_threaded_violation(count: usize) -> Option<String> {
+    (count != 1).then(|| {
+        format!(
+            "daemonize_checked: {count} threads running (expected 1). \
+             Call daemonize before spawning threads, async runtimes, \
+             or libraries with background threads."
+        )
+    })
+}
+
 #[cfg(any(
     target_os = "linux",
     target_os = "macos",
@@ -305,12 +330,8 @@ pub unsafe fn daemonize(config: &DaemonConfig) -> Result<DaemonContext, Daemoniz
 pub fn daemonize_checked(config: &DaemonConfig) -> Result<DaemonContext, DaemonizeError> {
     let count = thread_count::count()
         .expect("daemonize_checked: cannot determine thread count to verify single-threadedness");
-    if count > 1 {
-        panic!(
-            "daemonize_checked: {count} threads running (expected 1). \
-             Call daemonize before spawning threads, async runtimes, \
-             or libraries with background threads."
-        );
+    if let Some(msg) = single_threaded_violation(count) {
+        panic!("{msg}");
     }
     #[allow(unsafe_code)]
     unsafe {
@@ -532,6 +553,31 @@ mod tests {
     #[test]
     fn both_forks_child_succeeds() {
         run_in_subprocess("tests::both_forks_child_succeeds_subprocess");
+    }
+
+    // Covers: R45
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "freebsd",
+        target_os = "netbsd",
+        target_os = "openbsd"
+    ))]
+    #[test]
+    fn single_threaded_violation_accepts_only_exactly_one() {
+        assert!(
+            single_threaded_violation(1).is_none(),
+            "exactly one thread is the single-threaded case"
+        );
+        assert!(
+            single_threaded_violation(0).is_some(),
+            "an anomalous 0 must fail closed, not green-light a fork"
+        );
+        let msg = single_threaded_violation(2).expect("2 threads is a violation");
+        assert!(
+            msg.contains("2 threads running (expected 1)"),
+            "message should name the count and expectation, got: {msg}"
+        );
     }
 
     #[test]

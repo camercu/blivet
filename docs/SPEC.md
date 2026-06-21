@@ -307,8 +307,11 @@ pub fn daemonize_checked(
 ```
 
 Safe wrapper. Reads the current process's thread count, panicking (with
-a message naming the problem and fix) if it exceeds 1 or cannot be
-determined, then calls `unsafe { daemonize(config) }`. The thread count
+a message naming the problem and fix) unless it is exactly 1, or if it
+cannot be determined, then calls `unsafe { daemonize(config) }`. A count
+other than 1 — including an anomalous 0 a healthy process can never
+report — fails closed rather than forking on an untrusted count. The
+thread count
 source is per-OS:
 
 | OS      | Source                                                      |
@@ -880,7 +883,7 @@ continues; (2) split-phase with `chown_paths()` → `drop_privileges()`
 
 - `daemonize()`: `# Safety` (threading), `# Errors` (all variants),
   `# Panics` (broken-OS conditions). Document foreground mode behavior.
-- `daemonize_checked()`: `# Panics` (thread count > 1, or thread count
+- `daemonize_checked()`: `# Panics` (thread count != 1, or thread count
   undeterminable). Document the per-OS thread-count source and the
   deprecated stub on unsupported targets.
 - `validate()`: `# Errors`.
@@ -993,7 +996,7 @@ verification points.
 - R42. Parent exits 0 when exec succeeds (EOF on pipe).
 - R43. Parent exits non-zero with error message when exec fails.
 - R44. Post-fork errors are reported via parent's stderr, not lost.
-- R45. `daemonize_checked()` panics when thread count > 1.
+- R45. `daemonize_checked()` panics when thread count is not exactly 1.
 - R46. `DaemonConfig` is `Send + Sync`.
 - R47. `DaemonContext` is `Send + Sync`.
 - R48. `DaemonizeError` is `Send + Sync`.
