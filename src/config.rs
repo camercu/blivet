@@ -375,11 +375,13 @@ fn validate_parent_writable(path: &std::path::Path, name: &str) -> Result<(), Da
 mod tests {
     use super::*;
 
+    // Covers: R1
     #[test]
     fn new_equals_default() {
         assert_eq!(DaemonConfig::new(), DaemonConfig::default());
     }
 
+    // Covers: R2, R20, R23
     #[test]
     fn default_values() {
         let config = DaemonConfig::default();
@@ -397,6 +399,7 @@ mod tests {
         assert!(config.env.is_empty());
     }
 
+    // Covers: R84
     #[test]
     fn builder_setters_replace() {
         let mut config = DaemonConfig::new();
@@ -404,6 +407,7 @@ mod tests {
         assert_eq!(config.pidfile, Some(PathBuf::from("/b")));
     }
 
+    // Covers: R3
     #[test]
     fn env_accumulates() {
         let mut config = DaemonConfig::new();
@@ -448,6 +452,7 @@ mod tests {
         ));
     }
 
+    // Covers: R31
     #[test]
     fn validate_pidfile_not_directory() {
         let mut config = DaemonConfig::new();
@@ -503,6 +508,7 @@ mod tests {
         );
     }
 
+    // Covers: R33
     #[test]
     fn validate_lockfile_stdout_overlap_rejected() {
         let dir = tempfile::tempdir().unwrap();
@@ -574,6 +580,7 @@ mod tests {
         assert!(DaemonConfig::new().validate().is_ok());
     }
 
+    // Covers: R49
     #[test]
     fn exit_codes() {
         assert_eq!(
@@ -683,6 +690,7 @@ mod tests {
         }
     }
 
+    // Covers: R46, R47, R48
     #[test]
     fn send_sync() {
         fn assert_send_sync<T: Send + Sync>() {}
@@ -773,12 +781,14 @@ mod tests {
         ));
     }
 
+    // Covers: R83
     #[test]
     fn display_includes_prefix() {
         let err = DaemonizeError::ValidationError("test message".into());
         assert_eq!(err.to_string(), "validation error: test message");
     }
 
+    // Covers: R37, R38
     #[test]
     fn validate_rejects_invalid_config_before_fork() {
         // Verify validate() catches errors that would otherwise only surface post-fork

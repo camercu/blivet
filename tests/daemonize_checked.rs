@@ -21,6 +21,7 @@ use std::thread;
 
 use blivet::DaemonConfig;
 
+// Covers: R45
 #[test]
 fn daemonize_checked_panics_when_not_single_threaded() {
     // Spawn a second thread and keep it parked (alive) so the process has >1

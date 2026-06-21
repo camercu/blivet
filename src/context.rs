@@ -475,6 +475,7 @@ mod tests {
         ctx(&DaemonConfig::new(), None, None)
     }
 
+    // Covers: R40
     #[test]
     fn notify_parent_writes_success_byte() {
         let (rd, wr) = make_pipe();
@@ -567,6 +568,7 @@ mod tests {
         ctx.notify_parent().unwrap();
     }
 
+    // Covers: R41, R117
     #[test]
     fn drop_writes_failure_when_not_notified() {
         let (rd, wr) = make_pipe();
@@ -582,6 +584,7 @@ mod tests {
         );
     }
 
+    // Covers: R118
     #[test]
     fn report_error_removes_pidfile_before_signaling_parent() {
         // Regression for a fork race: the pidfile must be gone by the time the
@@ -686,12 +689,14 @@ mod tests {
         assert!(ctx.lockfile_fd().is_none());
     }
 
+    // Covers: R62
     #[test]
     fn drop_privileges_noop_without_user_or_group() {
         let mut ctx = default_ctx();
         assert!(ctx.drop_privileges().is_ok());
     }
 
+    // Covers: R65
     #[test]
     fn chown_paths_noop_without_user_or_group() {
         let mut ctx = default_ctx();
@@ -728,6 +733,7 @@ mod tests {
         ));
     }
 
+    // Covers: R120
     #[test]
     fn context_stores_config_fields() {
         let mut config = DaemonConfig::new();
@@ -789,6 +795,7 @@ mod tests {
 
     // --- cleanup ---
 
+    // Covers: R72
     #[test]
     fn cleanup_removes_pidfile() {
         let dir = tempfile::tempdir().unwrap();
@@ -800,6 +807,7 @@ mod tests {
         assert!(!pidfile.exists(), "pidfile should be removed after cleanup");
     }
 
+    // Covers: R73
     #[test]
     fn cleanup_idempotent() {
         let dir = tempfile::tempdir().unwrap();
@@ -820,12 +828,14 @@ mod tests {
         ctx.cleanup(); // should not panic
     }
 
+    // Covers: R74
     #[test]
     fn cleanup_ignores_missing_pidfile() {
         let mut ctx = ctx(&pidfile_config("/nonexistent_xyz/test.pid"), None, None);
         ctx.cleanup(); // best-effort, should not panic
     }
 
+    // Covers: R76
     #[test]
     fn drop_cleans_up_when_configured() {
         let dir = tempfile::tempdir().unwrap();
@@ -840,6 +850,7 @@ mod tests {
         assert!(!pidfile.exists(), "pidfile should be removed on drop");
     }
 
+    // Covers: R77
     #[test]
     fn drop_skips_cleanup_when_disabled() {
         let dir = tempfile::tempdir().unwrap();
@@ -855,6 +866,7 @@ mod tests {
         );
     }
 
+    // Covers: R78
     #[test]
     fn set_cleanup_on_drop_overrides_config() {
         let dir = tempfile::tempdir().unwrap();
@@ -871,6 +883,7 @@ mod tests {
         );
     }
 
+    // Covers: R75
     #[test]
     fn cleanup_leaves_standalone_lockfile() {
         let dir = tempfile::tempdir().unwrap();

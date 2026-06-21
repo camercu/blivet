@@ -9,6 +9,7 @@ fn daemonize_cmd() -> Command {
     Command::new(daemonize_bin())
 }
 
+// Covers: R4, R5, R6, R17, R22
 #[test]
 fn happy_path_daemon_is_orphaned_and_in_new_session() {
     let dir = tempfile::tempdir().unwrap();
@@ -61,6 +62,7 @@ fn happy_path_daemon_is_orphaned_and_in_new_session() {
     kill_process(pid);
 }
 
+// Covers: R23
 #[test]
 fn default_cwd_is_root() {
     let dir = tempfile::tempdir().unwrap();
@@ -83,6 +85,7 @@ fn default_cwd_is_root() {
     kill_process(pid);
 }
 
+// Covers: R9
 #[test]
 fn stdout_redirect_writes_output() {
     let dir = tempfile::tempdir().unwrap();
@@ -120,6 +123,7 @@ fn stdout_redirect_writes_output() {
     kill_process(pid);
 }
 
+// Covers: R9
 #[test]
 fn stderr_redirect_writes_output() {
     let dir = tempfile::tempdir().unwrap();
@@ -153,6 +157,7 @@ fn stderr_redirect_writes_output() {
     kill_process(pid);
 }
 
+// Covers: R12, R13
 #[test]
 fn append_mode_preserves_existing_content() {
     let dir = tempfile::tempdir().unwrap();
@@ -190,6 +195,7 @@ fn append_mode_preserves_existing_content() {
     kill_process(pid);
 }
 
+// Covers: R15, R16
 #[test]
 fn lockfile_exclusion_second_instance_fails() {
     let dir = tempfile::tempdir().unwrap();
@@ -230,6 +236,7 @@ fn lockfile_exclusion_second_instance_fails() {
     kill_process(pid);
 }
 
+// Covers: R30, R38
 #[test]
 fn validation_error_nonabsolute_pidfile() {
     let output = daemonize_cmd()
@@ -241,6 +248,7 @@ fn validation_error_nonabsolute_pidfile() {
     assert_eq!(output.status.code(), Some(64));
 }
 
+// Covers: R51, R116
 #[test]
 fn program_not_found_exits_66() {
     let output = daemonize_cmd()
@@ -256,6 +264,7 @@ fn program_not_found_exits_66() {
     );
 }
 
+// Covers: R52
 #[test]
 fn verbose_mode_prints_diagnostics() {
     let dir = tempfile::tempdir().unwrap();
@@ -277,6 +286,7 @@ fn verbose_mode_prints_diagnostics() {
     kill_process(pid);
 }
 
+// Covers: R53
 #[test]
 fn no_verbose_no_diagnostics() {
     let dir = tempfile::tempdir().unwrap();
@@ -298,6 +308,7 @@ fn no_verbose_no_diagnostics() {
     kill_process(pid);
 }
 
+// Covers: R24, R25
 #[test]
 fn env_vars_passed_to_daemon() {
     let dir = tempfile::tempdir().unwrap();
@@ -332,6 +343,7 @@ fn env_vars_passed_to_daemon() {
     kill_process(pid);
 }
 
+// Covers: R14
 #[test]
 fn same_path_stdout_stderr() {
     let dir = tempfile::tempdir().unwrap();
@@ -503,6 +515,7 @@ fn stdout_out_extension_swaps_to_err() {
 
 // --- Relative path resolution (R55) ---
 
+// Covers: R55, R115
 #[test]
 fn relative_path_with_slash_canonicalized() {
     let dir = tempfile::tempdir().unwrap();
@@ -547,6 +560,7 @@ fn relative_path_with_slash_canonicalized() {
 
 // --- Truncate mode (R11) ---
 
+// Covers: R11
 #[test]
 fn truncate_mode_overwrites_existing() {
     let dir = tempfile::tempdir().unwrap();
@@ -585,6 +599,7 @@ fn truncate_mode_overwrites_existing() {
 
 // --- Parent notification timing (R39, R42) ---
 
+// Covers: R39, R42
 #[test]
 fn parent_waits_for_exec_before_exiting() {
     let dir = tempfile::tempdir().unwrap();
@@ -613,6 +628,7 @@ fn parent_waits_for_exec_before_exiting() {
 
 // --- Exec failure reporting (R43, R44) ---
 
+// Covers: R43, R109
 #[test]
 fn exec_failure_reports_to_parent() {
     let dir = tempfile::tempdir().unwrap();
@@ -636,6 +652,7 @@ fn exec_failure_reports_to_parent() {
     );
 }
 
+// Covers: R44
 #[test]
 fn reported_error_after_fork_removes_pidfile() {
     // A post-fork failure reaches report_error, which _exits and bypasses Drop.
@@ -676,6 +693,7 @@ fn reported_error_after_fork_removes_pidfile() {
 
 // --- Error exit codes per table row (R51) ---
 
+// Covers: R32, R51
 #[test]
 fn chdir_nonexistent_exits_71() {
     let output = daemonize_cmd()
@@ -691,6 +709,7 @@ fn chdir_nonexistent_exits_71() {
     );
 }
 
+// Covers: R35, R51
 #[test]
 fn permission_denied_user_switch_without_root_exits_77() {
     // Skip if running as root
@@ -711,6 +730,7 @@ fn permission_denied_user_switch_without_root_exits_77() {
     );
 }
 
+// Covers: R51
 #[test]
 fn lockfile_nonwritable_parent_exits_73_or_64() {
     let output = daemonize_cmd()
@@ -733,6 +753,7 @@ fn lockfile_nonwritable_parent_exits_73_or_64() {
 
 // --- No pidfile when not configured (R18) ---
 
+// Covers: R18
 #[test]
 fn no_pidfile_when_not_configured() {
     let dir = tempfile::tempdir().unwrap();
@@ -773,6 +794,7 @@ fn no_pidfile_when_not_configured() {
 
 // --- Umask flag (R7) ---
 
+// Covers: R21
 #[test]
 fn umask_flag_sets_daemon_umask() {
     let dir = tempfile::tempdir().unwrap();
@@ -816,6 +838,7 @@ fn umask_flag_sets_daemon_umask() {
 
 // --- Env without equals (R36 edge case) ---
 
+// Covers: R36
 #[test]
 fn env_without_equals_sets_empty_value() {
     let dir = tempfile::tempdir().unwrap();
@@ -852,6 +875,7 @@ fn env_without_equals_sets_empty_value() {
 
 // --- Multiple env vars ---
 
+// Covers: R24, R26
 #[test]
 fn multiple_env_vars() {
     let dir = tempfile::tempdir().unwrap();
@@ -894,6 +918,7 @@ fn multiple_env_vars() {
 
 // --- Bare program name uses PATH search ---
 
+// Covers: R56
 #[test]
 fn bare_program_name_uses_path_search() {
     let dir = tempfile::tempdir().unwrap();
@@ -916,6 +941,7 @@ fn bare_program_name_uses_path_search() {
 
 // --- Shared lockfile and pidfile path ---
 
+// Covers: R34, R97
 #[test]
 fn shared_lockfile_pidfile_path() {
     let dir = tempfile::tempdir().unwrap();
@@ -953,6 +979,7 @@ fn shared_lockfile_pidfile_path() {
 
 // --- Pidfile implies lockfile ---
 
+// Covers: R15
 #[test]
 fn pidfile_without_lockfile_enforces_single_instance() {
     let dir = tempfile::tempdir().unwrap();
@@ -988,6 +1015,7 @@ fn pidfile_without_lockfile_enforces_single_instance() {
 
 // --- Hyphen arguments pass through to program ---
 
+// Covers: R111, R112
 #[test]
 fn hyphen_arguments_pass_through() {
     let dir = tempfile::tempdir().unwrap();
@@ -1034,6 +1062,7 @@ fn hyphen_arguments_pass_through() {
 
 // --- Error messages appear on stderr ---
 
+// Covers: R44
 #[test]
 fn error_message_on_stderr() {
     let output = daemonize_cmd()
@@ -1055,6 +1084,7 @@ fn error_message_on_stderr() {
 
 // --- Foreground mode ---
 
+// Covers: R66, R68
 #[test]
 fn foreground_mode_runs_program() {
     let dir = tempfile::tempdir().unwrap();
@@ -1085,6 +1115,7 @@ fn foreground_mode_runs_program() {
     assert!(pidfile.exists(), "pidfile should exist in foreground mode");
 }
 
+// Covers: R66
 #[test]
 fn foreground_mode_no_orphan() {
     let dir = tempfile::tempdir().unwrap();
@@ -1106,6 +1137,7 @@ fn foreground_mode_no_orphan() {
 
 // --- Group flag ---
 
+// Covers: R35, R51
 #[test]
 fn permission_denied_group_switch_without_root_exits_77() {
     // Skip if running as root
@@ -1126,6 +1158,7 @@ fn permission_denied_group_switch_without_root_exits_77() {
     );
 }
 
+// Covers: R35, R51
 #[test]
 fn permission_denied_group_only_without_root_exits_77() {
     // Skip if running as root

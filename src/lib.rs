@@ -567,6 +567,7 @@ mod tests {
         assert!(result.is_err());
     }
 
+    // Covers: R57
     #[test]
     fn first_fork_fails_returns_error() {
         let config = DaemonConfig::new();
@@ -585,6 +586,7 @@ mod tests {
         assert!(result.is_err());
     }
 
+    // Covers: R58
     #[test]
     fn second_fork_fails_exits() {
         let config = DaemonConfig::new();
@@ -637,6 +639,7 @@ mod tests {
         );
     }
 
+    // Covers: R66, R68
     #[test]
     fn foreground_mode_skips_fork() {
         run_in_subprocess("tests::foreground_mode_skips_fork_subprocess");
@@ -656,6 +659,7 @@ mod tests {
         assert!(ctx.lockfile_fd().is_none());
     }
 
+    // Covers: R67
     #[test]
     fn foreground_mode_notify_parent_noop() {
         run_in_subprocess("tests::foreground_mode_notify_parent_noop_subprocess");
@@ -674,6 +678,7 @@ mod tests {
         assert!(ctx.notify_parent().is_ok());
     }
 
+    // Covers: R69
     #[test]
     fn close_fds_false_preserves_fds() {
         run_in_subprocess("tests::close_fds_false_preserves_fds_subprocess");
@@ -703,6 +708,7 @@ mod tests {
         );
     }
 
+    // Covers: R120
     #[test]
     fn context_carries_config_fields() {
         run_in_subprocess("tests::context_carries_config_fields_subprocess");

@@ -21,6 +21,7 @@ fn is_root_on_linux() -> bool {
 // User switching tests (R27, R28, R29, R35)
 // ============================================================
 
+// Covers: R27
 #[test]
 #[ignore]
 fn user_switch_sets_uid_and_gid() {
@@ -109,6 +110,7 @@ fn user_switch_sets_uid_and_gid() {
     kill_process(pid);
 }
 
+// Covers: R28, R29
 #[test]
 #[ignore]
 fn user_switch_sets_env_vars() {
@@ -175,6 +177,7 @@ fn user_switch_sets_env_vars() {
 // Output file ownership after user switch (R10, R82)
 // ============================================================
 
+// Covers: R10, R64
 #[test]
 #[ignore]
 fn output_file_owned_by_target_user() {
@@ -274,6 +277,7 @@ fn proc_based_cwd_query() {
     );
 }
 
+// Covers: R22
 #[test]
 #[ignore]
 #[cfg(target_os = "linux")]
@@ -321,6 +325,7 @@ fn daemon_cwd_via_proc() {
 // User switch with supplementary groups (R27)
 // ============================================================
 
+// Covers: R27, R59
 #[test]
 #[ignore]
 fn user_switch_sets_supplementary_groups() {
@@ -398,6 +403,7 @@ fn user_switch_sets_supplementary_groups() {
 // that the error path works for non-existent users
 // ============================================================
 
+// Covers: R51
 #[test]
 #[ignore]
 fn user_switch_nonexistent_user_fails() {
@@ -424,6 +430,7 @@ fn user_switch_nonexistent_user_fails() {
 // Group switching tests (R61, R70)
 // ============================================================
 
+// Covers: R61
 #[test]
 #[ignore]
 fn group_only_switch_sets_gid() {
@@ -466,6 +473,7 @@ fn group_only_switch_sets_gid() {
     kill_process(pid);
 }
 
+// Covers: R60, R70
 #[test]
 #[ignore]
 fn user_and_group_switch_sets_independent_gid() {
@@ -523,6 +531,7 @@ fn user_and_group_switch_sets_independent_gid() {
     kill_process(pid);
 }
 
+// Covers: R51
 #[test]
 #[ignore]
 fn nonexistent_group_fails_with_exit_67() {
@@ -544,6 +553,7 @@ fn nonexistent_group_fails_with_exit_67() {
     );
 }
 
+// Covers: R63
 #[test]
 #[ignore]
 fn numeric_uid_switch() {
