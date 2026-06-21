@@ -167,3 +167,26 @@ pub(crate) mod null_forker {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use nix::fcntl::{fcntl, FcntlArg, FdFlag};
+    use std::os::fd::AsFd;
+
+    // Covers: R107 — both notification pipe ends are created with O_CLOEXEC, so
+    // the daemon's exec does not leak them to the target program.
+    #[test]
+    fn notification_pipe_ends_have_cloexec() {
+        let (rd, wr) = RealForker
+            .create_notification_pipe()
+            .expect("RealForker creates a pipe");
+        for fd in [rd.as_fd(), wr.as_fd()] {
+            let flags = fcntl(fd, FcntlArg::F_GETFD).expect("F_GETFD");
+            assert!(
+                FdFlag::from_bits_truncate(flags).contains(FdFlag::FD_CLOEXEC),
+                "notification pipe end must have FD_CLOEXEC set"
+            );
+        }
+    }
+}

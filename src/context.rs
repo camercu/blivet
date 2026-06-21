@@ -683,6 +683,42 @@ mod tests {
         drop(ctx);
     }
 
+    // Covers: R54 — dropping the context releases the held flock, so the
+    // lockfile can be re-acquired afterward.
+    #[test]
+    fn drop_releases_lockfile() {
+        use nix::fcntl::{open, Flock, FlockArg, OFlag};
+        use nix::sys::stat::Mode;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.lock");
+        let open_lockfile = || {
+            open(
+                &path,
+                OFlag::O_WRONLY | OFlag::O_CREAT | OFlag::O_CLOEXEC,
+                Mode::from_bits_truncate(0o644),
+            )
+            .unwrap()
+        };
+
+        // Hold the lock inside a context.
+        let flock = Flock::lock(open_lockfile(), FlockArg::LockExclusiveNonblock).unwrap();
+        let ctx = ctx(&DaemonConfig::new(), Some(flock), None);
+
+        // While held, a second exclusive lock on the same file is refused.
+        let held = Flock::lock(open_lockfile(), FlockArg::LockExclusiveNonblock);
+        assert!(held.is_err(), "lock should be held while context is alive");
+        drop(held);
+
+        // Dropping the context releases the lock; it can now be re-acquired.
+        drop(ctx);
+        let reacquired = Flock::lock(open_lockfile(), FlockArg::LockExclusiveNonblock);
+        assert!(
+            reacquired.is_ok(),
+            "lock should be released after the context is dropped"
+        );
+    }
+
     #[test]
     fn lockfile_fd_returns_none_without_lockfile() {
         let ctx = default_ctx();
@@ -835,7 +871,7 @@ mod tests {
         ctx.cleanup(); // best-effort, should not panic
     }
 
-    // Covers: R76
+    // Covers: R19, R76
     #[test]
     fn drop_cleans_up_when_configured() {
         let dir = tempfile::tempdir().unwrap();

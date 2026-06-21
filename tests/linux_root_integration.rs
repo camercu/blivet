@@ -177,7 +177,7 @@ fn user_switch_sets_env_vars() {
 // Output file ownership after user switch (R10, R82)
 // ============================================================
 
-// Covers: R10, R64
+// Covers: R10, R64, R71
 #[test]
 #[ignore]
 fn output_file_owned_by_target_user() {
