@@ -222,6 +222,7 @@ pub(crate) mod unsafe_ops;
 
 mod notify;
 mod steps;
+mod thread_count;
 pub(crate) mod util;
 
 #[cfg(test)]
@@ -272,35 +273,8 @@ pub unsafe fn daemonize(config: &DaemonConfig) -> Result<DaemonContext, Daemoniz
 
 // The OSes where `daemonize_checked` can verify the thread count natively are
 // listed explicitly in each `cfg` below (function-like macros do not expand
-// inside `cfg` attributes): linux, macos, freebsd, netbsd, openbsd.
-
-/// Thread count of the current process. Linux reads `/proc/self/status`; the
-/// other supported targets query the kernel via [`unsafe_ops::thread_count`].
-#[cfg(target_os = "linux")]
-fn current_thread_count() -> std::io::Result<usize> {
-    let status = std::fs::read_to_string("/proc/self/status")?;
-    let line = status
-        .lines()
-        .find(|line| line.starts_with("Threads:"))
-        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidData, "no Threads: line"))?;
-    line.split_whitespace()
-        .nth(1)
-        .and_then(|n| n.parse().ok())
-        .ok_or_else(|| {
-            std::io::Error::new(std::io::ErrorKind::InvalidData, "malformed Threads: line")
-        })
-}
-
-#[cfg(all(
-    not(target_os = "linux"),
-    any(
-        target_os = "macos",
-        target_os = "freebsd",
-        target_os = "netbsd",
-        target_os = "openbsd"
-    )
-))]
-use unsafe_ops::thread_count as current_thread_count;
+// inside `cfg` attributes): linux, macos, freebsd, netbsd, openbsd. The count
+// itself lives in the `thread_count` module.
 
 /// Safe wrapper for [`daemonize`] that verifies the process is single-threaded.
 ///
@@ -329,7 +303,7 @@ use unsafe_ops::thread_count as current_thread_count;
     target_os = "openbsd"
 ))]
 pub fn daemonize_checked(config: &DaemonConfig) -> Result<DaemonContext, DaemonizeError> {
-    let count = current_thread_count()
+    let count = thread_count::count()
         .expect("daemonize_checked: cannot determine thread count to verify single-threadedness");
     if count > 1 {
         panic!(
@@ -558,77 +532,6 @@ mod tests {
     #[test]
     fn both_forks_child_succeeds() {
         run_in_subprocess("tests::both_forks_child_succeeds_subprocess");
-    }
-
-    /// The thread count backing `daemonize_checked` must reflect the kernel's
-    /// real thread count. Runs in an isolated subprocess: the assertion is
-    /// relative (the count must *rise* by the number of threads spawned), which
-    /// only holds when nothing else changes the count between readings. In the
-    /// normal test run libtest's own worker pool fluctuates, so this must be
-    /// the only test executing — hence the subprocess.
-    #[cfg(any(
-        target_os = "linux",
-        target_os = "macos",
-        target_os = "freebsd",
-        target_os = "netbsd",
-        target_os = "openbsd"
-    ))]
-    #[test]
-    fn current_thread_count_tracks_live_threads() {
-        run_in_subprocess("tests::current_thread_count_tracks_live_threads_subprocess");
-    }
-
-    #[cfg(any(
-        target_os = "linux",
-        target_os = "macos",
-        target_os = "freebsd",
-        target_os = "netbsd",
-        target_os = "openbsd"
-    ))]
-    #[test]
-    #[ignore]
-    fn current_thread_count_tracks_live_threads_subprocess() {
-        if !is_subprocess() {
-            return;
-        }
-        use std::sync::mpsc;
-        use std::sync::{Arc, Barrier};
-
-        let base = current_thread_count().expect("thread count should be readable");
-        assert!(
-            base >= 1,
-            "expected at least the calling thread, got {base}"
-        );
-
-        const N: usize = 3;
-        // N workers + this thread all rendezvous on `release`, so the workers
-        // stay alive (blocked) while we re-read the count.
-        let release = Arc::new(Barrier::new(N + 1));
-        let (started_tx, started_rx) = mpsc::channel();
-        let mut handles = Vec::new();
-        for _ in 0..N {
-            let release = Arc::clone(&release);
-            let started_tx = started_tx.clone();
-            handles.push(std::thread::spawn(move || {
-                started_tx.send(()).unwrap();
-                release.wait();
-            }));
-        }
-        for _ in 0..N {
-            started_rx.recv().unwrap(); // all N are now running
-        }
-
-        let with_threads = current_thread_count().expect("thread count should be readable");
-        assert!(
-            with_threads >= base + N,
-            "expected >= {} threads with {N} spawned, got {with_threads}",
-            base + N
-        );
-
-        release.wait();
-        for h in handles {
-            h.join().unwrap();
-        }
     }
 
     #[test]
