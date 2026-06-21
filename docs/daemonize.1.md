@@ -1,6 +1,6 @@
-% DAEMONIZE(1) blivet 0.2.1
+% DAEMONIZE(1) blivet 0.5.0
 %
-% April 2026
+% June 2026
 
 # NAME
 
@@ -204,6 +204,17 @@ Set environment variables and working directory:
               -E DATABASE_URL=postgres://localhost/myapp \
               -E RUST_LOG=info \
               -- /usr/bin/myapp
+
+# NOTES
+
+**daemonize** **exec**(3)s *program*, replacing the process image and resetting
+all signal handlers to their default disposition. Consequently **daemonize**
+cannot remove the PID file when the daemon is terminated by a signal (such as
+the **SIGTERM** a service manager sends to stop it): the PID file outlives the
+process. The supervised program — or the supervisor — is responsible for
+removing the PID file on exit. A program that uses the **blivet** library
+directly does not have this limitation, as it can install its own cleanup
+handler before any **exec**(3).
 
 # SEE ALSO
 
