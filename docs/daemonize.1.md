@@ -1,4 +1,4 @@
-% DAEMONIZE(1) blivet 0.5.0
+% DAEMONIZE(1) blivet @VERSION@
 %
 % June 2026
 

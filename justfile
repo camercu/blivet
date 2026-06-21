@@ -37,9 +37,12 @@ docker-test:
     docker build -t blivet-test .
     docker run --rm --init --privileged blivet-test
 
-# Regenerate manpage from markdown source (requires pandoc)
+# Regenerate manpage from markdown source (requires pandoc).
+# The @VERSION@ placeholder is filled from Cargo.toml's package version, so the
+# man-page version is never hand-maintained.
 manpage:
-    pandoc docs/daemonize.1.md -s -t man -o docs/daemonize.1
+    @version=$(grep -E '^version = ' Cargo.toml | head -1 | sed -E 's/.*"(.*)".*/\1/'); \
+    sed "s/@VERSION@/$version/" docs/daemonize.1.md | pandoc -f markdown -s -t man -o docs/daemonize.1
 
 # Generate code coverage report (requires cargo-llvm-cov)
 coverage:
