@@ -363,9 +363,10 @@ impl DaemonContext {
 
     /// Reports an error to the parent process and exits.
     ///
-    /// Writes the error's exit code byte followed by the `Display` message to
-    /// the notification pipe, then calls `_exit()`. The parent reads this,
-    /// prints the message to stderr, and exits with the code.
+    /// Removes the pidfile, then writes the error's exit code byte followed by
+    /// the `Display` message to the notification pipe, then calls `_exit()`.
+    /// The parent reads this, prints the message to stderr, and exits with the
+    /// code.
     ///
     /// Uses `libc::_exit` rather than `std::process::exit` to avoid running
     /// atexit handlers or flushing stdio buffers inherited from the pre-fork
@@ -376,13 +377,29 @@ impl DaemonContext {
     /// [`cleanup_on_drop`](crate::DaemonConfig::cleanup_on_drop)): a daemon that
     /// aborts startup must not leave a stale pidfile behind.
     pub fn report_error(&mut self, err: &DaemonizeError) -> ! {
-        if let Some(pipe) = self.notify_pipe.take() {
-            pipe.signal_error(err);
-        }
+        let code = self.cleanup_and_signal_error(err);
+        crate::unsafe_ops::raw_exit(code as i32)
+    }
+
+    /// Removes the pidfile, signals the error to the parent, and returns the
+    /// exit code — everything [`report_error`](Self::report_error) does except
+    /// the terminal `_exit`. Split out so the observable sequence is testable
+    /// in-process (calling `report_error` directly would kill the test).
+    ///
+    /// **Order matters:** cleanup runs *before* the parent is signaled. The
+    /// parent unblocking is the synchronization point a caller waits on (e.g.
+    /// the shell that ran `daemonize`, or a test observing the process exit),
+    /// so any side effect that must be visible by then has to happen first.
+    /// Signaling before cleanup let an observer see the parent exit while the
+    /// pidfile was still being removed — a race.
+    fn cleanup_and_signal_error(&mut self, err: &DaemonizeError) -> u8 {
         if self.config.cleanup_on_drop {
             self.cleanup();
         }
-        crate::unsafe_ops::raw_exit(err.exit_code() as i32)
+        if let Some(pipe) = self.notify_pipe.take() {
+            pipe.signal_error(err);
+        }
+        err.exit_code()
     }
 
     /// Reports an application-level failure to the parent process and exits.
@@ -563,6 +580,51 @@ mod tests {
             std::str::from_utf8(&buf[1..]).unwrap(),
             "daemon exited without signaling readiness"
         );
+    }
+
+    #[test]
+    fn report_error_removes_pidfile_before_signaling_parent() {
+        // Regression for a fork race: the pidfile must be gone by the time the
+        // parent is signaled, since an observer (shell/test) wakes on that
+        // signal. Tested in-process via cleanup_and_signal_error (report_error
+        // itself would _exit and kill the test). Real pipe + real tempfile, no
+        // mocks: after signaling, the pidfile is already removed.
+        let dir = tempfile::tempdir().unwrap();
+        let pidfile = dir.path().join("daemon.pid");
+        std::fs::write(&pidfile, "123").unwrap();
+
+        let (rd, wr) = make_pipe();
+        let mut cfg = DaemonConfig::new();
+        cfg.pidfile(&pidfile);
+        let mut ctx = ctx(&cfg, None, Some(NotifyPipe::new(wr)));
+
+        let code = ctx.cleanup_and_signal_error(&DaemonizeError::ExecFailed("boom".into()));
+
+        assert_eq!(code, 71, "ExecFailed maps to exit 71");
+        assert!(
+            !pidfile.exists(),
+            "pidfile must be removed before the parent is signaled"
+        );
+        let buf = read_pipe(rd);
+        assert_eq!(buf[0], 71, "error code byte signaled to parent");
+        assert_eq!(std::str::from_utf8(&buf[1..]).unwrap(), "exec failed: boom");
+    }
+
+    #[test]
+    fn report_error_respects_cleanup_on_drop_disabled() {
+        // With cleanup_on_drop=false the pidfile is intentionally preserved.
+        let dir = tempfile::tempdir().unwrap();
+        let pidfile = dir.path().join("daemon.pid");
+        std::fs::write(&pidfile, "123").unwrap();
+
+        let (_rd, wr) = make_pipe();
+        let mut cfg = DaemonConfig::new();
+        cfg.pidfile(&pidfile).cleanup_on_drop(false);
+        let mut ctx = ctx(&cfg, None, Some(NotifyPipe::new(wr)));
+
+        ctx.cleanup_and_signal_error(&DaemonizeError::ExecFailed("boom".into()));
+
+        assert!(pidfile.exists(), "cleanup_on_drop=false keeps the pidfile");
     }
 
     #[test]
