@@ -343,13 +343,16 @@ impl DaemonContext {
     }
 
     /// Signals readiness like [`notify_parent`](Self::notify_parent), but on
-    /// failure reports the error to the parent and `_exit`s instead of
-    /// returning it.
+    /// failure cleans up and `_exit`s with the `NotifyFailed` code (71) instead
+    /// of returning a `Result`.
     ///
     /// Useful when there is nothing sensible to do on a notify failure but
-    /// surface it upstream and abort — it never returns on error, so it does
-    /// not force the caller to thread a `Result` through `main`. On success it
-    /// returns normally.
+    /// abort — it never returns on error, so the caller need not thread a
+    /// `Result` through `main`. On success it returns normally.
+    ///
+    /// Note: a failed readiness write has already consumed the notification
+    /// pipe (and usually means the parent is gone), so the failure is surfaced
+    /// via the exit status and pidfile cleanup, not a message to the parent.
     pub fn notify_parent_or_report(&mut self) {
         if let Some(pipe) = self.notify_pipe.take() {
             if let Err(e) = pipe.signal_ready() {

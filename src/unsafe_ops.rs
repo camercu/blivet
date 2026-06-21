@@ -265,6 +265,10 @@ pub(crate) fn thread_count() -> std::io::Result<usize> {
 #[cfg(target_os = "openbsd")]
 pub(crate) fn thread_count() -> std::io::Result<usize> {
     let elem = std::mem::size_of::<libc::kinfo_proc>();
+
+    // Sizing call (oldp = null). With KERN_PROC_SHOW_THREADS the kernel emits
+    // one record per thread, but the sizing call may pad the result, so it is
+    // only an upper bound on the buffer to allocate.
     let mut size: libc::size_t = 0;
     let mut mib = [
         libc::CTL_KERN,
@@ -274,14 +278,35 @@ pub(crate) fn thread_count() -> std::io::Result<usize> {
         elem as libc::c_int,
         0,
     ];
-    // First call (oldp = null) returns the total byte size; with
-    // KERN_PROC_SHOW_THREADS the kernel emits one record per thread.
     // SAFETY: standard sizing sysctl call; output pointer is null.
     let rc = unsafe {
         libc::sysctl(
             mib.as_mut_ptr(),
             mib.len() as libc::c_uint,
             std::ptr::null_mut(),
+            &mut size,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    if rc != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    if size == 0 {
+        return Ok(0);
+    }
+
+    // Fetch call into a real buffer. `mib[5]` is the number of records the
+    // buffer can hold; after a successful call `size` is the bytes *actually*
+    // written, so `size / elem` is the exact thread count (no padding).
+    let mut buf = vec![0u8; size];
+    mib[5] = (size / elem) as libc::c_int;
+    // SAFETY: `buf`/`size` are a matching pointer and length.
+    let rc = unsafe {
+        libc::sysctl(
+            mib.as_mut_ptr(),
+            mib.len() as libc::c_uint,
+            buf.as_mut_ptr().cast(),
             &mut size,
             std::ptr::null_mut(),
             0,
