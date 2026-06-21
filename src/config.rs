@@ -621,6 +621,68 @@ mod tests {
         );
     }
 
+    // Covers: R83 — Display messages are lowercase with no trailing punctuation.
+    #[test]
+    fn display_messages_are_lowercase_without_trailing_punctuation() {
+        use std::io::{Error, ErrorKind};
+
+        let variants = [
+            DaemonizeError::ValidationError("detail".into()),
+            DaemonizeError::ProgramNotFound("detail".into()),
+            DaemonizeError::UserNotFound("detail".into()),
+            DaemonizeError::GroupNotFound("detail".into()),
+            DaemonizeError::LockConflict("detail".into()),
+            DaemonizeError::LockfileError("detail".into()),
+            DaemonizeError::ForkFailed("detail".into()),
+            DaemonizeError::SetsidFailed("detail".into()),
+            DaemonizeError::ChdirFailed("detail".into()),
+            DaemonizeError::PermissionDenied("detail".into()),
+            DaemonizeError::PidfileError("detail".into()),
+            DaemonizeError::OutputFileError("detail".into()),
+            DaemonizeError::ChownError("detail".into()),
+            DaemonizeError::ExecFailed("detail".into()),
+            DaemonizeError::NotifyFailed(Error::from(ErrorKind::BrokenPipe)),
+            DaemonizeError::application(71, "detail"),
+        ];
+
+        // Exhaustiveness guard: adding a variant breaks compilation here,
+        // forcing it to be added to `variants` above and re-checked.
+        fn assert_all_variants_listed(e: &DaemonizeError) {
+            match e {
+                DaemonizeError::ValidationError(_)
+                | DaemonizeError::ProgramNotFound(_)
+                | DaemonizeError::UserNotFound(_)
+                | DaemonizeError::GroupNotFound(_)
+                | DaemonizeError::LockConflict(_)
+                | DaemonizeError::LockfileError(_)
+                | DaemonizeError::ForkFailed(_)
+                | DaemonizeError::SetsidFailed(_)
+                | DaemonizeError::ChdirFailed(_)
+                | DaemonizeError::PermissionDenied(_)
+                | DaemonizeError::PidfileError(_)
+                | DaemonizeError::OutputFileError(_)
+                | DaemonizeError::ChownError(_)
+                | DaemonizeError::ExecFailed(_)
+                | DaemonizeError::NotifyFailed(_)
+                | DaemonizeError::Application { .. } => {}
+            }
+        }
+
+        for v in &variants {
+            assert_all_variants_listed(v);
+            let msg = v.to_string();
+            let first = msg.chars().next().expect("message is non-empty");
+            assert!(
+                !first.is_ascii_uppercase(),
+                "message must start lowercase, got: {msg:?}"
+            );
+            assert!(
+                !msg.ends_with(['.', '!', '?']),
+                "message must not end with punctuation, got: {msg:?}"
+            );
+        }
+    }
+
     #[test]
     fn send_sync() {
         fn assert_send_sync<T: Send + Sync>() {}
