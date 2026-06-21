@@ -9,7 +9,7 @@ fn daemonize_cmd() -> Command {
     Command::new(daemonize_bin())
 }
 
-// Covers: R4, R5, R6, R17, R22
+// Covers: R4, R5, R6, R17, R22, R50
 #[test]
 fn happy_path_daemon_is_orphaned_and_in_new_session() {
     let dir = tempfile::tempdir().unwrap();
@@ -236,7 +236,7 @@ fn lockfile_exclusion_second_instance_fails() {
     kill_process(pid);
 }
 
-// Covers: R30, R38
+// Covers: R30, R38, R85, R113
 #[test]
 fn validation_error_nonabsolute_pidfile() {
     let output = daemonize_cmd()
@@ -248,7 +248,7 @@ fn validation_error_nonabsolute_pidfile() {
     assert_eq!(output.status.code(), Some(64));
 }
 
-// Covers: R51, R116
+// Covers: R51, R113, R116
 #[test]
 fn program_not_found_exits_66() {
     let output = daemonize_cmd()
@@ -599,7 +599,7 @@ fn truncate_mode_overwrites_existing() {
 
 // --- Parent notification timing (R39, R42) ---
 
-// Covers: R39, R42
+// Covers: R39, R42, R108
 #[test]
 fn parent_waits_for_exec_before_exiting() {
     let dir = tempfile::tempdir().unwrap();

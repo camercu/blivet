@@ -427,6 +427,7 @@ mod tests {
 
     // --- clear_cloexec ---
 
+    // Covers: R110
     #[test]
     fn clear_cloexec_removes_flag() {
         use nix::fcntl::{fcntl, open, FcntlArg, FdFlag, OFlag};

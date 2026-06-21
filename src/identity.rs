@@ -119,6 +119,7 @@ fn resolve_group_gid(spec: &str) -> Result<Gid, DaemonizeError> {
 mod tests {
     use super::*;
 
+    // Covers: R63
     #[test]
     fn resolve_user_numeric() {
         // UID 0 should resolve to root on all Unix systems
@@ -127,6 +128,7 @@ mod tests {
         assert_eq!(user.name, "root");
     }
 
+    // Covers: R59
     #[test]
     fn resolve_user_name() {
         let user = resolve_user("root").unwrap();
@@ -156,6 +158,7 @@ mod tests {
         assert!(result.is_ok());
     }
 
+    // Covers: R51
     #[test]
     fn resolve_group_gid_nonexistent_name() {
         if std::env::var("CI").is_ok() {
@@ -174,6 +177,7 @@ mod tests {
         assert_eq!(gid.unwrap().as_raw(), 0); // root's primary group
     }
 
+    // Covers: R62
     #[test]
     fn chown_ids_neither_leaves_unchanged() {
         // Neither configured: both positions None (leave unchanged).
@@ -181,6 +185,7 @@ mod tests {
         assert_eq!(id.chown_ids(), (None, None));
     }
 
+    // Covers: R61
     #[test]
     fn chown_ids_group_only_numeric() {
         // Group only: owner unchanged, group set to the numeric GID.

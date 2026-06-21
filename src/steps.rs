@@ -414,6 +414,7 @@ mod tests {
 
     // --- Step 6: redirect to /dev/null ---
 
+    // Covers: R7, R8
     #[test]
     #[serial]
     fn redirect_to_devnull_succeeds() {
@@ -421,6 +422,7 @@ mod tests {
         redirect_to_devnull(true);
     }
 
+    // Covers: R7
     #[test]
     #[serial]
     fn redirect_to_devnull_foreground_preserves_stdout_stderr() {
@@ -448,6 +450,7 @@ mod tests {
 
     // --- Step 7: open and lock ---
 
+    // Covers: R96
     #[test]
     fn open_and_lock_creates_and_locks() {
         let dir = tempfile::tempdir().unwrap();
@@ -496,6 +499,7 @@ mod tests {
     #[test]
     #[serial]
     #[allow(unsafe_code)]
+    // Covers: R99
     fn reset_signal_dispositions_restores_default() {
         use nix::sys::signal::{sigaction, SaFlags, SigAction, SigHandler, SigSet, Signal};
 
@@ -667,6 +671,7 @@ mod tests {
 
     // --- Step 12: redirect output (executor smoke tests, serial) ---
 
+    // Covers: R98
     #[test]
     #[serial]
     fn execute_redirect_creates_files() {
@@ -743,6 +748,7 @@ mod tests {
 
     // --- Step 13: close inherited fds (pure plan tests) ---
 
+    // Covers: R104
     #[test]
     fn fds_to_close_skips_correctly() {
         let result: Vec<i32> = fds_to_close(10, &[4, 7]).collect();
@@ -777,6 +783,7 @@ mod tests {
     // So this test runs #[ignore] and is spawned in isolation via
     // crate::test_support::run_in_subprocess.
 
+    // Covers: R103, R104
     #[test]
     fn close_inherited_fds_preserves_skipped() {
         if std::env::var("CI").is_ok() {
