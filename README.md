@@ -155,7 +155,7 @@ single-threaded before forking — no `unsafe` needed:
 use blivet::{DaemonConfig, daemonize_checked};
 
 let config = DaemonConfig::new();
-let mut ctx = daemonize_checked(&config)?; // panics if threads > 1
+let mut ctx = daemonize_checked(&config)?; // panics unless exactly 1 thread
 ctx.notify_parent()?;
 ```
 
