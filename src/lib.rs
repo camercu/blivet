@@ -97,7 +97,8 @@
 //!
 //! # Output and the working directory
 //!
-//! Two defaults surprise newcomers:
+//! Two defaults match standard daemon behavior (as in `daemonize(1)`), worth
+//! keeping in mind:
 //!
 //! - **stdout/stderr go to `/dev/null` by default.** A `println!` after
 //!   daemonizing vanishes silently. To capture output, set

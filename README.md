@@ -165,9 +165,10 @@ ctx.notify_parent()?;                // tell the launcher we're up; it exits 0
 // daemon runs here
 ```
 
-A fuller setup -- lock file, log redirection, working directory. Note the two
-surprising defaults: stdout/stderr go to `/dev/null` and the working directory
-becomes `/`, so use absolute paths and redirect output you want to keep:
+A fuller setup -- lock file, log redirection, working directory. As with
+`daemonize(1)`, the defaults are standard daemon behavior: stdout/stderr go to
+`/dev/null` and the working directory becomes `/`, so use absolute paths and
+redirect any output you want to keep:
 
 ```rust
 use blivet::{DaemonConfig, daemonize};
