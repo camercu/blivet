@@ -38,22 +38,27 @@ real-time signal iteration.
 
 ## Unsafe boundary
 
-The crate root uses `#![deny(unsafe_code)]`. All `unsafe` blocks are
-confined to a single internal `unsafe_ops` module marked with
-`#![allow(unsafe_code)]`. This module re-exports safe `pub(crate)`
-wrapper functions. An auditor can read one module to verify all unsafe
-code.
+The crate root uses `#![deny(unsafe_code)]`; modules opt back in locally
+with `#[allow(unsafe_code)]` only where required. Raw libc/syscall FFI is
+concentrated in one internal `unsafe_ops` module that exposes safe
+`pub(crate)` wrappers, so the rest of the crate calls them without writing
+`unsafe`.
 
-Contents of `unsafe_ops`:
+`unsafe` appears in exactly three places:
 
-- `RealForker` implementation (calls `nix::unistd::fork()`, which is
-  `unsafe` since nix 0.24).
-- Real-time signal reset loop (`libc::sigaction()`).
-- `libc::SIGRTMAX()` / `libc::SIGRTMIN()` wrappers.
+- `unsafe_ops`: the FFI wrappers — signal reset (`libc::sigaction()`,
+  including the real-time signal range via `libc::SIGRTMIN()`/
+  `SIGRTMAX()`), `close()`, `initgroups()`, `setenv`/`unsetenv`,
+  `_exit()`, `unlink()`, `raise()`, and the per-OS thread-count queries.
+- `forker.rs`: `RealForker::fork` is an `unsafe fn` wrapping
+  `nix::unistd::fork()` (`unsafe` since nix 0.24); `daemonize_inner`
+  invokes it as `unsafe { forker.fork() }`.
+- `lib.rs`: `daemonize_unchecked()` is a public `unsafe fn` (its unsafety
+  is a caller contract, not an `unsafe` block in the body), and the safe
+  `daemonize()` calls it via `unsafe { daemonize_unchecked(config) }`.
 
-Nothing else in the crate contains `unsafe` blocks. The public
-`daemonize_unchecked()` function is `unsafe fn` (see below); its unsafety
-is a caller contract, not an `unsafe` block in the implementation.
+Test code additionally uses `nix::sys::signal::sigaction`. An auditor who
+reads these sites sees every `unsafe` in the crate.
 
 ---
 
@@ -283,7 +288,7 @@ forking on an untrusted count. The thread count source is per-OS:
 | OpenBSD | `sysctl(KERN_PROC_PID \| KERN_PROC_SHOW_THREADS)`; count = bytes / record |
 
 On any other target it is a `#[deprecated]` stub that panics (no
-thread-count source). All FFI lives in `unsafe_ops`.
+thread-count source). The thread-count FFI lives in `unsafe_ops`.
 
 > With a single thread, the observation "thread count is 1" is stable:
 > incrementing it requires an existing thread to call `pthread_create`,
@@ -801,7 +806,8 @@ pub(crate) trait Forker {
 ```
 
 `daemonize()` delegates to `daemonize_inner(&DaemonConfig, &mut impl
-Forker)`. `RealForker` wraps nix/libc calls (in `unsafe_ops`).
+Forker)`. `RealForker` (in `forker.rs`) wraps the real `fork`/`setsid`/pipe
+syscalls.
 `NullForker` exists only under `#[cfg(test)]` with configurable fork
 results and error flags. `NullForker::create_notification_pipe()`
 returns `None` (pipe is skipped; the parent branch exits immediately).
@@ -1056,7 +1062,9 @@ verification points.
 - R87. `daemonize()` is `pub fn` on linux/macos/freebsd/netbsd/
   openbsd; a `#[deprecated]` panic stub on other targets.
 - R88. Crate root: `#![deny(unsafe_code)]`.
-- R89. All `unsafe` blocks confined to `unsafe_ops` module.
+- R89. Raw FFI is concentrated in `unsafe_ops`; the only `unsafe` outside
+  it is the `fork()` call in `forker.rs` and `daemonize_unchecked` / its
+  call sites in `lib.rs`.
 - R90. `daemonize()` delegates to `daemonize_inner()` with
   `&mut impl Forker`.
 - R91. `Forker` is `pub(crate)`, invisible to consumers.
