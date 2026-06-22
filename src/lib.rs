@@ -77,23 +77,32 @@
 //! # Threads and async runtimes
 //!
 //! Daemonizing forks, and forking a multithreaded process is unsound:
-//! mutexes held by other threads stay locked forever in the child. The
-//! single-threaded requirement therefore applies **only at fork time**:
+//! mutexes held by other threads stay locked forever in the child. A second
+//! thread-unsafe step follows:
+//! [`drop_privileges`](DaemonContext::drop_privileges) calls `setenv`
+//! (`USER`/`HOME`/`LOGNAME`) when switching users. The single-threaded window
+//! therefore runs from the fork through the last `setenv` — i.e. through
+//! `drop_privileges()`:
 //!
 //! ```text
 //! [single-threaded required]
 //!   daemonize() / daemonize_unchecked() <- forks here
 //!   chown_paths()                        <- still single-threaded
-//!   drop_privileges()                    <- still single-threaded (calls setenv)
-//!   notify_parent()
+//!   drop_privileges()                    <- last unsafe step: setenv (USER/HOME/LOGNAME)
 //! [now safe to spawn threads / start tokio / accept connections]
+//!   notify_parent()                      <- thread-safe; writes one byte to the pipe
 //! ```
 //!
+//! Both guards check for you and panic if violated: [`daemonize`] at the fork,
+//! [`drop_privileges`](DaemonContext::drop_privileges) at its `setenv` (when a
+//! user is configured). [`daemonize_unchecked`] and
+//! [`drop_privileges_unchecked`](DaemonContext::drop_privileges_unchecked) are
+//! the `unsafe` opt-outs.
+//!
 //! Spawn threads, start an async runtime, or begin a thread-per-connection
-//! accept loop **after** [`notify_parent`](DaemonContext::notify_parent).
-//! Do not spawn threads between [`daemonize`] and
-//! [`drop_privileges`](DaemonContext::drop_privileges): the latter calls
-//! `setenv`, which is not thread-safe.
+//! accept loop **after** `drop_privileges()` returns — or after [`daemonize`]
+//! returns if you don't switch users.
+//! [`notify_parent`](DaemonContext::notify_parent) itself is thread-safe.
 //!
 //! # Output and the working directory
 //!

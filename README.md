@@ -259,25 +259,29 @@ config
 ## Safety: the single-threaded rule
 
 Forking a multithreaded process is unsound: mutexes held by other threads stay
-locked forever in the child, deadlocking it. So daemonization must happen
-*before* you spawn any threads or start an async runtime.
-
-`daemonize()` enforces this for you -- it reads the kernel thread count and
-panics if it isn't exactly 1, then forks. `daemonize_unchecked()` is `unsafe`
-precisely because it skips that check and trusts the caller. Either way, the
-single-threaded requirement applies **only at fork time**:
+locked forever in the child, deadlocking it. A second thread-unsafe step
+follows: `drop_privileges()` calls `setenv` (`USER`/`HOME`/`LOGNAME`) when
+switching users. So the single-threaded window runs from the fork through the
+last `setenv` -- i.e. through `drop_privileges()`:
 
 ```text
 [single-threaded required]
   daemonize()           <- forks here
   chown_paths()         <- still single-threaded
-  drop_privileges()     <- still single-threaded (calls setenv, not thread-safe)
-  notify_parent()
+  drop_privileges()     <- last unsafe step: setenv (USER/HOME/LOGNAME)
 [now safe to spawn threads / start tokio / accept connections]
+  notify_parent()       <- thread-safe; just writes one byte to the pipe
 ```
 
-Start threads, an async runtime, or a thread-per-connection accept loop only
-*after* `notify_parent()`.
+Both guards check for you and panic if violated: `daemonize()` at the fork,
+`drop_privileges()` at its `setenv` (when a user is configured).
+`daemonize_unchecked()` and `drop_privileges_unchecked()` are the `unsafe`
+opt-outs.
+
+Spawn threads, an async runtime, or a thread-per-connection accept loop only
+*after* `drop_privileges()` returns -- or after `daemonize()` returns if you
+don't switch users. The unsafe window to avoid is between `daemonize()` and
+`drop_privileges()`.
 
 ## API overview
 
