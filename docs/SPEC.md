@@ -44,7 +44,7 @@ concentrated in one internal `unsafe_ops` module that exposes safe
 `pub(crate)` wrappers, so the rest of the crate calls them without writing
 `unsafe`.
 
-`unsafe` appears in exactly three places:
+`unsafe` appears in exactly four places:
 
 - `unsafe_ops`: the FFI wrappers — signal reset (`libc::sigaction()`,
   including the real-time signal range via `libc::SIGRTMIN()`/
@@ -56,6 +56,9 @@ concentrated in one internal `unsafe_ops` module that exposes safe
 - `lib.rs`: `daemonize_unchecked()` is a public `unsafe fn` (its unsafety
   is a caller contract, not an `unsafe` block in the body), and the safe
   `daemonize()` calls it via `unsafe { daemonize_unchecked(config) }`.
+- `context.rs`: `DaemonContext::drop_privileges_unchecked()` is a public
+  `unsafe fn` (caller contract for the `USER`/`HOME`/`LOGNAME` `setenv`),
+  and the safe `drop_privileges()` calls it via `unsafe { … }`.
 
 Test code additionally uses `nix::sys::signal::sigaction`. An auditor who
 reads these sites sees every `unsafe` in the crate.
@@ -590,6 +593,17 @@ privilege dropping occurs.
 
 After switching, set `USER`, `HOME`, `LOGNAME` environment variables —
 these unconditionally overwrite any `.env()` values from step 11.
+
+**Thread-count guard.** The `USER`/`HOME`/`LOGNAME` writes use `setenv`,
+which is not thread-safe. So — mirroring `daemonize`/`daemonize_unchecked`
+— the safe `drop_privileges()` reads the kernel thread count and panics
+unless exactly 1 thread is running, but **only when a user switch is
+configured** (the sole `setenv` path; a group-only switch performs no
+`setenv` and is not guarded). The unchecked `unsafe fn
+drop_privileges_unchecked()` performs the switch without the check, for
+callers that uphold the single-threaded contract themselves or run on a
+target without a thread-count source — where the checked `drop_privileges()`
+is a `#[deprecated]` stub (see [Unsafe boundary](#unsafe-boundary)).
 
 `getpwnam()` failure returns `UserNotFound`. `getgrnam()` failure
 returns `GroupNotFound`. `initgroups`/`setgid`/`setuid` failure returns
