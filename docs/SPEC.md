@@ -52,8 +52,8 @@ Contents of `unsafe_ops`:
 - `libc::SIGRTMAX()` / `libc::SIGRTMIN()` wrappers.
 
 Nothing else in the crate contains `unsafe` blocks. The public
-`daemonize()` function is `unsafe fn` (see below); its unsafety is a
-caller contract, not an `unsafe` block in the implementation.
+`daemonize_unchecked()` function is `unsafe fn` (see below); its unsafety
+is a caller contract, not an `unsafe` block in the implementation.
 
 ---
 
@@ -99,7 +99,7 @@ config.pidfile("/var/run/foo.pid").chdir("/tmp");
 
 config.validate()?;                     // optional early check
 
-let mut ctx = unsafe { daemonize(&config)? };
+let mut ctx = daemonize(&config)?;
 // ... application initialization (still privileged if run as root) ...
 ctx.notify_parent()?;
 // daemon process continues here
@@ -111,7 +111,7 @@ ctx.notify_parent()?;
 let mut config = DaemonConfig::new();
 config.pidfile("/var/run/foo.pid").user("nobody").group("nogroup");
 
-let mut ctx = unsafe { daemonize(&config)? };
+let mut ctx = daemonize(&config)?;
 // privileged work here (e.g., bind port 80)
 ctx.chown_paths()?;                     // chown pidfile/lockfile/logs to target user
 ctx.drop_privileges()?;                 // setgid + setuid
@@ -260,6 +260,38 @@ library's error type and notification pipe protocol uniformly.
 ### daemonize()
 
 ```rust
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "freebsd",
+          target_os = "netbsd", target_os = "openbsd"))]
+pub fn daemonize(
+    config: &DaemonConfig,
+) -> Result<DaemonContext, DaemonizeError>
+```
+
+The recommended entry point. Reads the current process's thread count,
+panicking (with a message naming the problem and fix) unless it is exactly
+1, or if it cannot be determined, then calls
+`unsafe { daemonize_unchecked(config) }`. A count other than 1 — including
+an anomalous 0 a healthy process can never report — fails closed rather than
+forking on an untrusted count. The thread count source is per-OS:
+
+| OS      | Source                                                      |
+| ------- | ----------------------------------------------------------- |
+| Linux   | `/proc/self/status` `Threads:` line                         |
+| macOS   | `proc_pidinfo(PROC_PIDTASKINFO)` → `pti_threadnum`          |
+| FreeBSD | `sysctl(KERN_PROC_PID)` → `kinfo_proc.ki_numthreads`        |
+| NetBSD  | `sysctl(KERN_PROC2/KERN_PROC_PID)` → `kinfo_proc2.p_nlwps`  |
+| OpenBSD | `sysctl(KERN_PROC_PID \| KERN_PROC_SHOW_THREADS)`; count = bytes / record |
+
+On any other target it is a `#[deprecated]` stub that panics (no
+thread-count source). All FFI lives in `unsafe_ops`.
+
+> With a single thread, the observation "thread count is 1" is stable:
+> incrementing it requires an existing thread to call `pthread_create`,
+> but no other thread exists. The check-then-fork sequence has no race.
+
+### daemonize_unchecked()
+
+```rust
 /// # Safety
 ///
 /// No other threads may be running when this function is called.
@@ -267,10 +299,14 @@ library's error type and notification pipe protocol uniformly.
 /// threads permanently locked in the child, causing deadlocks or
 /// undefined behavior. Call before spawning threads, async runtimes,
 /// or libraries with background threads.
-pub unsafe fn daemonize(
+pub unsafe fn daemonize_unchecked(
     config: &DaemonConfig,
 ) -> Result<DaemonContext, DaemonizeError>
 ```
+
+The `unsafe` escape hatch, available on all Unix targets. Used by
+`daemonize` internally, and called directly on platforms where `daemonize`
+is unavailable (or when the caller manages the single-threaded contract).
 
 Takes `&DaemonConfig`, calls `validate()` internally, then performs the
 daemonization sequence. Returns `Ok(DaemonContext)` in the grandchild
@@ -295,39 +331,6 @@ no-op.
   observable — the parent's exit code is authoritative.
 
 The library does not accept a program path or call exec.
-
-### daemonize_checked()
-
-```rust
-#[cfg(any(target_os = "linux", target_os = "macos", target_os = "freebsd",
-          target_os = "netbsd", target_os = "openbsd"))]
-pub fn daemonize_checked(
-    config: &DaemonConfig,
-) -> Result<DaemonContext, DaemonizeError>
-```
-
-Safe wrapper. Reads the current process's thread count, panicking (with
-a message naming the problem and fix) unless it is exactly 1, or if it
-cannot be determined, then calls `unsafe { daemonize(config) }`. A count
-other than 1 — including an anomalous 0 a healthy process can never
-report — fails closed rather than forking on an untrusted count. The
-thread count
-source is per-OS:
-
-| OS      | Source                                                      |
-| ------- | ----------------------------------------------------------- |
-| Linux   | `/proc/self/status` `Threads:` line                         |
-| macOS   | `proc_pidinfo(PROC_PIDTASKINFO)` → `pti_threadnum`          |
-| FreeBSD | `sysctl(KERN_PROC_PID)` → `kinfo_proc.ki_numthreads`        |
-| NetBSD  | `sysctl(KERN_PROC2/KERN_PROC_PID)` → `kinfo_proc2.p_nlwps`  |
-| OpenBSD | `sysctl(KERN_PROC_PID \| KERN_PROC_SHOW_THREADS)`; count = bytes / record |
-
-On any other target it is a `#[deprecated]` stub that panics (no
-thread-count source). All FFI lives in `unsafe_ops`.
-
-> With a single thread, the observation "thread count is 1" is stable:
-> incrementing it requires an existing thread to call `pthread_create`,
-> but no other thread exists. The check-then-fork sequence has no race.
 
 ### validate()
 
@@ -702,7 +705,7 @@ This is a CLI-only convenience; the library requires explicit
 
 ### Program execution
 
-The CLI calls `unsafe { daemonize(&config) }`, then:
+The CLI calls `unsafe { daemonize_unchecked(&config) }`, then:
 
 1. If user or group is configured: calls `ctx.chown_paths()` then
    `ctx.drop_privileges()`.
@@ -875,18 +878,19 @@ Spawn CLI binary, inspect /proc and files. Require Linux, /proc:
 ### Crate-level docs
 
 Module-level doc in `lib.rs` with two usage examples: (1) simple
-builder → `unsafe { daemonize() }` → `notify_parent()` → daemon
+builder → `daemonize()` → `notify_parent()` → daemon
 continues; (2) split-phase with `chown_paths()` → `drop_privileges()`
 → `notify_parent()`. Use `?` (not `unwrap` or `try!`); hidden
 `fn main()` wrapper.
 
 ### Public item docs
 
-- `daemonize()`: `# Safety` (threading), `# Errors` (all variants),
-  `# Panics` (broken-OS conditions). Document foreground mode behavior.
-- `daemonize_checked()`: `# Panics` (thread count != 1, or thread count
+- `daemonize()`: `# Panics` (thread count != 1, or thread count
   undeterminable). Document the per-OS thread-count source and the
   deprecated stub on unsupported targets.
+- `daemonize_unchecked()`: `# Safety` (threading), `# Errors` (all
+  variants), `# Panics` (broken-OS conditions). Document foreground mode
+  behavior.
 - `validate()`: `# Errors`.
 - `lockfile_fd()`: CLOEXEC clearing use case, lifetime semantics.
 - `chown_paths()`: must be called while privileged, no-op without
@@ -997,7 +1001,7 @@ verification points.
 - R42. Parent exits 0 when exec succeeds (EOF on pipe).
 - R43. Parent exits non-zero with error message when exec fails.
 - R44. Post-fork errors are reported via parent's stderr, not lost.
-- R45. `daemonize_checked()` panics when thread count is not exactly 1.
+- R45. `daemonize()` panics when thread count is not exactly 1.
 - R46. `DaemonConfig` is `Send + Sync`.
 - R47. `DaemonContext` is `Send + Sync`.
 - R48. `DaemonizeError` is `Send + Sync`.
@@ -1047,9 +1051,9 @@ verification points.
   `Clone` or `PartialEq`.
 - R83. `Display` messages are lowercase, no trailing punctuation.
 - R84. All builder methods: `&mut self` → `&mut Self`, infallible.
-- R85. `daemonize()` calls `validate()` before forking.
-- R86. `daemonize()` is `pub unsafe fn`.
-- R87. `daemonize_checked()` is `pub fn` on linux/macos/freebsd/netbsd/
+- R85. `daemonize_unchecked()` calls `validate()` before forking.
+- R86. `daemonize_unchecked()` is `pub unsafe fn`.
+- R87. `daemonize()` is `pub fn` on linux/macos/freebsd/netbsd/
   openbsd; a `#[deprecated]` panic stub on other targets.
 - R88. Crate root: `#![deny(unsafe_code)]`.
 - R89. All `unsafe` blocks confined to `unsafe_ops` module.
