@@ -76,6 +76,7 @@ pub fn blivet::DaemonContext::cleanup(&mut self)
 pub fn blivet::DaemonContext::cleanup_on_signals(&self, signals: &[i32]) -> core::result::Result<(), blivet::DaemonizeError>
 pub fn blivet::DaemonContext::cleanup_on_term_signals(&self) -> core::result::Result<(), blivet::DaemonizeError>
 pub fn blivet::DaemonContext::drop_privileges(&mut self) -> core::result::Result<(), blivet::DaemonizeError>
+pub unsafe fn blivet::DaemonContext::drop_privileges_unchecked(&mut self) -> core::result::Result<(), blivet::DaemonizeError>
 pub fn blivet::DaemonContext::lockfile_fd(&self) -> core::option::Option<std::os::fd::owned::BorrowedFd<'_>>
 pub fn blivet::DaemonContext::notify_parent(&mut self) -> core::result::Result<(), blivet::DaemonizeError>
 pub fn blivet::DaemonContext::notify_parent_or_report(&mut self)

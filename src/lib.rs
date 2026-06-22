@@ -300,12 +300,13 @@ pub unsafe fn daemonize_unchecked(config: &DaemonConfig) -> Result<DaemonContext
 /// thread count cannot be determined.
 /// Returns the panic message if `count` is not exactly one thread, else `None`.
 ///
-/// `daemonize` requires *exactly* one thread (R45): forking a
-/// multi-threaded process strands the child's non-forking threads with their
-/// locks held forever. Any count other than 1 is a violation — including an
-/// anomalous `0`, which a healthy process can never report and so signals an
-/// unreliable thread-count query. Failing closed there keeps the safety guard
-/// from green-lighting a fork on a count it cannot trust.
+/// The checked entry points require *exactly* one thread (R45): forking — or
+/// calling `setenv` during `drop_privileges` — in a multi-threaded process is
+/// unsound. Any count other than 1 is a violation — including an anomalous `0`,
+/// which a healthy process can never report and so signals an unreliable
+/// thread-count query. Failing closed keeps the safety guard from
+/// green-lighting on a count it cannot trust. `caller` names the operation in
+/// the panic message.
 #[cfg(any(
     target_os = "linux",
     target_os = "macos",
@@ -313,11 +314,11 @@ pub unsafe fn daemonize_unchecked(config: &DaemonConfig) -> Result<DaemonContext
     target_os = "netbsd",
     target_os = "openbsd"
 ))]
-fn single_threaded_violation(count: usize) -> Option<String> {
+pub(crate) fn single_threaded_violation(caller: &str, count: usize) -> Option<String> {
     (count != 1).then(|| {
         format!(
-            "daemonize: {count} threads running (expected 1). \
-             Call daemonize before spawning threads, async runtimes, \
+            "{caller}: {count} threads running (expected 1). \
+             Call {caller} before spawning threads, async runtimes, \
              or libraries with background threads."
         )
     })
@@ -333,7 +334,7 @@ fn single_threaded_violation(count: usize) -> Option<String> {
 pub fn daemonize(config: &DaemonConfig) -> Result<DaemonContext, DaemonizeError> {
     let count = thread_count::count()
         .expect("daemonize: cannot determine thread count to verify single-threadedness");
-    if let Some(msg) = single_threaded_violation(count) {
+    if let Some(msg) = single_threaded_violation("daemonize", count) {
         panic!("{msg}");
     }
     #[allow(unsafe_code)]
@@ -567,17 +568,18 @@ mod tests {
     #[test]
     fn single_threaded_violation_accepts_only_exactly_one() {
         assert!(
-            single_threaded_violation(1).is_none(),
+            single_threaded_violation("daemonize", 1).is_none(),
             "exactly one thread is the single-threaded case"
         );
         assert!(
-            single_threaded_violation(0).is_some(),
+            single_threaded_violation("daemonize", 0).is_some(),
             "an anomalous 0 must fail closed, not green-light a fork"
         );
-        let msg = single_threaded_violation(2).expect("2 threads is a violation");
+        let msg =
+            single_threaded_violation("drop_privileges", 2).expect("2 threads is a violation");
         assert!(
-            msg.contains("2 threads running (expected 1)"),
-            "message should name the count and expectation, got: {msg}"
+            msg.contains("drop_privileges: 2 threads running (expected 1)"),
+            "message should name the caller, count, and expectation, got: {msg}"
         );
     }
 

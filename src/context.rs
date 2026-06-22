@@ -274,7 +274,100 @@ impl DaemonContext {
         Ok(())
     }
 
-    /// Drops privileges by switching user and/or group.
+    /// Drops privileges by switching user and/or group, verifying the process
+    /// is single-threaded first.
+    ///
+    /// When a user is configured, the switch sets `USER`/`HOME`/`LOGNAME` via
+    /// `setenv`, which is not thread-safe. So — like [`daemonize`](crate::daemonize)
+    /// guards `fork` — this checked form reads the kernel thread count and
+    /// **panics** unless exactly one thread is running, then performs the
+    /// switch. No `unsafe` needed, and it is the recommended entry point. Use
+    /// [`drop_privileges_unchecked`](Self::drop_privileges_unchecked) to skip
+    /// the check. (A group-only switch performs no `setenv`, so it is not
+    /// checked.)
+    ///
+    /// See [`drop_privileges_unchecked`](Self::drop_privileges_unchecked) for
+    /// the resolution rules and the four user/group combinations.
+    ///
+    /// # Platform support
+    ///
+    /// Available on Linux, macOS, FreeBSD, NetBSD, and OpenBSD (it reads the
+    /// kernel thread count). On any other target it is a `#[deprecated]` stub
+    /// that panics — call
+    /// [`drop_privileges_unchecked`](Self::drop_privileges_unchecked) there.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a user is configured and the thread count is not exactly 1, or
+    /// cannot be determined.
+    ///
+    /// # Errors
+    ///
+    /// As [`drop_privileges_unchecked`](Self::drop_privileges_unchecked).
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "freebsd",
+        target_os = "netbsd",
+        target_os = "openbsd"
+    ))]
+    pub fn drop_privileges(&mut self) -> Result<(), DaemonizeError> {
+        // Only a user switch calls `setenv` (USER/HOME/LOGNAME), which is not
+        // thread-safe; guard exactly that case.
+        if self.config.user.is_some() {
+            let count = crate::thread_count::count().expect(
+                "drop_privileges: cannot determine thread count to verify single-threadedness",
+            );
+            if let Some(msg) = crate::single_threaded_violation("drop_privileges", count) {
+                panic!("{msg}");
+            }
+        }
+        // SAFETY: verified single-threaded above whenever a user switch (the
+        // only `setenv` path) is configured.
+        #[allow(unsafe_code)]
+        unsafe {
+            self.drop_privileges_unchecked()
+        }
+    }
+
+    /// Stub for targets without a thread-count source, so there is no checked
+    /// `drop_privileges` to offer.
+    ///
+    /// Marked `#[deprecated]`: using it warns with guidance by default and is a
+    /// hard compile error under `-D warnings` / `#![deny(deprecated)]`. Call
+    /// `unsafe { `[`drop_privileges_unchecked`](Self::drop_privileges_unchecked)`() }`
+    /// directly on this platform, ensuring the process is single-threaded first.
+    ///
+    /// # Panics
+    ///
+    /// Always panics: unsupported on this target.
+    #[cfg(not(any(
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "freebsd",
+        target_os = "netbsd",
+        target_os = "openbsd"
+    )))]
+    #[deprecated(
+        note = "drop_privileges cannot verify the thread count on this target. \
+                Call `unsafe { drop_privileges_unchecked() }` and ensure the \
+                process is single-threaded yourself."
+    )]
+    pub fn drop_privileges(&mut self) -> Result<(), DaemonizeError> {
+        panic!(
+            "drop_privileges is unsupported on this target (cannot query the \
+             thread count); call `unsafe {{ drop_privileges_unchecked() }}` and \
+             ensure the process is single-threaded yourself"
+        )
+    }
+
+    /// Drops privileges by switching user and/or group, without checking the
+    /// thread count.
+    ///
+    /// Prefer the safe [`drop_privileges`](Self::drop_privileges), which
+    /// verifies single-threadedness for you on the mainstream Unixes. Reach for
+    /// this `unsafe` variant only where that is unavailable, or when you manage
+    /// the single-threaded contract yourself.
     ///
     /// Resolution: if the user/group string parses as a `u32`, it is treated
     /// as a numeric UID/GID. Otherwise, it is resolved via `getpwnam()` /
@@ -287,13 +380,15 @@ impl DaemonContext {
     /// - User and group: `initgroups` + `setgid(group_gid)` + `setuid(uid)`.
     /// - Group only: `setgid(group_gid)`.
     ///
-    /// After switching, sets `USER`, `HOME`, `LOGNAME` environment variables.
+    /// After switching to a user, sets `USER`, `HOME`, `LOGNAME` environment
+    /// variables.
     ///
-    /// # Safety considerations
+    /// # Safety
     ///
-    /// This method calls `setenv` internally (to set `USER`, `HOME`,
-    /// `LOGNAME`), which is not thread-safe. Do not spawn threads between
-    /// [`daemonize()`](crate::daemonize) and this call.
+    /// When a user is configured this calls `setenv` (`USER`/`HOME`/`LOGNAME`),
+    /// which is not thread-safe. No other threads may be running at that point —
+    /// do not spawn threads between [`daemonize`](crate::daemonize) and this
+    /// call.
     ///
     /// # Errors
     ///
@@ -301,7 +396,8 @@ impl DaemonContext {
     /// Returns `DaemonizeError::GroupNotFound` if the group cannot be resolved.
     /// Returns `DaemonizeError::PermissionDenied` if `initgroups`, `setgid`,
     /// or `setuid` fails.
-    pub fn drop_privileges(&mut self) -> Result<(), DaemonizeError> {
+    #[allow(unsafe_code)]
+    pub unsafe fn drop_privileges_unchecked(&mut self) -> Result<(), DaemonizeError> {
         if self.config.user.is_none() && self.config.group.is_none() {
             self.privileges_dropped = true;
             return Ok(());
@@ -830,7 +926,12 @@ mod tests {
         let mut config = DaemonConfig::new();
         config.user("nonexistent_daemonize_test_user_xyz");
         let mut ctx = ctx(&config, None, None);
-        let result = ctx.drop_privileges();
+        // Use the unchecked path: the test harness is multithreaded, so the
+        // checked `drop_privileges` would panic on the thread-count guard
+        // before reaching user resolution. Here we exercise resolution itself.
+        // SAFETY: no setenv is reached — resolution of a missing user fails first.
+        #[allow(unsafe_code)]
+        let result = unsafe { ctx.drop_privileges_unchecked() };
         assert!(matches!(
             result,
             Err(crate::DaemonizeError::UserNotFound(_))
@@ -898,6 +999,60 @@ mod tests {
         let mut ctx = default_ctx();
         assert!(ctx.drop_privileges().is_ok());
         assert!(ctx.drop_privileges().is_ok());
+    }
+
+    // Covers: R126
+    //
+    // `drop_privileges` reads the thread count and panics (before any setuid)
+    // when a user switch is configured and more than one thread is running, so
+    // its `setenv` of USER/HOME/LOGNAME never races. Spawning a parked thread
+    // makes the count > 1 deterministically; the panic fires on the check, so
+    // no root is needed.
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "freebsd",
+        target_os = "netbsd",
+        target_os = "openbsd"
+    ))]
+    #[test]
+    fn drop_privileges_panics_when_not_single_threaded() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::{mpsc, Arc};
+
+        let stop = Arc::new(AtomicBool::new(false));
+        let (ready_tx, ready_rx) = mpsc::channel();
+        let worker = {
+            let stop = Arc::clone(&stop);
+            std::thread::spawn(move || {
+                ready_tx.send(()).unwrap();
+                while !stop.load(Ordering::Acquire) {
+                    std::thread::park();
+                }
+            })
+        };
+        ready_rx.recv().unwrap(); // worker running -> thread count is now >= 2
+
+        let mut config = DaemonConfig::new();
+        config.user("nobody"); // user switch -> setenv path -> guarded
+        let mut ctx = ctx(&config, None, None);
+        let result =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| ctx.drop_privileges()));
+
+        stop.store(true, Ordering::Release);
+        worker.thread().unpark();
+        worker.join().unwrap();
+
+        let payload = result.expect_err("drop_privileges must panic with >1 thread");
+        let msg = payload
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| payload.downcast_ref::<&str>().copied())
+            .unwrap_or("<non-string panic payload>");
+        assert!(
+            msg.contains("threads running (expected 1)"),
+            "panic should name the thread-count problem, got: {msg:?}"
+        );
     }
 
     #[test]

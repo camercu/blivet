@@ -198,7 +198,11 @@ fn main() -> ExitCode {
         if let Err(e) = ctx.chown_paths() {
             ctx.report_error(&e);
         }
-        if let Err(e) = ctx.drop_privileges() {
+        // SAFETY: single-threaded here (no threads spawned before exec); use
+        // the unchecked form so the CLI stays portable across all Unix targets.
+        #[allow(unsafe_code)]
+        let drop_result = unsafe { ctx.drop_privileges_unchecked() };
+        if let Err(e) = drop_result {
             ctx.report_error(&e);
         }
     }

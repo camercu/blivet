@@ -1116,3 +1116,8 @@ verification points.
   never called, `notify_parent()` returns `PrivilegesNotDropped`
   (exit 70) instead of signaling readiness — so a daemon can never
   report itself healthy while still holding elevated privileges.
+- R126. `drop_privileges()` panics when a user switch is configured and
+  the thread count is not exactly 1 (the user-switch path calls `setenv`,
+  which is not thread-safe). The unchecked `unsafe fn
+  drop_privileges_unchecked()` skips the check; on targets without a
+  thread-count source the checked form is a `#[deprecated]` stub.
