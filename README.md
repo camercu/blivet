@@ -81,9 +81,13 @@ exits 0 on success, or prints the error
 and exits with its sysexits.h code on failure
 ```
 
-The grandchild is the daemon. Because it must fork while single-threaded (see
-[Safety](#safety-the-single-threaded-rule)), do all thread/async-runtime startup
-*after* `notify_parent()`.
+The grandchild is the daemon. Do your fallible initialization — bind sockets,
+open files, connect to dependencies — *after* `daemonize()` returns but *before*
+`notify_parent()` (and before `drop_privileges()` if you switch users): a failure
+in that window is reported back to the parent, which exits non-zero, whereas once
+you call `notify_parent()` the parent has already exited 0. Hold off on spawning
+threads or starting an async runtime until that single-threaded startup window
+closes — see [Safety](#safety-the-single-threaded-rule).
 
 ## Install
 
