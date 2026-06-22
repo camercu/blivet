@@ -109,37 +109,21 @@ cargo add blivet
 Daemonize any program:
 
 ```sh
-# Basic usage
+# Simplest: daemonize a program
 daemonize -- /usr/bin/my-server --port 8080
 
-# With pidfile and log redirection (stderr mirrors stdout by default)
+# Typical service: pidfile, log redirection (stderr mirrors stdout),
+# working directory, and drop to an unprivileged user
 daemonize \
   -p /var/run/myapp.pid \
   -o /var/log/myapp.log \
   -c /var/lib/myapp \
+  -u www-data -g www-data \
   -- /usr/bin/my-server
-
-# Split stdout/stderr using .stdout/.stderr or .out/.err extensions (auto-derived)
-daemonize \
-  -p /var/run/myapp.pid \
-  -o /var/log/myapp.stdout \
-  -- /usr/bin/my-server  # stderr goes to /var/log/myapp.stderr
-
-# Separate lockfile (overrides the pidfile default)
-daemonize \
-  -p /var/run/myapp.pid \
-  -l /var/run/myapp.lock \
-  -- /usr/bin/my-server
-
-# Run as a different user and group (requires root)
-daemonize -u www-data -g www-data -- /usr/bin/my-server
-
-# Run in foreground (no fork/setsid)
-daemonize --foreground -p /var/run/myapp.pid -- /usr/bin/my-server
-
-# Set environment variables
-daemonize -E RUST_LOG=info -E PORT=8080 -- /usr/bin/my-server
 ```
+
+See [CLI flags](#cli-flags) for the rest (foreground mode, split stdout/stderr,
+a separate lockfile, environment variables).
 
 The parent process blocks until the daemon successfully calls `exec`, then
 exits 0. If anything fails (lockfile conflict, permission denied, exec error),
@@ -150,9 +134,6 @@ lockfile, and log files to the target user/group before dropping privileges,
 so the daemon can continue to write to them after the switch.
 
 ### CLI flags
-
-Listed in `daemonize --help` order (a test keeps this table in sync with the
-binary):
 
 | Flag | Long                | Description |
 | ---- | ------------------- | --- |
