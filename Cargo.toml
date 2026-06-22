@@ -9,23 +9,17 @@ repository = "https://github.com/camercu/blivet"
 readme = "README.md"
 keywords = ["daemon", "daemonize", "fork", "unix", "linux"]
 categories = ["os::unix-apis"]
-exclude = [
-    ".claude/",
-    ".github/",
-    "Dockerfile",
-    ".dockerignore",
-    ".pre-commit-config.yaml",
-    ".releaserc.json",
-    "commitlint.config.js",
-    "deny.toml",
-    "docs/",
-    "justfile",
-    "package.json",
-    "package-lock.json",
-    "rust-toolchain.toml",
-    "scripts/",
-    "shell.nix",
-    ".envrc",
+# Allowlist what ships to crates.io (default-deny): only the library, the
+# `daemonize` binary, the runnable example, and the legal/readme/changelog
+# files. README.md is required — src/main.rs embeds it via include_str!.
+# Cargo.toml and Cargo.lock are always packaged automatically.
+include = [
+    "/src/**/*.rs",
+    "/examples/**/*.rs",
+    "/README.md",
+    "/CHANGELOG.md",
+    "/LICENSE-APACHE",
+    "/LICENSE-MIT",
 ]
 
 [[bin]]
