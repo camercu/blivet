@@ -1,3 +1,43 @@
+## [0.6.0](https://github.com/camercu/blivet/compare/v0.5.0...v0.6.0) (2026-06-22)
+
+
+### ⚠ BREAKING CHANGES
+
+* **context:** notify_parent and notify_parent_or_report now fail with
+PrivilegesNotDropped when a user/group is configured but drop_privileges() was
+not called first. Call drop_privileges() before notify_parent() (the already
+documented order). There is no opt-out to stay privileged past readiness yet.
+* **lib:** on macOS/*BSD, daemonize_checked is now a working function
+rather than a #[deprecated] stub. Code that relied on the deprecation
+warning, or gated solely on `#[cfg(target_os = "linux")]`, should widen the
+gate to the supported set (see crate docs).
+* **context:** DaemonContext::notify_parent returns
+Result<(), DaemonizeError> instead of Result<(), std::io::Error>.
+* **config:** DaemonConfig::umask takes u32 instead of
+nix::sys::stat::Mode. Replace `.umask(Mode::from_bits_truncate(0o022))`
+with `.umask(0o022)`.
+
+### Features
+
+* **config:** take umask as octal u32 instead of nix Mode ([1131066](https://github.com/camercu/blivet/commit/1131066a2a2f7264e28d4286fb0c30adf5c79a44))
+* **context:** add opt-in pidfile cleanup on signals ([eca1739](https://github.com/camercu/blivet/commit/eca1739ce60ffb1a91fa61a48e2d2ed303d1fba8))
+* **context:** refuse to notify readiness while privileges undropped ([7e0268b](https://github.com/camercu/blivet/commit/7e0268bc9673ebb76d37ba09e43c858830312700))
+* **context:** return DaemonizeError from notify_parent ([ec984d2](https://github.com/camercu/blivet/commit/ec984d283adf01366e2a761284208e37a09bccd7))
+* **error:** add Application variant for caller-reported failures ([8b58a0e](https://github.com/camercu/blivet/commit/8b58a0e0f1d2bf227c1e62fe12e80c064e8bcd83))
+* **lib:** provide deprecated daemonize_checked stub on non-Linux ([af98234](https://github.com/camercu/blivet/commit/af9823412c8d658f1099ab042989b8032f7b9a86))
+* **lib:** support daemonize_checked on macOS and the BSDs ([24117f7](https://github.com/camercu/blivet/commit/24117f731b3c0ed61355d36987212ac0c9614b30))
+
+
+### Bug Fixes
+
+* **context:** remove pidfile before signaling parent in report_error ([285f997](https://github.com/camercu/blivet/commit/285f997a4b0831e775a411436eb05477ea56d90e))
+* **context:** remove pidfile when report_error aborts startup ([cef6425](https://github.com/camercu/blivet/commit/cef642532dbb573ca3a4a5e8665ec5ee9465ccce))
+* **error:** never return exit code 0 from exit_code() ([3f62378](https://github.com/camercu/blivet/commit/3f62378a95dd6bfe713dfb04bffc5f4ce87c8967))
+* **examples:** reset accepted socket to blocking in echo server ([bde43ec](https://github.com/camercu/blivet/commit/bde43ec30efbfb09b5955f414209fd54b89f1503))
+* **lib:** fail closed when daemonize_checked thread count isn't exactly 1 ([6d89d43](https://github.com/camercu/blivet/commit/6d89d433ffb0aa62f2aeb450b262600ccc6ae70c))
+* **unsafe_ops:** count OpenBSD threads exactly via a fetch call ([8327501](https://github.com/camercu/blivet/commit/8327501582c58f70177b4218558f69fece8cab2e))
+* **unsafe_ops:** error on zero-size OpenBSD thread-count sysctl ([2b62720](https://github.com/camercu/blivet/commit/2b62720653771633c4b1c24142073200109b16de))
+
 ## [0.5.0](https://github.com/camercu/blivet/compare/v0.4.0...v0.5.0) (2026-04-25)
 
 
