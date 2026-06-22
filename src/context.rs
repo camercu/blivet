@@ -1050,6 +1050,55 @@ mod tests {
         );
     }
 
+    // Covers: R126
+    //
+    // The guard fires only for a *user* switch (the `setenv` path). A
+    // group-only switch performs no `setenv`, so it must NOT check the thread
+    // count — this locks that contract so widening the guard to also cover
+    // group-only would fail here. A numeric gid avoids any NSS lookup; the
+    // inner `setgid` fails without root, but the point is that it does not
+    // panic on the thread-count guard despite >1 thread running.
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "freebsd",
+        target_os = "netbsd",
+        target_os = "openbsd"
+    ))]
+    #[test]
+    fn drop_privileges_group_only_does_not_check_threads() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::{mpsc, Arc};
+
+        let stop = Arc::new(AtomicBool::new(false));
+        let (ready_tx, ready_rx) = mpsc::channel();
+        let worker = {
+            let stop = Arc::clone(&stop);
+            std::thread::spawn(move || {
+                ready_tx.send(()).unwrap();
+                while !stop.load(Ordering::Acquire) {
+                    std::thread::park();
+                }
+            })
+        };
+        ready_rx.recv().unwrap(); // worker running -> thread count is now >= 2
+
+        let mut config = DaemonConfig::new();
+        config.group("99999"); // numeric gid -> no NSS lookup; group-only -> no setenv
+        let mut ctx = ctx(&config, None, None);
+        let result =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| ctx.drop_privileges()));
+
+        stop.store(true, Ordering::Release);
+        worker.thread().unpark();
+        worker.join().unwrap();
+
+        assert!(
+            result.is_ok(),
+            "group-only drop_privileges must not panic on the thread-count guard"
+        );
+    }
+
     #[test]
     fn error_display_group_not_found() {
         let err = crate::DaemonizeError::GroupNotFound("nobody".into());
