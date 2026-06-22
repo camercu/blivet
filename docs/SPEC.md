@@ -52,9 +52,11 @@ rather than behind a fake-safe wrapper.
   (`libc::sigaction()`, incl. the real-time range via `SIGRTMIN()`/
   `SIGRTMAX()`), `close()`, `initgroups()`, `_exit()`, `unlink()`, `raise()`,
   and the per-OS thread-count queries.
-- `forker.rs`: `RealForker::fork` is an `unsafe fn` wrapping
-  `nix::unistd::fork()` (`unsafe` since nix 0.24); `daemonize_inner`
-  invokes it as `unsafe { forker.fork() }`.
+- `forker.rs` / `lib.rs`: `RealForker::fork` is an `unsafe fn` wrapping
+  `nix::unistd::fork()` (`unsafe` since nix 0.24). `daemonize_inner` is itself
+  an `unsafe fn` that invokes it as `unsafe { forker.fork() }`, forwarding the
+  single-threaded contract to its callers — `daemonize_unchecked`, or the
+  checked `daemonize` after its guard.
 - `lib.rs`: `daemonize_unchecked()` is a public `unsafe fn` (caller contract),
   and the safe `daemonize()` calls it via `unsafe { … }` after the guard.
 - `context.rs`: `DaemonContext::drop_privileges_unchecked()` is a public

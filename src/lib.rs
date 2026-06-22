@@ -278,7 +278,8 @@ use notify::NotifyPipe;
 #[allow(unsafe_code)]
 pub unsafe fn daemonize_unchecked(config: &DaemonConfig) -> Result<DaemonContext, DaemonizeError> {
     config.validate()?;
-    daemonize_inner(config, &mut RealForker)
+    // SAFETY: this `unsafe fn`'s own contract requires single-threadedness.
+    unsafe { daemonize_inner(config, &mut RealForker) }
 }
 
 // The OSes where `daemonize` can verify the thread count natively are
@@ -406,8 +407,16 @@ pub fn daemonize(_config: &DaemonConfig) -> Result<DaemonContext, DaemonizeError
 }
 
 /// Internal daemonization logic, generic over the Forker trait for testability.
+///
+/// # Safety
+///
+/// With a real `Forker` this performs `fork`; the process must be
+/// single-threaded at the call, since forking with other threads running is
+/// undefined behavior. The checked [`daemonize`] establishes this, and the
+/// public [`daemonize_unchecked`] forwards the contract to its caller. (The
+/// test `NullForker` does not fork, so test calls are sound.)
 #[allow(unsafe_code)]
-pub(crate) fn daemonize_inner(
+pub(crate) unsafe fn daemonize_inner(
     config: &DaemonConfig,
     forker: &mut impl Forker,
 ) -> Result<DaemonContext, DaemonizeError> {
@@ -612,6 +621,20 @@ mod tests {
         );
     }
 
+    /// Test wrapper: `daemonize_inner` driven by the non-forking `NullForker`.
+    ///
+    /// `NullForker::fork` returns a configured result without actually forking,
+    /// so the `unsafe fn`'s single-threaded contract is vacuously satisfied —
+    /// keeping the call sites free of per-test `unsafe` blocks.
+    #[allow(unsafe_code)]
+    fn run_inner(
+        config: &DaemonConfig,
+        forker: &mut NullForker,
+    ) -> Result<DaemonContext, DaemonizeError> {
+        // SAFETY: NullForker does not fork.
+        unsafe { daemonize_inner(config, forker) }
+    }
+
     #[test]
     #[ignore]
     fn both_forks_child_succeeds_subprocess() {
@@ -621,7 +644,7 @@ mod tests {
         let mut config = DaemonConfig::new();
         config.close_fds(false); // Don't close fds in test subprocess (systemd aborts on EBADF)
         let mut forker = NullForker::both_child();
-        let result = daemonize_inner(&config, &mut forker);
+        let result = run_inner(&config, &mut forker);
         assert!(result.is_ok());
     }
 
@@ -630,7 +653,7 @@ mod tests {
         let config = DaemonConfig::new();
         let mut forker = NullForker::first_parent();
         let result = catch_unwind(std::panic::AssertUnwindSafe(|| {
-            daemonize_inner(&config, &mut forker)
+            run_inner(&config, &mut forker)
         }));
         assert!(result.is_err()); // exit panics in NullForker
     }
@@ -640,7 +663,7 @@ mod tests {
         let config = DaemonConfig::new();
         let mut forker = NullForker::second_parent();
         let result = catch_unwind(std::panic::AssertUnwindSafe(|| {
-            daemonize_inner(&config, &mut forker)
+            run_inner(&config, &mut forker)
         }));
         assert!(result.is_err());
     }
@@ -650,7 +673,7 @@ mod tests {
     fn first_fork_fails_returns_error() {
         let config = DaemonConfig::new();
         let mut forker = NullForker::first_fork_fails();
-        let result = daemonize_inner(&config, &mut forker);
+        let result = run_inner(&config, &mut forker);
         assert!(matches!(result, Err(DaemonizeError::ForkFailed(_))));
     }
 
@@ -659,7 +682,7 @@ mod tests {
         let config = DaemonConfig::new();
         let mut forker = NullForker::setsid_fails();
         let result = catch_unwind(std::panic::AssertUnwindSafe(|| {
-            daemonize_inner(&config, &mut forker)
+            run_inner(&config, &mut forker)
         }));
         assert!(result.is_err());
     }
@@ -670,7 +693,7 @@ mod tests {
         let config = DaemonConfig::new();
         let mut forker = NullForker::second_fork_fails();
         let result = catch_unwind(std::panic::AssertUnwindSafe(|| {
-            daemonize_inner(&config, &mut forker)
+            run_inner(&config, &mut forker)
         }));
         assert!(result.is_err());
     }
@@ -680,7 +703,7 @@ mod tests {
         let config = DaemonConfig::new();
         let mut forker = NullForker::first_parent();
         let result = catch_unwind(std::panic::AssertUnwindSafe(|| {
-            daemonize_inner(&config, &mut forker)
+            run_inner(&config, &mut forker)
         }));
         let panic_msg = result
             .unwrap_err()
@@ -732,7 +755,7 @@ mod tests {
         let mut config = DaemonConfig::new();
         config.foreground(true).close_fds(false);
         let mut forker = NullForker::new(vec![], Ok(()));
-        let result = daemonize_inner(&config, &mut forker);
+        let result = run_inner(&config, &mut forker);
         let ctx = result.expect("foreground daemonize_inner should succeed");
         assert!(ctx.lockfile_fd().is_none());
     }
@@ -752,7 +775,7 @@ mod tests {
         let mut config = DaemonConfig::new();
         config.foreground(true).close_fds(false);
         let mut forker = NullForker::new(vec![], Ok(()));
-        let mut ctx = daemonize_inner(&config, &mut forker).unwrap();
+        let mut ctx = run_inner(&config, &mut forker).unwrap();
         assert!(ctx.notify_parent().is_ok());
     }
 
@@ -773,7 +796,7 @@ mod tests {
         let mut config = DaemonConfig::new();
         config.close_fds(false);
         let mut forker = NullForker::both_child();
-        let _ctx = daemonize_inner(&config, &mut forker).unwrap();
+        let _ctx = run_inner(&config, &mut forker).unwrap();
 
         assert!(
             nix::unistd::write(&wr, b"alive").is_ok(),
@@ -812,7 +835,7 @@ mod tests {
             .close_fds(false);
 
         let mut forker = NullForker::new(vec![], Ok(()));
-        let ctx = daemonize_inner(&config, &mut forker).unwrap();
+        let ctx = run_inner(&config, &mut forker).unwrap();
 
         let debug = format!("{:?}", ctx);
         assert!(
