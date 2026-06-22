@@ -333,6 +333,30 @@ pub(crate) fn single_threaded_violation(caller: &str, count: usize) -> Option<St
     })
 }
 
+/// Reads the current thread count and panics unless it is exactly 1, naming
+/// `caller` in the message.
+///
+/// The imperative shell around [`single_threaded_violation`], shared by the
+/// checked entry points that must run single-threaded: [`daemonize`] (before
+/// the fork) and
+/// [`DaemonContext::drop_privileges`](crate::DaemonContext::drop_privileges)
+/// (before its `setenv`).
+#[cfg(any(
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "freebsd",
+    target_os = "netbsd",
+    target_os = "openbsd"
+))]
+pub(crate) fn assert_single_threaded(caller: &str) {
+    let count = thread_count::count().unwrap_or_else(|_| {
+        panic!("{caller}: cannot determine thread count to verify single-threadedness")
+    });
+    if let Some(msg) = single_threaded_violation(caller, count) {
+        panic!("{msg}");
+    }
+}
+
 #[cfg(any(
     target_os = "linux",
     target_os = "macos",
@@ -341,11 +365,7 @@ pub(crate) fn single_threaded_violation(caller: &str, count: usize) -> Option<St
     target_os = "openbsd"
 ))]
 pub fn daemonize(config: &DaemonConfig) -> Result<DaemonContext, DaemonizeError> {
-    let count = thread_count::count()
-        .expect("daemonize: cannot determine thread count to verify single-threadedness");
-    if let Some(msg) = single_threaded_violation("daemonize", count) {
-        panic!("{msg}");
-    }
+    assert_single_threaded("daemonize");
     #[allow(unsafe_code)]
     unsafe {
         daemonize_unchecked(config)

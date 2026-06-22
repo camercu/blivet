@@ -315,12 +315,7 @@ impl DaemonContext {
         // Only a user switch calls `setenv` (USER/HOME/LOGNAME), which is not
         // thread-safe; guard exactly that case.
         if self.config.user.is_some() {
-            let count = crate::thread_count::count().expect(
-                "drop_privileges: cannot determine thread count to verify single-threadedness",
-            );
-            if let Some(msg) = crate::single_threaded_violation("drop_privileges", count) {
-                panic!("{msg}");
-            }
+            crate::assert_single_threaded("drop_privileges");
         }
         // SAFETY: verified single-threaded above whenever a user switch (the
         // only `setenv` path) is configured.
