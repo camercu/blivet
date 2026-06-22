@@ -1,3 +1,20 @@
+## [0.7.0](https://github.com/camercu/blivet/compare/v0.6.0...v0.7.0) (2026-06-22)
+
+
+### ⚠ BREAKING CHANGES
+
+* **api:** `daemonize` is now the safe, thread-count-checked entry
+point (formerly `daemonize_checked`); the unchecked `unsafe fn` is now
+`daemonize_unchecked` (formerly `daemonize`).
+Migrate: `daemonize_checked(&c)`    -> `daemonize(&c)`
+         `unsafe { daemonize(&c) }` -> `unsafe { daemonize_unchecked(&c) }`
+
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+
+### Features
+
+* **api:** make safe `daemonize` the default entry point ([57d3b97](https://github.com/camercu/blivet/commit/57d3b97bb29fd303f50b0dd85aea441c393b5bd5))
+
 ## [0.6.0](https://github.com/camercu/blivet/compare/v0.5.0...v0.6.0) (2026-06-22)
 
 
