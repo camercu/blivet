@@ -211,19 +211,6 @@ There are two ways to daemonize:
   the process is single-threaded (see
   [Safety](#safety-the-single-threaded-rule)).
 
-To stay portable across *every* Unix, gate the call so the deprecated stub is
-never built on targets that lack a thread-count source:
-
-```rust
-#[cfg(any(target_os = "linux", target_os = "macos", target_os = "freebsd",
-          target_os = "netbsd", target_os = "openbsd"))]
-let mut ctx = blivet::daemonize(&config)?;
-#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "freebsd",
-              target_os = "netbsd", target_os = "openbsd")))]
-// SAFETY: no threads spawned before this point.
-let mut ctx = unsafe { blivet::daemonize_unchecked(&config)? };
-```
-
 ### Split-phase privilege dropping
 
 When your daemon needs to perform privileged operations (like binding to
