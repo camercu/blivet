@@ -15,5 +15,6 @@ pkgs.mkShell {
     pandoc
     cargo-deny
     cargo-llvm-cov
+    cargo-public-api
   ];
 }

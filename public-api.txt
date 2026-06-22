@@ -1,0 +1,97 @@
+pub mod blivet
+#[non_exhaustive] pub enum blivet::DaemonizeError
+pub blivet::DaemonizeError::Application
+pub blivet::DaemonizeError::Application::code: u8
+pub blivet::DaemonizeError::Application::message: alloc::string::String
+pub blivet::DaemonizeError::ChdirFailed(alloc::string::String)
+pub blivet::DaemonizeError::ChownError(alloc::string::String)
+pub blivet::DaemonizeError::ExecFailed(alloc::string::String)
+pub blivet::DaemonizeError::ForkFailed(alloc::string::String)
+pub blivet::DaemonizeError::GroupNotFound(alloc::string::String)
+pub blivet::DaemonizeError::LockConflict(alloc::string::String)
+pub blivet::DaemonizeError::LockfileError(alloc::string::String)
+pub blivet::DaemonizeError::NotifyFailed(std::io::error::Error)
+pub blivet::DaemonizeError::OutputFileError(alloc::string::String)
+pub blivet::DaemonizeError::PermissionDenied(alloc::string::String)
+pub blivet::DaemonizeError::PidfileError(alloc::string::String)
+pub blivet::DaemonizeError::PrivilegesNotDropped
+pub blivet::DaemonizeError::ProgramNotFound(alloc::string::String)
+pub blivet::DaemonizeError::SetsidFailed(alloc::string::String)
+pub blivet::DaemonizeError::UserNotFound(alloc::string::String)
+pub blivet::DaemonizeError::ValidationError(alloc::string::String)
+impl blivet::DaemonizeError
+pub fn blivet::DaemonizeError::application(u8, impl core::convert::Into<alloc::string::String>) -> Self
+pub fn blivet::DaemonizeError::exit_code(&self) -> u8
+impl core::error::Error for blivet::DaemonizeError
+pub fn blivet::DaemonizeError::source(&self) -> core::option::Option<&(dyn core::error::Error + 'static)>
+impl core::fmt::Debug for blivet::DaemonizeError
+pub fn blivet::DaemonizeError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for blivet::DaemonizeError
+pub fn blivet::DaemonizeError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for blivet::DaemonizeError
+impl core::marker::Send for blivet::DaemonizeError
+impl core::marker::Sync for blivet::DaemonizeError
+impl core::marker::Unpin for blivet::DaemonizeError
+impl core::marker::UnsafeUnpin for blivet::DaemonizeError
+impl !core::panic::unwind_safe::RefUnwindSafe for blivet::DaemonizeError
+impl !core::panic::unwind_safe::UnwindSafe for blivet::DaemonizeError
+pub struct blivet::DaemonConfig
+impl blivet::DaemonConfig
+pub fn blivet::DaemonConfig::append(&mut self, bool) -> &mut Self
+pub fn blivet::DaemonConfig::chdir(&mut self, impl core::convert::Into<std::path::PathBuf>) -> &mut Self
+pub fn blivet::DaemonConfig::cleanup_on_drop(&mut self, bool) -> &mut Self
+pub fn blivet::DaemonConfig::close_fds(&mut self, bool) -> &mut Self
+pub fn blivet::DaemonConfig::env(&mut self, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>) -> &mut Self
+pub fn blivet::DaemonConfig::foreground(&mut self, bool) -> &mut Self
+pub fn blivet::DaemonConfig::group(&mut self, impl core::convert::Into<alloc::string::String>) -> &mut Self
+pub fn blivet::DaemonConfig::lockfile(&mut self, impl core::convert::Into<std::path::PathBuf>) -> &mut Self
+pub fn blivet::DaemonConfig::new() -> Self
+pub fn blivet::DaemonConfig::pidfile(&mut self, impl core::convert::Into<std::path::PathBuf>) -> &mut Self
+pub fn blivet::DaemonConfig::stderr(&mut self, impl core::convert::Into<std::path::PathBuf>) -> &mut Self
+pub fn blivet::DaemonConfig::stdout(&mut self, impl core::convert::Into<std::path::PathBuf>) -> &mut Self
+pub fn blivet::DaemonConfig::umask(&mut self, u32) -> &mut Self
+pub fn blivet::DaemonConfig::user(&mut self, impl core::convert::Into<alloc::string::String>) -> &mut Self
+pub fn blivet::DaemonConfig::validate(&self) -> core::result::Result<(), blivet::DaemonizeError>
+impl core::clone::Clone for blivet::DaemonConfig
+pub fn blivet::DaemonConfig::clone(&self) -> blivet::DaemonConfig
+impl core::cmp::Eq for blivet::DaemonConfig
+impl core::cmp::PartialEq for blivet::DaemonConfig
+pub fn blivet::DaemonConfig::eq(&self, &blivet::DaemonConfig) -> bool
+impl core::default::Default for blivet::DaemonConfig
+pub fn blivet::DaemonConfig::default() -> Self
+impl core::fmt::Debug for blivet::DaemonConfig
+pub fn blivet::DaemonConfig::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for blivet::DaemonConfig
+impl core::marker::Freeze for blivet::DaemonConfig
+impl core::marker::Send for blivet::DaemonConfig
+impl core::marker::Sync for blivet::DaemonConfig
+impl core::marker::Unpin for blivet::DaemonConfig
+impl core::marker::UnsafeUnpin for blivet::DaemonConfig
+impl core::panic::unwind_safe::RefUnwindSafe for blivet::DaemonConfig
+impl core::panic::unwind_safe::UnwindSafe for blivet::DaemonConfig
+#[non_exhaustive] pub struct blivet::DaemonContext
+impl blivet::DaemonContext
+pub fn blivet::DaemonContext::chown_paths(&mut self) -> core::result::Result<(), blivet::DaemonizeError>
+pub fn blivet::DaemonContext::cleanup(&mut self)
+pub fn blivet::DaemonContext::cleanup_on_signals(&self, &[i32]) -> core::result::Result<(), blivet::DaemonizeError>
+pub fn blivet::DaemonContext::cleanup_on_term_signals(&self) -> core::result::Result<(), blivet::DaemonizeError>
+pub fn blivet::DaemonContext::drop_privileges(&mut self) -> core::result::Result<(), blivet::DaemonizeError>
+pub fn blivet::DaemonContext::lockfile_fd(&self) -> core::option::Option<std::os::fd::owned::BorrowedFd<'_>>
+pub fn blivet::DaemonContext::notify_parent(&mut self) -> core::result::Result<(), blivet::DaemonizeError>
+pub fn blivet::DaemonContext::notify_parent_or_report(&mut self)
+pub fn blivet::DaemonContext::report_error(&mut self, &blivet::DaemonizeError) -> never
+pub fn blivet::DaemonContext::report_error_msg(&mut self, u8, impl core::convert::Into<alloc::string::String>) -> never
+pub fn blivet::DaemonContext::set_cleanup_on_drop(&mut self, bool)
+impl core::fmt::Debug for blivet::DaemonContext
+pub fn blivet::DaemonContext::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::ops::drop::Drop for blivet::DaemonContext
+pub fn blivet::DaemonContext::drop(&mut self)
+impl core::marker::Freeze for blivet::DaemonContext
+impl core::marker::Send for blivet::DaemonContext
+impl core::marker::Sync for blivet::DaemonContext
+impl core::marker::Unpin for blivet::DaemonContext
+impl core::marker::UnsafeUnpin for blivet::DaemonContext
+impl core::panic::unwind_safe::RefUnwindSafe for blivet::DaemonContext
+impl core::panic::unwind_safe::UnwindSafe for blivet::DaemonContext
+pub unsafe fn blivet::daemonize(&blivet::DaemonConfig) -> core::result::Result<blivet::DaemonContext, blivet::DaemonizeError>
+pub fn blivet::daemonize_checked(&blivet::DaemonConfig) -> core::result::Result<blivet::DaemonContext, blivet::DaemonizeError>
