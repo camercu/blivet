@@ -40,13 +40,15 @@
     ],
     [
       "@semantic-release/exec",
-      { "prepareCmd": "cargo generate-lockfile" }
+      {
+        "prepareCmd": "cargo generate-lockfile && nix-shell --run 'just manpage'"
+      }
     ],
     "@semantic-release/changelog",
     [
       "@semantic-release/git",
       {
-        "assets": ["Cargo.toml", "Cargo.lock", "CHANGELOG.md"],
+        "assets": ["Cargo.toml", "Cargo.lock", "CHANGELOG.md", "docs/daemonize.1"],
         "message": "chore(release): ${nextRelease.version}"
       }
     ],
