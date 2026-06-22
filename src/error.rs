@@ -70,6 +70,19 @@ pub enum DaemonizeError {
     #[error("failed to notify parent: {0}")]
     NotifyFailed(#[source] std::io::Error),
 
+    /// A user and/or group was configured but
+    /// [`drop_privileges`](crate::DaemonContext::drop_privileges) was never
+    /// called before the daemon signaled readiness.
+    ///
+    /// Surfaced by [`notify_parent`](crate::DaemonContext::notify_parent) so a
+    /// daemon configured to run as an unprivileged user fails loudly instead of
+    /// silently continuing to run with elevated privileges.
+    #[error(
+        "privileges not dropped: a user/group was configured but \
+         drop_privileges() was never called before notifying readiness"
+    )]
+    PrivilegesNotDropped,
+
     /// Application-level failure during the privileged init window, reported by
     /// the caller (e.g. a socket bind or database connect that failed after
     /// [`daemonize`](crate::daemonize) but before
@@ -126,21 +139,22 @@ impl DaemonizeError {
     /// `70` (`EX_SOFTWARE`).
     pub fn exit_code(&self) -> u8 {
         match self {
-            DaemonizeError::ValidationError(_) => 64,  // EX_USAGE
-            DaemonizeError::ProgramNotFound(_) => 66,  // EX_NOINPUT
-            DaemonizeError::UserNotFound(_) => 67,     // EX_NOUSER
-            DaemonizeError::GroupNotFound(_) => 67,    // EX_NOUSER
-            DaemonizeError::LockConflict(_) => 69,     // EX_UNAVAILABLE
-            DaemonizeError::LockfileError(_) => 73,    // EX_CANTCREAT
-            DaemonizeError::ForkFailed(_) => 71,       // EX_OSERR
-            DaemonizeError::SetsidFailed(_) => 71,     // EX_OSERR
-            DaemonizeError::ChdirFailed(_) => 71,      // EX_OSERR
-            DaemonizeError::PermissionDenied(_) => 77, // EX_NOPERM
-            DaemonizeError::PidfileError(_) => 73,     // EX_CANTCREAT
-            DaemonizeError::OutputFileError(_) => 73,  // EX_CANTCREAT
-            DaemonizeError::ChownError(_) => 73,       // EX_CANTCREAT
-            DaemonizeError::ExecFailed(_) => 71,       // EX_OSERR
-            DaemonizeError::NotifyFailed(_) => 71,     // EX_OSERR
+            DaemonizeError::ValidationError(_) => 64,   // EX_USAGE
+            DaemonizeError::ProgramNotFound(_) => 66,   // EX_NOINPUT
+            DaemonizeError::UserNotFound(_) => 67,      // EX_NOUSER
+            DaemonizeError::GroupNotFound(_) => 67,     // EX_NOUSER
+            DaemonizeError::LockConflict(_) => 69,      // EX_UNAVAILABLE
+            DaemonizeError::LockfileError(_) => 73,     // EX_CANTCREAT
+            DaemonizeError::ForkFailed(_) => 71,        // EX_OSERR
+            DaemonizeError::SetsidFailed(_) => 71,      // EX_OSERR
+            DaemonizeError::ChdirFailed(_) => 71,       // EX_OSERR
+            DaemonizeError::PermissionDenied(_) => 77,  // EX_NOPERM
+            DaemonizeError::PidfileError(_) => 73,      // EX_CANTCREAT
+            DaemonizeError::OutputFileError(_) => 73,   // EX_CANTCREAT
+            DaemonizeError::ChownError(_) => 73,        // EX_CANTCREAT
+            DaemonizeError::ExecFailed(_) => 71,        // EX_OSERR
+            DaemonizeError::NotifyFailed(_) => 71,      // EX_OSERR
+            DaemonizeError::PrivilegesNotDropped => 70, // EX_SOFTWARE
             // Caller-chosen, but never 0: that would alias success.
             DaemonizeError::Application { code: 0, .. } => 70, // EX_SOFTWARE
             DaemonizeError::Application { code, .. } => *code,

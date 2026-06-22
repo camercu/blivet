@@ -64,6 +64,10 @@ pub struct DaemonContext {
     lockfile: Option<Flock<OwnedFd>>,
     notify_pipe: Option<NotifyPipe>,
     cleaned_up: bool,
+    /// Set once [`drop_privileges`](Self::drop_privileges) completes. Used to
+    /// catch a daemon that configured a user/group but never dropped, so it
+    /// fails loudly rather than running with elevated privileges.
+    privileges_dropped: bool,
 }
 
 impl fmt::Debug for DaemonContext {
@@ -111,7 +115,16 @@ impl DaemonContext {
             lockfile,
             notify_pipe,
             cleaned_up: false,
+            privileges_dropped: false,
         }
+    }
+
+    /// Whether a privilege drop is still owed: a user/group is configured but
+    /// [`drop_privileges`](Self::drop_privileges) has not completed. When true,
+    /// signaling readiness would leave the daemon running with elevated
+    /// privileges, so [`notify_parent`](Self::notify_parent) refuses.
+    fn privileges_pending(&self) -> bool {
+        (self.config.user.is_some() || self.config.group.is_some()) && !self.privileges_dropped
     }
 
     /// Returns a borrowed reference to the lockfile fd, or `None` if no
@@ -290,6 +303,7 @@ impl DaemonContext {
     /// or `setuid` fails.
     pub fn drop_privileges(&mut self) -> Result<(), DaemonizeError> {
         if self.config.user.is_none() && self.config.group.is_none() {
+            self.privileges_dropped = true;
             return Ok(());
         }
 
@@ -317,6 +331,7 @@ impl DaemonContext {
             crate::unsafe_ops::raw_set_env_var("LOGNAME", &info.name);
         }
 
+        self.privileges_dropped = true;
         Ok(())
     }
 
@@ -329,6 +344,12 @@ impl DaemonContext {
     ///
     /// # Errors
     ///
+    /// Returns [`DaemonizeError::PrivilegesNotDropped`] (exit code 70,
+    /// `EX_SOFTWARE`) if a user/group is configured but
+    /// [`drop_privileges`](Self::drop_privileges) was never called — signaling
+    /// readiness while still privileged is refused so the bug surfaces instead
+    /// of shipping a daemon running as root.
+    ///
     /// Returns [`DaemonizeError::NotifyFailed`] (exit code 71, `EX_OSERR`) if
     /// writing to the pipe fails. Returning `DaemonizeError` — rather than a
     /// bare `io::Error` — lets a `fn run() -> Result<(), DaemonizeError>` use
@@ -336,6 +357,11 @@ impl DaemonContext {
     /// [`exit_code`](DaemonizeError::exit_code).
     #[must_use = "the parent process blocks until notified; ignoring this Result may leave it waiting"]
     pub fn notify_parent(&mut self) -> Result<(), DaemonizeError> {
+        if self.privileges_pending() {
+            // Refuse to signal readiness while still privileged: the pipe is
+            // left intact so Drop reports the daemon as unnotified.
+            return Err(DaemonizeError::PrivilegesNotDropped);
+        }
         if let Some(pipe) = self.notify_pipe.take() {
             pipe.signal_ready().map_err(DaemonizeError::NotifyFailed)?;
         }
@@ -354,6 +380,9 @@ impl DaemonContext {
     /// pipe (and usually means the parent is gone), so the failure is surfaced
     /// via the exit status and pidfile cleanup, not a message to the parent.
     pub fn notify_parent_or_report(&mut self) {
+        if self.privileges_pending() {
+            self.report_error(&DaemonizeError::PrivilegesNotDropped);
+        }
         if let Some(pipe) = self.notify_pipe.take() {
             if let Err(e) = pipe.signal_ready() {
                 self.report_error(&DaemonizeError::NotifyFailed(e));
@@ -489,6 +518,60 @@ mod tests {
         let (rd, wr) = make_pipe();
         let mut ctx = ctx(&DaemonConfig::new(), None, Some(NotifyPipe::new(wr)));
         ctx.notify_parent_or_report(); // success path returns normally
+        assert_eq!(read_pipe(rd), vec![0x00]);
+    }
+
+    // Covers: R125
+    #[test]
+    fn privileges_pending_tracks_config_and_drop_state() {
+        let mut user_cfg = DaemonConfig::new();
+        user_cfg.user("nobody");
+        let mut group_cfg = DaemonConfig::new();
+        group_cfg.group("nogroup");
+
+        // Configured but not yet dropped -> pending; clears once dropped.
+        for cfg in [&user_cfg, &group_cfg] {
+            let mut c = ctx(cfg, None, None);
+            assert!(c.privileges_pending(), "configured user/group, not dropped");
+            c.privileges_dropped = true;
+            assert!(!c.privileges_pending(), "no longer pending once dropped");
+        }
+
+        // Nothing configured -> never pending.
+        assert!(!default_ctx().privileges_pending());
+    }
+
+    // Covers: R125
+    #[test]
+    fn notify_parent_refuses_when_privileges_pending() {
+        // Keep the read end open so the Drop-time signal_unnotified write does
+        // not hit a closed pipe.
+        let (_rd, wr) = make_pipe();
+        let mut config = DaemonConfig::new();
+        config.user("nobody");
+        let mut ctx = ctx(&config, None, Some(NotifyPipe::new(wr)));
+
+        assert!(
+            matches!(
+                ctx.notify_parent(),
+                Err(DaemonizeError::PrivilegesNotDropped)
+            ),
+            "must refuse to signal readiness while still privileged"
+        );
+        // The pipe is left intact: the parent learns of the failure via the
+        // unnotified byte written when this context drops.
+    }
+
+    // Covers: R125
+    #[test]
+    fn notify_parent_succeeds_once_privileges_dropped() {
+        let (rd, wr) = make_pipe();
+        let mut config = DaemonConfig::new();
+        config.user("nobody");
+        let mut ctx = ctx(&config, None, Some(NotifyPipe::new(wr)));
+        ctx.privileges_dropped = true; // simulate a successful drop_privileges()
+
+        ctx.notify_parent().unwrap();
         assert_eq!(read_pipe(rd), vec![0x00]);
     }
 

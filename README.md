@@ -373,6 +373,7 @@ Each maps to a `sysexits.h` exit code via `exit_code()`.
 | `PermissionDenied` | 77          | Not root, or setuid/setgid failed        |
 | `ExecFailed`       | 71          | CLI: `exec` of target program failed     |
 | `NotifyFailed`     | 71          | Writing readiness byte to parent failed  |
+| `PrivilegesNotDropped` | 70      | user/group set but `drop_privileges()` never called |
 | `Application`      | caller's    | App-level failure you report yourself    |
 
 #### Reporting your own failures

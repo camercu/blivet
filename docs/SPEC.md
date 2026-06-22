@@ -753,6 +753,7 @@ exit_code()` returns these values.
 | `OutputFileError`        | 73        | `EX_CANTCREAT`        |
 | `ChownError`             | 73        | `EX_CANTCREAT`        |
 | `ExecFailed`             | 71        | `EX_OSERR`            |
+| `PrivilegesNotDropped`   | 70        | `EX_SOFTWARE`         |
 
 Pre-daemonization errors: CLI prints message to stderr, exits per
 table. Post-daemonization errors: reported to the parent via the
@@ -1099,3 +1100,7 @@ verification points.
   strategy as `drop_privileges()`.
 - R124. CLI calls `chown_paths()` then `drop_privileges()` when
   user or group is configured, between `daemonize()` and exec.
+- R125. When a user/group is configured but `drop_privileges()` was
+  never called, `notify_parent()` returns `PrivilegesNotDropped`
+  (exit 70) instead of signaling readiness — so a daemon can never
+  report itself healthy while still holding elevated privileges.

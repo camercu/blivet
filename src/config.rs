@@ -649,6 +649,7 @@ mod tests {
             DaemonizeError::ChownError("detail".into()),
             DaemonizeError::ExecFailed("detail".into()),
             DaemonizeError::NotifyFailed(Error::from(ErrorKind::BrokenPipe)),
+            DaemonizeError::PrivilegesNotDropped,
             DaemonizeError::application(71, "detail"),
         ];
 
@@ -671,6 +672,7 @@ mod tests {
                 | DaemonizeError::ChownError(_)
                 | DaemonizeError::ExecFailed(_)
                 | DaemonizeError::NotifyFailed(_)
+                | DaemonizeError::PrivilegesNotDropped
                 | DaemonizeError::Application { .. } => {}
             }
         }
