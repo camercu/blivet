@@ -38,27 +38,31 @@ real-time signal iteration.
 
 ## Unsafe boundary
 
-The crate root uses `#![deny(unsafe_code)]`; modules opt back in locally
-with `#[allow(unsafe_code)]` only where required. Raw libc/syscall FFI is
-concentrated in one internal `unsafe_ops` module that exposes safe
-`pub(crate)` wrappers, so the rest of the crate calls them without writing
-`unsafe`.
+The crate root uses `#![deny(unsafe_code)]`; modules opt back in locally with
+`#[allow(unsafe_code)]` only where required. Raw libc/syscall FFI whose
+invariants can be upheld internally is encapsulated as safe `pub(crate)`
+wrappers in one `unsafe_ops` module. The remaining `unsafe` is for operations
+whose safety is *context-dependent* — they require single-threadedness the
+caller establishes — so they live at the call site that owns that contract
+rather than behind a fake-safe wrapper.
 
-`unsafe` appears in exactly four places:
+`unsafe` appears in these places:
 
-- `unsafe_ops`: the FFI wrappers — signal reset (`libc::sigaction()`,
-  including the real-time signal range via `libc::SIGRTMIN()`/
-  `SIGRTMAX()`), `close()`, `initgroups()`, `setenv`/`unsetenv`,
-  `_exit()`, `unlink()`, `raise()`, and the per-OS thread-count queries.
+- `unsafe_ops`: the encapsulated FFI wrappers — signal reset
+  (`libc::sigaction()`, incl. the real-time range via `SIGRTMIN()`/
+  `SIGRTMAX()`), `close()`, `initgroups()`, `_exit()`, `unlink()`, `raise()`,
+  and the per-OS thread-count queries.
 - `forker.rs`: `RealForker::fork` is an `unsafe fn` wrapping
   `nix::unistd::fork()` (`unsafe` since nix 0.24); `daemonize_inner`
   invokes it as `unsafe { forker.fork() }`.
-- `lib.rs`: `daemonize_unchecked()` is a public `unsafe fn` (its unsafety
-  is a caller contract, not an `unsafe` block in the body), and the safe
-  `daemonize()` calls it via `unsafe { daemonize_unchecked(config) }`.
+- `lib.rs`: `daemonize_unchecked()` is a public `unsafe fn` (caller contract),
+  and the safe `daemonize()` calls it via `unsafe { … }` after the guard.
 - `context.rs`: `DaemonContext::drop_privileges_unchecked()` is a public
-  `unsafe fn` (caller contract for the `USER`/`HOME`/`LOGNAME` `setenv`),
-  and the safe `drop_privileges()` calls it via `unsafe { … }`.
+  `unsafe fn` that calls `setenv` (`USER`/`HOME`/`LOGNAME`); the safe
+  `drop_privileges()` calls it via `unsafe { … }` after the guard.
+- `steps.rs`: `set_env_vars` calls `setenv` in the post-fork sequence — sound
+  because the child is single-threaded by `fork` (or, in foreground mode, the
+  entry point required single-threadedness).
 
 Test code additionally uses `nix::sys::signal::sigaction`. An auditor who
 reads these sites sees every `unsafe` in the crate.

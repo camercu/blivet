@@ -416,10 +416,14 @@ impl DaemonContext {
             nix::unistd::setuid(info.uid)
                 .map_err(|e| DaemonizeError::PermissionDenied(format!("setuid: {e}")))?;
 
-            // Set USER, HOME, LOGNAME — overwrite any .env() values
-            crate::unsafe_ops::raw_set_env_var("USER", &info.name);
-            crate::unsafe_ops::raw_set_env_var("HOME", &info.dir);
-            crate::unsafe_ops::raw_set_env_var("LOGNAME", &info.name);
+            // Set USER, HOME, LOGNAME — overwrite any .env() values.
+            // SAFETY: this `unsafe fn`'s contract requires the process to be
+            // single-threaded, so these `setenv` calls cannot race `environ`.
+            unsafe {
+                std::env::set_var("USER", &info.name);
+                std::env::set_var("HOME", &info.dir);
+                std::env::set_var("LOGNAME", &info.name);
+            }
         }
 
         self.privileges_dropped = true;

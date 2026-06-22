@@ -1,11 +1,18 @@
 //! Unsafe code containment zone.
 //!
-//! Contains safe wrappers around libc/std functions that require `unsafe`.
-//! Other modules call these wrappers without needing `#[allow(unsafe_code)]`.
+//! Contains safe wrappers around libc/std functions whose invariants this
+//! module upholds internally, so other modules call them without
+//! `#[allow(unsafe_code)]`.
 //!
-//! The few `unsafe` blocks outside this module are:
-//! - `unsafe fn` calls to [`Forker::fork`](crate::forker::Forker::fork) and
-//!   `nix::unistd::fork` in `forker.rs` / `lib.rs`
+//! Some `unsafe` operations are *not* encapsulable here because their safety is
+//! context-dependent — single-threadedness the caller must establish — so they
+//! live at the call site that owns that contract, not behind a fake-safe
+//! wrapper:
+//! - the `fork` call ([`Forker::fork`](crate::forker::Forker::fork) wrapping
+//!   `nix::unistd::fork`) in `forker.rs`, invoked from `daemonize_inner` in
+//!   `lib.rs`
+//! - `std::env::set_var` (USER/HOME/LOGNAME) in `drop_privileges_unchecked`
+//!   (`context.rs`) and the post-fork env step `set_env_vars` (`steps.rs`)
 //! - `nix::sys::signal::sigaction` in test code
 
 #![allow(unsafe_code)]
@@ -85,25 +92,6 @@ pub(crate) fn raw_initgroups(
     } else {
         Ok(())
     }
-}
-
-/// Set an environment variable.
-///
-/// `std::env::set_var` is not thread-safe (unsafe since Rust 1.83).
-/// Callers must ensure no other threads exist (e.g. post-fork child).
-pub(crate) fn raw_set_env_var(
-    key: impl AsRef<std::ffi::OsStr>,
-    value: impl AsRef<std::ffi::OsStr>,
-) {
-    unsafe { std::env::set_var(key, value) };
-}
-
-/// Remove an environment variable.
-///
-/// Same thread-safety constraints as [`raw_set_env_var`].
-#[cfg(test)]
-pub(crate) fn raw_remove_env_var(key: &str) {
-    unsafe { std::env::remove_var(key) };
 }
 
 /// Terminate the process immediately via `_exit(2)`.

@@ -145,9 +145,19 @@ pub(crate) fn clear_signal_mask() {
 }
 
 /// Step 11: Set environment variables in insertion order.
+///
+/// Uses `std::env::set_var`, which is not thread-safe. Sound here because this
+/// runs only inside the daemonization sequence: post-fork the child is
+/// single-threaded by `fork` semantics, and in foreground mode the entry point
+/// ([`daemonize`](crate::daemonize) /
+/// [`daemonize_unchecked`](crate::daemonize_unchecked)) requires
+/// single-threadedness. No other thread can touch `environ`.
+#[allow(unsafe_code)]
 pub(crate) fn set_env_vars(env: &[(String, String)]) {
     for (key, value) in env {
-        unsafe_ops::raw_set_env_var(key, value);
+        // SAFETY: single-threaded per this fn's contract (post-fork child or
+        // foreground entry gate), so the `setenv` cannot race.
+        unsafe { std::env::set_var(key, value) };
     }
 }
 
@@ -550,6 +560,7 @@ mod tests {
 
     #[test]
     #[serial]
+    #[allow(unsafe_code)]
     fn set_env_vars_applies() {
         let vars = vec![
             ("DAEMONIZE_TEST_A".into(), "1".into()),
@@ -558,12 +569,16 @@ mod tests {
         set_env_vars(&vars);
         assert_eq!(std::env::var("DAEMONIZE_TEST_A").unwrap(), "1");
         assert_eq!(std::env::var("DAEMONIZE_TEST_B").unwrap(), "2");
-        unsafe_ops::raw_remove_env_var("DAEMONIZE_TEST_A");
-        unsafe_ops::raw_remove_env_var("DAEMONIZE_TEST_B");
+        // SAFETY: #[serial] guarantees no concurrent env access during this test.
+        unsafe {
+            std::env::remove_var("DAEMONIZE_TEST_A");
+            std::env::remove_var("DAEMONIZE_TEST_B");
+        }
     }
 
     #[test]
     #[serial]
+    #[allow(unsafe_code)]
     fn set_env_vars_last_write_wins() {
         let vars = vec![
             ("DAEMONIZE_TEST_DUP".into(), "first".into()),
@@ -571,7 +586,8 @@ mod tests {
         ];
         set_env_vars(&vars);
         assert_eq!(std::env::var("DAEMONIZE_TEST_DUP").unwrap(), "second");
-        unsafe_ops::raw_remove_env_var("DAEMONIZE_TEST_DUP");
+        // SAFETY: #[serial] guarantees no concurrent env access during this test.
+        unsafe { std::env::remove_var("DAEMONIZE_TEST_DUP") };
     }
 
     // --- Step 12: redirect output (pure plan tests) ---
