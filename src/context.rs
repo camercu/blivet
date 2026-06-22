@@ -47,7 +47,7 @@ use crate::notify::NotifyPipe;
 /// ```no_run
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// # let config = blivet::DaemonConfig::new();
-/// let mut ctx = unsafe { blivet::daemonize(&config)? };
+/// let mut ctx = blivet::daemonize(&config)?;
 /// // ... privileged work (e.g., bind port 80) ...
 /// ctx.chown_paths()?;       // transfer file ownership while still root
 /// ctx.drop_privileges()?;   // setgid + setuid
@@ -446,7 +446,7 @@ impl DaemonContext {
     /// ```no_run
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// # let config = blivet::DaemonConfig::new();
-    /// # let mut ctx = unsafe { blivet::daemonize(&config)? };
+    /// # let mut ctx = blivet::daemonize(&config)?;
     /// let listener = match std::net::TcpListener::bind("0.0.0.0:80") {
     ///     Ok(l) => l,
     ///     Err(e) => ctx.report_error_msg(71, format!("bind failed: {e}")),

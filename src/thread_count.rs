@@ -1,14 +1,14 @@
 //! Current-process thread count for the single-threaded check in
-//! [`daemonize_checked`](crate::daemonize_checked).
+//! [`daemonize`](crate::daemonize).
 //!
 //! [`count`] returns the number of threads in this process. Linux reads
 //! `/proc/self/status`; macOS and the BSDs query the kernel via
 //! [`crate::unsafe_ops::thread_count`] — the syscalls live there because the
-//! crate confines all `unsafe` to that module. This module is the single
+//! crate confines raw FFI `unsafe` to that module. This module is the single
 //! conceptual owner of "how many threads are running"; callers see only
 //! [`count`] and never the per-OS mechanism.
 //!
-//! Defined only on the targets [`daemonize_checked`](crate::daemonize_checked)
+//! Defined only on the targets [`daemonize`](crate::daemonize)
 //! supports; elsewhere that function is a deprecated stub that never calls in
 //! here.
 
@@ -55,7 +55,7 @@ mod tests {
     use super::count;
     use crate::test_support::{is_subprocess, run_in_subprocess};
 
-    /// The thread count backing `daemonize_checked` must reflect the kernel's
+    /// The thread count backing `daemonize` must reflect the kernel's
     /// real thread count. Runs in an isolated subprocess: the assertion is
     /// relative (the count must *rise* by the number of threads spawned), which
     /// only holds when nothing else changes the count between readings. In the

@@ -175,7 +175,7 @@ pub(crate) fn install_pidfile_cleanup_signals(
 }
 
 /// Number of threads in the current process, for the single-threaded check in
-/// [`daemonize_checked`](crate::daemonize_checked) on platforms without
+/// [`daemonize`](crate::daemonize) on platforms without
 /// `/proc/self/status` (Linux uses `/proc`).
 ///
 /// Each target reads the kernel's own thread count for this process:
@@ -294,7 +294,7 @@ pub(crate) fn thread_count() -> std::io::Result<usize> {
     }
     // A live process always has at least its own thread, so a zero-size sizing
     // result is an anomaly, not a real "zero threads". Surface it as an error
-    // rather than Ok(0): daemonize_checked treats an undeterminable count as a
+    // rather than Ok(0): daemonize treats an undeterminable count as a
     // hard failure, which is the safe response to a count it cannot trust.
     if size == 0 {
         return Err(std::io::Error::new(

@@ -44,12 +44,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .stderr(LOGFILE)
         .foreground(foreground);
 
-    // Daemonize first, while still single-threaded.
-    //
-    // On Linux you could use the safe `daemonize_checked(&config)?` instead;
-    // it is not available on other Unixes, so this example uses the portable
-    // `unsafe` entry point. We have spawned no threads yet, so this is sound.
-    let mut ctx = unsafe { daemonize(&config)? };
+    // Daemonize first, while still single-threaded. `daemonize` is the safe
+    // entry point: it verifies the single-threaded requirement for us. On
+    // targets where it is unavailable, use the portable `unsafe` escape hatch
+    // `unsafe { daemonize_unchecked(&config)? }` instead.
+    let mut ctx = daemonize(&config)?;
 
     // Privileged init phase: bind the listening socket.
     let listener = TcpListener::bind(ADDR)?;

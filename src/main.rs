@@ -185,7 +185,7 @@ fn main() -> ExitCode {
 
     // Daemonize
     #[allow(unsafe_code)]
-    let mut ctx = match unsafe { blivet::daemonize(&config) } {
+    let mut ctx = match unsafe { blivet::daemonize_unchecked(&config) } {
         Ok(ctx) => ctx,
         Err(e) => {
             eprintln!("{e}");

@@ -22,7 +22,7 @@
 //! let mut config = DaemonConfig::new();
 //! config.pidfile("/var/run/foo.pid").chdir("/tmp");
 //!
-//! let mut ctx = unsafe { daemonize(&config)? };
+//! let mut ctx = daemonize(&config)?;
 //! // ... application initialization ...
 //! ctx.notify_parent()?;
 //! // daemon process continues here
@@ -32,27 +32,25 @@
 //!
 //! # Choosing an entry point
 //!
-//! There are two ways to daemonize:
+//! There are two entry points:
 //!
-//! - [`daemonize`] is `unsafe`: you must guarantee the process is
-//!   single-threaded at the call site (see [Threads and async
-//!   runtimes](#threads-and-async-runtimes)). Available on all Unix
-//!   platforms.
-//! - [`daemonize_checked`] is a safe wrapper that verifies
-//!   single-threadedness for you, so no `unsafe` is needed. It is available on
+//! - [`daemonize`] is the safe default: it verifies the process is
+//!   single-threaded for you, so no `unsafe` is needed. It is available on
 //!   **Linux, macOS, FreeBSD, NetBSD, and OpenBSD**, each using the kernel's
 //!   own thread count (`/proc/self/status` on Linux, `proc_pidinfo` on macOS,
 //!   `sysctl` on the BSDs). On any other target it is a `#[deprecated]` stub
 //!   that never daemonizes — a hard compile error under `-D warnings` /
-//!   `#![deny(deprecated)]` — so call `unsafe { daemonize(&config) }` there and
-//!   uphold the single-threaded contract yourself.
+//!   `#![deny(deprecated)]`; use [`daemonize_unchecked`] there.
+//! - [`daemonize_unchecked`] is `unsafe` and available on all Unix platforms:
+//!   you must guarantee the process is single-threaded at the call site (see
+//!   [Threads and async runtimes](#threads-and-async-runtimes)).
 //!
-//! On the mainstream Unixes above you can call it directly:
+//! Most callers want [`daemonize`]:
 //!
 //! ```no_run
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! # let config = blivet::DaemonConfig::new();
-//! let mut ctx = blivet::daemonize_checked(&config)?;
+//! let mut ctx = blivet::daemonize(&config)?;
 //! # ctx.notify_parent()?;
 //! # Ok(())
 //! # }
@@ -66,11 +64,11 @@
 //! # let config = blivet::DaemonConfig::new();
 //! #[cfg(any(target_os = "linux", target_os = "macos", target_os = "freebsd",
 //!           target_os = "netbsd", target_os = "openbsd"))]
-//! let mut ctx = blivet::daemonize_checked(&config)?;
+//! let mut ctx = blivet::daemonize(&config)?;
 //! #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "freebsd",
 //!               target_os = "netbsd", target_os = "openbsd")))]
 //! // SAFETY: no threads spawned before this point.
-//! let mut ctx = unsafe { blivet::daemonize(&config)? };
+//! let mut ctx = unsafe { blivet::daemonize_unchecked(&config)? };
 //! # ctx.notify_parent()?;
 //! # Ok(())
 //! # }
@@ -84,7 +82,7 @@
 //!
 //! ```text
 //! [single-threaded required]
-//!   daemonize() / daemonize_checked()   <- forks here
+//!   daemonize() / daemonize_unchecked() <- forks here
 //!   chown_paths()                        <- still single-threaded
 //!   drop_privileges()                    <- still single-threaded (calls setenv)
 //!   notify_parent()
@@ -142,7 +140,7 @@
 //!
 //! fn run() -> Result<(), DaemonizeError> {
 //!     let config = DaemonConfig::new();
-//!     let mut ctx = unsafe { daemonize(&config)? };
+//!     let mut ctx = daemonize(&config)?;
 //!     // ... application init ...
 //!     // notify_parent() returns DaemonizeError, so `?` preserves the exit code.
 //!     ctx.notify_parent()?;
@@ -193,7 +191,7 @@
 //! let mut config = DaemonConfig::new();
 //! config.pidfile("/var/run/foo.pid").user("nobody").group("nogroup");
 //!
-//! let mut ctx = unsafe { daemonize(&config)? };
+//! let mut ctx = daemonize(&config)?;
 //!
 //! // 1. Privileged work while still root:
 //! //    bind sockets, chroot, set resource limits, etc.
@@ -240,10 +238,12 @@ use nix::unistd::ForkResult;
 use forker::{Forker, RealForker};
 use notify::NotifyPipe;
 
-/// Daemonize the current process.
+/// Daemonize the current process without verifying the thread count.
 ///
-/// On Linux, prefer the safe wrapper `daemonize_checked`, which verifies
-/// the single-threaded requirement for you.
+/// Prefer the safe [`daemonize`], which verifies the single-threaded
+/// requirement for you on the mainstream Unixes. Reach for this `unsafe`
+/// variant only on targets where [`daemonize`] is unavailable, or when you
+/// must manage the single-threaded contract yourself.
 ///
 /// # Safety
 ///
@@ -266,21 +266,22 @@ use notify::NotifyPipe;
 /// `sigprocmask` fails, `getrlimit` fails, or other OS-level invariants
 /// are violated (indicating a fundamentally broken environment).
 #[allow(unsafe_code)]
-pub unsafe fn daemonize(config: &DaemonConfig) -> Result<DaemonContext, DaemonizeError> {
+pub unsafe fn daemonize_unchecked(config: &DaemonConfig) -> Result<DaemonContext, DaemonizeError> {
     config.validate()?;
     daemonize_inner(config, &mut RealForker)
 }
 
-// The OSes where `daemonize_checked` can verify the thread count natively are
+// The OSes where `daemonize` can verify the thread count natively are
 // listed explicitly in each `cfg` below (function-like macros do not expand
 // inside `cfg` attributes): linux, macos, freebsd, netbsd, openbsd. The count
 // itself lives in the `thread_count` module.
 
-/// Safe wrapper for [`daemonize`] that verifies the process is single-threaded.
+/// Daemonize the current process, verifying it is single-threaded first.
 ///
 /// Counts the threads in the current process and panics unless exactly one is
-/// running, then calls [`daemonize`]. This upholds the single-threaded
-/// contract for you, so no `unsafe` block is needed.
+/// running, then calls [`daemonize_unchecked`]. This upholds the
+/// single-threaded contract for you, so no `unsafe` block is needed, and is the
+/// recommended entry point.
 ///
 /// # Platform support
 ///
@@ -289,7 +290,8 @@ pub unsafe fn daemonize(config: &DaemonConfig) -> Result<DaemonContext, Daemoniz
 /// macOS, `sysctl` on the BSDs). On any other target it is a `#[deprecated]`
 /// stub that never daemonizes — calling it warns with guidance (and is a hard
 /// compile error under `-D warnings` / `#![deny(deprecated)]`), and panics if
-/// invoked anyway; call [`daemonize`] yourself there inside an `unsafe` block.
+/// invoked anyway; call [`daemonize_unchecked`] yourself there inside an
+/// `unsafe` block.
 ///
 /// # Panics
 ///
@@ -297,7 +299,7 @@ pub unsafe fn daemonize(config: &DaemonConfig) -> Result<DaemonContext, Daemoniz
 /// thread count cannot be determined.
 /// Returns the panic message if `count` is not exactly one thread, else `None`.
 ///
-/// `daemonize_checked` requires *exactly* one thread (R45): forking a
+/// `daemonize` requires *exactly* one thread (R45): forking a
 /// multi-threaded process strands the child's non-forking threads with their
 /// locks held forever. Any count other than 1 is a violation — including an
 /// anomalous `0`, which a healthy process can never report and so signals an
@@ -313,7 +315,7 @@ pub unsafe fn daemonize(config: &DaemonConfig) -> Result<DaemonContext, Daemoniz
 fn single_threaded_violation(count: usize) -> Option<String> {
     (count != 1).then(|| {
         format!(
-            "daemonize_checked: {count} threads running (expected 1). \
+            "daemonize: {count} threads running (expected 1). \
              Call daemonize before spawning threads, async runtimes, \
              or libraries with background threads."
         )
@@ -327,15 +329,15 @@ fn single_threaded_violation(count: usize) -> Option<String> {
     target_os = "netbsd",
     target_os = "openbsd"
 ))]
-pub fn daemonize_checked(config: &DaemonConfig) -> Result<DaemonContext, DaemonizeError> {
+pub fn daemonize(config: &DaemonConfig) -> Result<DaemonContext, DaemonizeError> {
     let count = thread_count::count()
-        .expect("daemonize_checked: cannot determine thread count to verify single-threadedness");
+        .expect("daemonize: cannot determine thread count to verify single-threadedness");
     if let Some(msg) = single_threaded_violation(count) {
         panic!("{msg}");
     }
     #[allow(unsafe_code)]
     unsafe {
-        daemonize(config)
+        daemonize_unchecked(config)
     }
 }
 
@@ -343,13 +345,13 @@ pub fn daemonize_checked(config: &DaemonConfig) -> Result<DaemonContext, Daemoni
 /// safe wrapper to offer.
 ///
 /// Rather than omit the symbol entirely (which yields a bare "cannot find
-/// function `daemonize_checked`" error that hides *why*), this stub is provided
+/// function `daemonize`" error that hides *why*), this stub is provided
 /// and marked `#[deprecated]`: using it warns with guidance by default, and is
 /// a hard compile error under `-D warnings` / `#![deny(deprecated)]`.
 ///
 /// It never performs an unchecked daemonization. Call
-/// `unsafe { `[`daemonize`]`(&config) }` directly on this platform, ensuring
-/// the process is single-threaded first.
+/// `unsafe { `[`daemonize_unchecked`]`(&config) }` directly on this platform,
+/// ensuring the process is single-threaded first.
 ///
 /// # Panics
 ///
@@ -361,16 +363,14 @@ pub fn daemonize_checked(config: &DaemonConfig) -> Result<DaemonContext, Daemoni
     target_os = "netbsd",
     target_os = "openbsd"
 )))]
-#[deprecated(
-    note = "daemonize_checked cannot verify the thread count on this target. \
-            Call `unsafe { daemonize(&config) }` and ensure the process is \
-            single-threaded yourself."
-)]
-pub fn daemonize_checked(_config: &DaemonConfig) -> Result<DaemonContext, DaemonizeError> {
+#[deprecated(note = "daemonize cannot verify the thread count on this target. \
+            Call `unsafe { daemonize_unchecked(&config) }` and ensure the process \
+            is single-threaded yourself.")]
+pub fn daemonize(_config: &DaemonConfig) -> Result<DaemonContext, DaemonizeError> {
     panic!(
-        "daemonize_checked is unsupported on this target (cannot query the thread \
-         count); call `unsafe {{ daemonize(&config) }}` and ensure the process is \
-         single-threaded yourself"
+        "daemonize is unsupported on this target (cannot query the thread \
+         count); call `unsafe {{ daemonize_unchecked(&config) }}` and ensure the \
+         process is single-threaded yourself"
     )
 }
 
@@ -393,8 +393,8 @@ pub(crate) fn daemonize_inner(
             None => (None, None),
         };
 
-        // SAFETY: daemonize() is unsafe and requires the caller to ensure
-        // the process is single-threaded. daemonize_checked() verifies this
+        // SAFETY: daemonize_unchecked() is unsafe and requires the caller to
+        // ensure the process is single-threaded. daemonize() verifies this
         // on Linux via /proc/self/status before calling daemonize_inner().
         match (unsafe { forker.fork() })? {
             ForkResult::Parent { .. } => {

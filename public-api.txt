@@ -93,5 +93,5 @@ impl core::marker::Unpin for blivet::DaemonContext
 impl core::marker::UnsafeUnpin for blivet::DaemonContext
 impl core::panic::unwind_safe::RefUnwindSafe for blivet::DaemonContext
 impl core::panic::unwind_safe::UnwindSafe for blivet::DaemonContext
-pub unsafe fn blivet::daemonize(&blivet::DaemonConfig) -> core::result::Result<blivet::DaemonContext, blivet::DaemonizeError>
-pub fn blivet::daemonize_checked(&blivet::DaemonConfig) -> core::result::Result<blivet::DaemonContext, blivet::DaemonizeError>
+pub fn blivet::daemonize(&blivet::DaemonConfig) -> core::result::Result<blivet::DaemonContext, blivet::DaemonizeError>
+pub unsafe fn blivet::daemonize_unchecked(&blivet::DaemonConfig) -> core::result::Result<blivet::DaemonContext, blivet::DaemonizeError>
