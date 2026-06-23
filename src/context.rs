@@ -35,7 +35,7 @@ use crate::notify::NotifyPipe;
 /// signal. To clean up the pidfile on `SIGTERM`/`SIGINT`, install a signal
 /// handler that exits the main loop cleanly so this context can drop (or
 /// call [`cleanup()`](DaemonContext::cleanup) explicitly). See the
-/// [README](https://github.com/camercu/blivet#pidfile-cleanup) for an example
+/// [README](https://github.com/camercu/blivet#pidfile-cleanup-on-signals) for an example
 /// using [`signal_hook`](https://docs.rs/signal-hook).
 ///
 /// The lock is released when this value is dropped.
