@@ -12,7 +12,7 @@ Daemonizing a process *correctly* is deceptively hard: the double-fork dance,
 session detachment, signal and fd hygiene, and -- the part most libraries skip
 -- telling the launcher whether the daemon actually came up. Unlike `daemon(3)`
 or thin wrappers, `blivet` reports post-fork startup failures back to the
-launching process over a notification pipe, with `sysexits.h` exit codes. The
+launcher over a notification pipe, with `sysexits.h` exit codes. The
 shell, `systemd`, or a supervisor sees a real success or failure -- not a
 detached process that may have already died during init.
 
@@ -27,31 +27,6 @@ ctx.notify_parent()?;              // tell the launcher we're up; it exits 0
 // daemon runs here
 ```
 
-## How it works
-
-`daemonize()` double-forks, calls `setsid` to detach from the controlling
-terminal, and returns a `DaemonContext` in the grandchild -- your daemon. The
-original process does *not* return; it blocks on a pipe to the grandchild. In
-the daemon you then:
-
-1. run fallible init -- bind sockets, open files, connect to dependencies;
-2. `chown_paths()`, then `drop_privileges()`, to drop to an unprivileged user;
-3. call `notify_parent()`, which writes one readiness byte down the pipe.
-
-```text
-caller ── daemonize() ──► fork → setsid → fork ──► grandchild = your daemon
-   ▲                                                    │
-   └──────────── readiness / error  (pipe) ─────────────┘
-```
-
-The caller blocks until that byte arrives, then exits 0 -- or, if the daemon
-dies or calls `report_error()` first, exits non-zero with the matching
-`sysexits.h` code, so the launcher sees a real result rather than a process that
-detached and then crashed.
-
-Steps 1-2 must run **single-threaded**: spawn threads, async runtimes, or accept
-loops only *after* `drop_privileges()` returns. See [Safety](#safety) for why.
-
 ## Why blivet
 
 - **Correct by default.** Mandatory double-fork, `setsid`, signal reset
@@ -59,7 +34,7 @@ loops only *after* `drop_privileges()` returns. See [Safety](#safety) for why.
   `/dev/null` redirect -- the things hand-rolled daemonizers forget.
 - **Parent notification.** The launcher blocks until the daemon signals
   readiness or reports an error -- no "did it start?" polling. Forget to call
-  `notify_parent()` and the parent exits non-zero automatically.
+  `notify_parent()` and the launcher exits non-zero automatically.
 - **Split-phase privileges.** `daemonize()` returns while still privileged, so
   you can bind port 80 or `chroot` before `drop_privileges()`.
 - **Safe by default.** The checked entry points verify single-threadedness with
@@ -71,6 +46,31 @@ loops only *after* `drop_privileges()` returns. See [Safety](#safety) for why.
   calls, each `unsafe` at its call site with a documented contract.
 - **Library and CLI.** A builder API, or the standalone `daemonize` binary
   (`cargo install blivet`) that wraps any program.
+
+## How it works
+
+`daemonize()` double-forks, calls `setsid` to detach from the controlling
+terminal, and returns a `DaemonContext` in the grandchild -- your daemon. The
+launcher does *not* return; it blocks on a pipe to the grandchild, waiting for
+that daemon to report in. In the daemon you then:
+
+1. run fallible init -- bind sockets, open files, connect to dependencies;
+2. `chown_paths()`, then `drop_privileges()`, to drop to an unprivileged user;
+3. call `notify_parent()`, which writes one readiness byte down the pipe.
+
+```text
+launcher ── daemonize() ──► fork → setsid → fork ──► grandchild = your daemon
+   ▲                                                     │
+   └───────────── readiness / error  (pipe) ─────────────┘
+```
+
+That byte releases the launcher, which exits 0. If the daemon instead dies or
+calls `report_error()` before notifying, the launcher exits non-zero with the
+matching `sysexits.h` code -- so it sees a real result, not a process that
+detached and then crashed.
+
+Steps 1-2 must run **single-threaded**: spawn threads, async runtimes, or accept
+loops only *after* `drop_privileges()` returns. See [Safety](#safety) for why.
 
 ## Install
 
@@ -92,7 +92,7 @@ daemonize -p /var/run/myapp.pid -o /var/log/myapp.log -c /var/lib/myapp \
   -u www-data -g www-data -- /usr/bin/my-server
 ```
 
-The parent blocks until the daemon successfully `exec`s, then exits 0. On
+The launcher blocks until the daemon successfully `exec`s, then exits 0. On
 failure (lockfile conflict, permission denied, exec error) it prints the error
 to stderr and exits with a `sysexits.h` code. When `-u`/`-g` are given, the CLI
 transfers ownership of the pidfile, lockfile, and log files to the target
@@ -115,11 +115,11 @@ user/group before dropping privileges, so the daemon can keep writing to them.
 
 ## Library
 
-The smallest daemon is at the top of this README. A fuller setup adds a lock
-file, log redirection, and a working directory. As with `daemonize(1)`, the
-defaults are standard daemon behavior -- stdout/stderr go to `/dev/null` and the
-working directory becomes `/` -- so use absolute paths and redirect any output
-you want to keep:
+The minimal example above writes a pidfile and signals readiness. A fuller setup
+adds a lock file, log redirection, and a working directory. As with
+`daemonize(1)`, the defaults are standard daemon behavior -- stdout/stderr go to
+`/dev/null` and the working directory becomes `/` -- so use absolute paths and
+redirect any output you want to keep:
 
 ```rust
 use blivet::{DaemonConfig, daemonize};
@@ -135,7 +135,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut ctx = daemonize(&config)?;
     // fallible initialization here (open sockets, load config, …)
-    ctx.notify_parent()?; // signal readiness; the parent exits 0
+    ctx.notify_parent()?; // signal readiness; the launcher exits 0
     Ok(())
 }
 ```
@@ -181,7 +181,8 @@ config.foreground(true).close_fds(false); // keep supervisor-passed fds
   process is single-threaded, then daemonizes. Available on **Linux, macOS,
   FreeBSD, NetBSD, and OpenBSD** (it reads the kernel thread count:
   `/proc/self/status` on Linux, `proc_pidinfo` on macOS, `sysctl` on the BSDs).
-  On any other target it is a `#[deprecated]` stub that never daemonizes.
+  On any other target it is a `#[deprecated]` stub that panics; use the
+  unchecked form below.
 - **`unsafe { daemonize_unchecked(&config) }`** -- the escape hatch, on all Unix
   platforms. It skips the thread-count check, so *you* must guarantee the
   process is single-threaded.
@@ -281,10 +282,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 > target program, and `exec` resets custom signal handlers to their default
 > disposition, so a CLI-launched program must clean up its own pidfile.
 
-If you already run a signal loop (e.g. for graceful shutdown), clear the flag
-yourself and call `cleanup()` (or let `ctx` drop). The
-[`signal_hook`](https://crates.io/crates/signal-hook) crate is one way; `blivet`
-does not re-export it, so `cargo add signal_hook` first:
+If you already run your own signal loop (e.g. for graceful shutdown), you don't
+need the built-in handler: let the loop exit, then call `cleanup()` -- or just
+let `ctx` drop. The [`signal_hook`](https://crates.io/crates/signal-hook) crate
+is one way to drive that loop; `blivet` does not re-export it, so
+`cargo add signal_hook` first:
 
 ```rust
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -312,13 +314,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ### Reporting your own failures
 
 If startup work in the privileged init window fails (a socket bind, a database
-connect), report it to the parent with a `sysexits.h` code of your choosing via
-`report_error_msg` -- no need to construct a `DaemonizeError` by hand:
+connect), report it to the launcher with a `sysexits.h` code of your choosing
+via `report_error_msg` -- no need to construct a `DaemonizeError` by hand:
 
 ```rust
 let listener = match TcpListener::bind("0.0.0.0:80") {
     Ok(l) => l,
-    // 71 == EX_OSERR; the parent prints the message and exits with this code.
+    // 71 == EX_OSERR; the launcher prints the message and exits with this code.
     Err(e) => ctx.report_error_msg(71, format!("bind failed: {e}")),
 };
 ```
