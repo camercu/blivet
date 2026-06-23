@@ -79,39 +79,8 @@ cargo install blivet   # the `daemonize` CLI -- verify with `daemonize --version
 cargo add blivet        # the library
 ```
 
-The crate is `blivet`; the installed binary is `daemonize`.
-
-## CLI
-
-```sh
-# Simplest: daemonize a program
-daemonize -- /usr/bin/my-server --port 8080
-
-# Typical service: pidfile, log redirect, working dir, drop to an unprivileged user
-daemonize -p /var/run/myapp.pid -o /var/log/myapp.log -c /var/lib/myapp \
-  -u www-data -g www-data -- /usr/bin/my-server
-```
-
-The launcher blocks until the daemon successfully `exec`s, then exits 0. On
-failure (lockfile conflict, permission denied, exec error) it prints the error
-to stderr and exits with a `sysexits.h` code. When `-u`/`-g` are given, the CLI
-transfers ownership of the pidfile, lockfile, and log files to the target
-user/group before dropping privileges, so the daemon can keep writing to them.
-
-| Flag | Long                | Description |
-| ---- | ------------------- | --- |
-| `-p` | `--pidfile PATH`    | Write daemon PID to file |
-| `-c` | `--chdir PATH`      | Working directory (default: `/`) |
-| `-m` | `--umask MODE`      | Process umask in octal (e.g. `022`) |
-| `-o` | `--stdout PATH`     | Redirect stdout to file (also sets stderr if `-e` is not given) |
-| `-e` | `--stderr PATH`     | Redirect stderr to file (default: stdout path; `.stdout`→`.stderr`, `.out`→`.err`) |
-| `-a` | `--append`          | Append to stdout/stderr files instead of truncating |
-| `-l` | `--lock PATH`       | Exclusive lockfile (default: pidfile path, if set) |
-| `-E` | `--env NAME=VAL`    | Set environment variable (repeatable) |
-| `-u` | `--user NAME\|UID`  | Switch to user after daemonizing (requires root) |
-| `-g` | `--group NAME\|GID` | Switch to group after daemonizing (requires root) |
-| `-f` | `--foreground`      | Stay in foreground (no fork/setsid)                            |
-| `-v` | `--verbose`         | Print diagnostic info before daemonizing |
+The crate is `blivet`; the installed binary is `daemonize`. See
+[Library](#library) for the API, or [CLI](#cli) for command-line use.
 
 ## Library
 
@@ -351,6 +320,43 @@ fn run() -> Result<(), DaemonizeError> {
     Ok(())
 }
 ```
+
+## CLI
+
+The `daemonize` binary wraps any program as a daemon, applying the same setup as
+the library:
+
+```sh
+# Simplest: daemonize a program
+daemonize -- /usr/bin/my-server --port 8080
+
+# Typical service: pidfile, log redirect, working dir, drop to an unprivileged user
+daemonize -p /var/run/myapp.pid -o /var/log/myapp.log -c /var/lib/myapp \
+  -u www-data -g www-data -- /usr/bin/my-server
+```
+
+The launcher blocks until the daemon successfully `exec`s, then exits 0. On
+failure (lockfile conflict, permission denied, exec error) it prints the error
+to stderr and exits with a `sysexits.h` code -- the same codes the library
+returns (see [Errors & exit codes](#errors--exit-codes)). When `-u`/`-g` are
+given, the CLI transfers ownership of the pidfile, lockfile, and log files to the
+target user/group before dropping privileges, so the daemon can keep writing to
+them.
+
+| Flag | Long                | Description |
+| ---- | ------------------- | --- |
+| `-p` | `--pidfile PATH`    | Write daemon PID to file |
+| `-c` | `--chdir PATH`      | Working directory (default: `/`) |
+| `-m` | `--umask MODE`      | Process umask in octal (e.g. `022`) |
+| `-o` | `--stdout PATH`     | Redirect stdout to file (also sets stderr if `-e` is not given) |
+| `-e` | `--stderr PATH`     | Redirect stderr to file (default: stdout path; `.stdout`→`.stderr`, `.out`→`.err`) |
+| `-a` | `--append`          | Append to stdout/stderr files instead of truncating |
+| `-l` | `--lock PATH`       | Exclusive lockfile (default: pidfile path, if set) |
+| `-E` | `--env NAME=VAL`    | Set environment variable (repeatable) |
+| `-u` | `--user NAME\|UID`  | Switch to user after daemonizing (requires root) |
+| `-g` | `--group NAME\|GID` | Switch to group after daemonizing (requires root) |
+| `-f` | `--foreground`      | Stay in foreground (no fork/setsid)                            |
+| `-v` | `--verbose`         | Print diagnostic info before daemonizing |
 
 ## Minimum supported Rust version
 
