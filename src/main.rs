@@ -184,6 +184,8 @@ fn main() -> ExitCode {
     }
 
     // Daemonize
+    // SAFETY: single-threaded here (no threads spawned before this point); use
+    // the unchecked form so the CLI stays portable across all Unix targets.
     #[allow(unsafe_code)]
     let mut ctx = match unsafe { blivet::daemonize_unchecked(&config) } {
         Ok(ctx) => ctx,
