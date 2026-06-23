@@ -27,33 +27,30 @@ ctx.notify_parent()?;              // tell the launcher we're up; it exits 0
 // daemon runs here
 ```
 
-## The lifecycle
+## How it works
 
-`daemonize()` double-forks, detaches from the controlling terminal, and keeps a
-pipe open back to the launcher. The grandchild is your daemon: do fallible
-initialization there, drop privileges, then signal readiness.
+`daemonize()` double-forks, calls `setsid` to detach from the controlling
+terminal, and returns a `DaemonContext` in the grandchild -- your daemon. The
+original process does *not* return; it blocks on a pipe to the grandchild. In
+the daemon you then:
+
+1. run fallible init -- bind sockets, open files, connect to dependencies;
+2. `chown_paths()`, then `drop_privileges()`, to drop to an unprivileged user;
+3. call `notify_parent()`, which writes one readiness byte down the pipe.
 
 ```text
-caller (shell / systemd / supervisor)          daemon
-  │ daemonize(&config)
-  ├──── fork ──► child ── setsid ── fork ──► grandchild (your daemon)
-  │                                            │
-  │                                            │  [ single-threaded: fork → drop_privileges ]
-  │                                            │    bind ports, open files   (fallible init)
-  │                                            │    chown_paths()
-  │                                            │    drop_privileges()         ← last setenv
-  │  ok / error  ◄──── notification pipe ──────┤    notify_parent()           → parent exits 0
-  ▼                                            │  [ now safe to spawn threads / tokio ]
-exits 0, or prints the error and exits         ▼    serve requests…
-with its sysexits.h code on failure
+caller ── daemonize() ──► fork → setsid → fork ──► grandchild = your daemon
+   ▲                                                    │
+   └──────────── readiness / error  (pipe) ─────────────┘
 ```
 
-Everything from the fork through `drop_privileges()` runs **single-threaded** --
-forking with other threads strands their locks in the child, and
-`drop_privileges()` calls `setenv`, which is not thread-safe. After it returns,
-spawn freely. A failure *before* `notify_parent()` is reported to the parent,
-which exits non-zero; once you call `notify_parent()` the parent has already
-exited 0. See [Safety](#safety).
+The caller blocks until that byte arrives, then exits 0 -- or, if the daemon
+dies or calls `report_error()` first, exits non-zero with the matching
+`sysexits.h` code, so the launcher sees a real result rather than a process that
+detached and then crashed.
+
+Steps 1-2 must run **single-threaded**: spawn threads, async runtimes, or accept
+loops only *after* `drop_privileges()` returns. See [Safety](#safety) for why.
 
 ## Why blivet
 
@@ -199,7 +196,7 @@ Forking a multithreaded process is unsound: mutexes held by other threads stay
 locked forever in the child, deadlocking it. A second thread-unsafe step
 follows -- `drop_privileges()` calls `setenv` (`USER`/`HOME`/`LOGNAME`) when
 switching users -- so the single-threaded window runs from the fork through
-`drop_privileges()` (see [the lifecycle](#the-lifecycle) diagram). Spawn
+`drop_privileges()` (see [How it works](#how-it-works)). Spawn
 threads, an async runtime, or an accept loop only *after* `drop_privileges()`
 returns -- or after `daemonize()` returns if you don't switch users.
 
