@@ -1,3 +1,20 @@
+## [0.8.0](https://github.com/camercu/blivet/compare/v0.7.0...v0.8.0) (2026-06-23)
+
+
+### ⚠ BREAKING CHANGES
+
+* **api:** `drop_privileges` now panics if a user switch is requested
+while more than one thread is running. Callers on non-mainstream targets, or
+that manage single-threadedness themselves, must use
+`unsafe { drop_privileges_unchecked() }`.
+Migrate: ctx.drop_privileges()  ->  unsafe { ctx.drop_privileges_unchecked() }
+
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+
+### Features
+
+* **api:** guard drop_privileges against multithreaded setenv ([cda5645](https://github.com/camercu/blivet/commit/cda5645e842920e356d2422babf0cbcfa0b80699))
+
 ## [0.7.0](https://github.com/camercu/blivet/compare/v0.6.0...v0.7.0) (2026-06-22)
 
 
