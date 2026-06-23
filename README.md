@@ -37,13 +37,10 @@ ctx.notify_parent()?;              // tell the launcher we're up; it exits 0
   `notify_parent()` and the launcher exits non-zero automatically.
 - **Split-phase privileges.** `daemonize()` returns while still privileged, so
   you can bind port 80 or `chroot` before `drop_privileges()`.
-- **Safe by default.** The checked entry points verify single-threadedness with
-  no `unsafe` needed; `unsafe` opt-outs are there when you manage the contract
-  yourself.
-- **Unsafe contained.** `#![deny(unsafe_code)]` at the crate root. FFI whose
-  invariants can be upheld internally is isolated in one `unsafe_ops` module
-  behind safe wrappers; the rest is the context-dependent `fork()` and `setenv`
-  calls, each `unsafe` at its call site with a documented contract.
+- **Safe by default.** The checked entry points verify single-threadedness, so
+  you write no `unsafe`; the crate's own `unsafe` (libc FFI, `fork`, `setenv`)
+  is isolated under `#![deny(unsafe_code)]` and documented. Opt-out variants are
+  there when you manage the single-threaded contract yourself.
 - **Library and CLI.** A builder API, or the standalone `daemonize` binary
   (`cargo install blivet`) that wraps any program.
 
@@ -91,7 +88,7 @@ adds a lock file, log redirection, and a working directory. As with
 redirect any output you want to keep:
 
 ```rust
-use blivet::{DaemonConfig, daemonize};
+use blivet::{daemonize, DaemonConfig};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut config = DaemonConfig::new();
@@ -113,7 +110,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 set rlimits) between `daemonize()` and `drop_privileges()`:
 
 ```rust
-use blivet::{DaemonConfig, daemonize};
+use blivet::{daemonize, DaemonConfig};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut config = DaemonConfig::new();
@@ -217,7 +214,7 @@ so failures reach the shell with a meaningful status:
 | `ChdirFailed`      | 71          | `chdir()` error                          |
 | `PermissionDenied` | 77          | Not root, or setuid/setgid failed        |
 | `ExecFailed`       | 71          | CLI: `exec` of target program failed     |
-| `NotifyFailed`     | 71          | Writing readiness byte to parent failed  |
+| `NotifyFailed`     | 71          | Can't write readiness byte to launcher   |
 | `PrivilegesNotDropped` | 70      | user/group set but `drop_privileges()` never called |
 | `Application`      | caller's    | App-level failure you report yourself    |
 
@@ -233,7 +230,7 @@ handlers that remove the pidfile on `SIGINT`/`SIGTERM`, then re-raise so the
 process still terminates normally:
 
 ```rust
-use blivet::{DaemonConfig, daemonize};
+use blivet::{daemonize, DaemonConfig};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut config = DaemonConfig::new();
@@ -260,7 +257,7 @@ is one way to drive that loop; `blivet` does not re-export it, so
 ```rust
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use blivet::{DaemonConfig, daemonize};
+use blivet::{daemonize, DaemonConfig};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut config = DaemonConfig::new();
