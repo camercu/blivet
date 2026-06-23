@@ -32,8 +32,11 @@ detached process that may have already died during init.
   (forking with threads is unsound) before forking -- no `unsafe` needed. An
   `unsafe` escape hatch, `daemonize_unchecked()`, is there when you need it.
 - **Unsafe contained.** `#![deny(unsafe_code)]` at the crate root. Raw
-  libc/syscall `unsafe` is isolated in one module (`unsafe_ops`) behind safe
-  wrappers; the only `unsafe` elsewhere is the `fork()` call itself.
+  libc/syscall `unsafe` whose invariants can be upheld internally is isolated in
+  one module (`unsafe_ops`) behind safe wrappers; the rest is a handful of
+  context-dependent calls that require single-threadedness -- the `fork()` and
+  the `setenv` calls -- each `unsafe` at its call site with a documented
+  contract, not hidden behind a fake-safe wrapper.
 - **Library and CLI.** Use it as a Rust library with a builder API, or as a
   standalone `daemonize` binary (installed by `cargo install blivet`) that
   wraps any program.
