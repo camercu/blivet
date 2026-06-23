@@ -6,7 +6,7 @@
 [![MSRV](https://img.shields.io/badge/MSRV-1.85-blue)](https://doc.rust-lang.org/cargo/reference/manifest.html#the-rust-version-field)
 [![License](https://img.shields.io/crates/l/blivet.svg)](LICENSE-MIT)
 
-A correct, full-featured Unix daemon library and CLI for Rust.
+**A correct, full-featured Unix daemon library and CLI for Rust.**
 
 Daemonizing a process *correctly* is deceptively hard: the double-fork dance,
 session detachment, signal and fd hygiene, and -- the part most libraries skip
@@ -16,127 +16,90 @@ launching process over a notification pipe, with `sysexits.h` exit codes. The
 shell, `systemd`, or a supervisor sees a real success or failure -- not a
 detached process that may have already died during init.
 
-**Why this crate?**
+```rust
+use blivet::{daemonize, DaemonConfig};
 
-- **Correct by default.** Mandatory double-fork, `setsid`, signal reset
-  (including real-time signals on Linux), signal mask clear, fd close,
-  `/dev/null` redirect -- the things most hand-rolled daemonizers forget.
-- **Parent notification.** The calling process blocks until the daemon signals
-  readiness or reports an error. No more "did it start?" polling.
-- **Split-phase privilege dropping.** `daemonize()` returns while still
-  privileged, giving you a window for operations like binding privileged ports
-  before calling `drop_privileges()`.
-- **Fail-safe drop.** If you forget to call `notify_parent()`, the parent
-  exits non-zero automatically.
-- **Safe by default.** `daemonize()` verifies the process is single-threaded
-  (forking with threads is unsound) before forking -- no `unsafe` needed. An
-  `unsafe` escape hatch, `daemonize_unchecked()`, is there when you need it.
-- **Unsafe contained.** `#![deny(unsafe_code)]` at the crate root. Raw
-  libc/syscall `unsafe` whose invariants can be upheld internally is isolated in
-  one module (`unsafe_ops`) behind safe wrappers; the rest is a handful of
-  context-dependent calls that require single-threadedness -- the `fork()` and
-  the `setenv` calls -- each `unsafe` at its call site with a documented
-  contract, not hidden behind a fake-safe wrapper.
-- **Library and CLI.** Use it as a Rust library with a builder API, or as a
-  standalone `daemonize` binary (installed by `cargo install blivet`) that
-  wraps any program.
+let mut config = DaemonConfig::new();
+config.pidfile("/var/run/myapp.pid");
 
-**Why the name `blivet`?**
-
-A [blivet](https://en.wikipedia.org/wiki/Impossible_trident) is the "impossible
-pitchfork" optical illusion, also known as the devil's fork, where the prongs
-are mysteriously detached from the base. Daemons are created by forking to
-detach from their parent terminal.
-
-## Contents
-
-- [How it works](#how-it-works)
-- [Install](#install)
-- [CLI quickstart](#cli-quickstart) -- [flags](#cli-flags)
-- [Library quickstart](#library-quickstart) -- [entry points](#entry-points),
-  [split-phase privilege dropping](#split-phase-privilege-dropping),
-  [foreground mode](#foreground-mode)
-- [Safety: the single-threaded rule](#safety-the-single-threaded-rule)
-- [API overview](#api-overview) -- [config](#daemonconfig),
-  [the call](#the-daemonize-call), [context](#daemoncontext),
-  [errors & exit codes](#errors--exit-codes)
-- [Recipes](#recipes) -- [pidfile cleanup](#pidfile-cleanup-on-signals),
-  [reporting your own failures](#reporting-your-own-failures),
-  [propagating exit codes](#propagating-exit-codes)
-- [Minimum supported Rust version](#minimum-supported-rust-version)
-- [License](#license)
-
-## How it works
-
-`daemonize()` double-forks, detaches from the controlling terminal, and keeps a
-pipe open back to the launching process so it can report readiness or failure:
-
-```text
-caller (shell / systemd / supervisor)            daemon
-  │
-  │  daemonize(&config)
-  ├──────────── fork ───────────► child ── setsid ── fork ──► grandchild (daemon)
-  │                                                              │ privileged init
-  │                                                              │ drop_privileges()
-  │   readiness / error  ◄────── notification pipe ──────────────┤ notify_parent()
-  ▼
-exits 0 on success, or prints the error
-and exits with its sysexits.h code on failure
+let mut ctx = daemonize(&config)?; // safe: checks single-threaded, then double-forks
+ctx.notify_parent()?;              // tell the launcher we're up; it exits 0
+// daemon runs here
 ```
 
-The grandchild is the daemon. Do your fallible initialization — bind sockets,
-open files, connect to dependencies — *after* `daemonize()` returns but *before*
-`notify_parent()` (and before `drop_privileges()` if you switch users): a failure
-in that window is reported back to the parent, which exits non-zero, whereas once
-you call `notify_parent()` the parent has already exited 0. Hold off on spawning
-threads or starting an async runtime until that single-threaded startup window
-closes — see [Safety](#safety-the-single-threaded-rule).
+## The lifecycle
+
+`daemonize()` double-forks, detaches from the controlling terminal, and keeps a
+pipe open back to the launcher. The grandchild is your daemon: do fallible
+initialization there, drop privileges, then signal readiness.
+
+```text
+caller (shell / systemd / supervisor)          daemon
+  │ daemonize(&config)
+  ├──── fork ──► child ── setsid ── fork ──► grandchild (your daemon)
+  │                                            │
+  │                                            │  [ single-threaded: fork → drop_privileges ]
+  │                                            │    bind ports, open files   (fallible init)
+  │                                            │    chown_paths()
+  │                                            │    drop_privileges()         ← last setenv
+  │  ok / error  ◄──── notification pipe ──────┤    notify_parent()           → parent exits 0
+  ▼                                            │  [ now safe to spawn threads / tokio ]
+exits 0, or prints the error and exits         ▼    serve requests…
+with its sysexits.h code on failure
+```
+
+Everything from the fork through `drop_privileges()` runs **single-threaded** --
+forking with other threads strands their locks in the child, and
+`drop_privileges()` calls `setenv`, which is not thread-safe. After it returns,
+spawn freely. A failure *before* `notify_parent()` is reported to the parent,
+which exits non-zero; once you call `notify_parent()` the parent has already
+exited 0. See [Safety](#safety).
+
+## Why blivet
+
+- **Correct by default.** Mandatory double-fork, `setsid`, signal reset
+  (including real-time signals on Linux), signal-mask clear, fd close, and
+  `/dev/null` redirect -- the things hand-rolled daemonizers forget.
+- **Parent notification.** The launcher blocks until the daemon signals
+  readiness or reports an error -- no "did it start?" polling. Forget to call
+  `notify_parent()` and the parent exits non-zero automatically.
+- **Split-phase privileges.** `daemonize()` returns while still privileged, so
+  you can bind port 80 or `chroot` before `drop_privileges()`.
+- **Safe by default.** The checked entry points verify single-threadedness with
+  no `unsafe` needed; `unsafe` opt-outs are there when you manage the contract
+  yourself.
+- **Unsafe contained.** `#![deny(unsafe_code)]` at the crate root. FFI whose
+  invariants can be upheld internally is isolated in one `unsafe_ops` module
+  behind safe wrappers; the rest is the context-dependent `fork()` and `setenv`
+  calls, each `unsafe` at its call site with a documented contract.
+- **Library and CLI.** A builder API, or the standalone `daemonize` binary
+  (`cargo install blivet`) that wraps any program.
 
 ## Install
 
 ```sh
-cargo install blivet
+cargo install blivet   # the `daemonize` CLI -- verify with `daemonize --version`
+cargo add blivet        # the library
 ```
 
-This installs the **`daemonize`** command (the crate is `blivet`; the binary is
-`daemonize`). Verify with `daemonize --version`.
+The crate is `blivet`; the installed binary is `daemonize`.
 
-Or add the library to your project:
-
-```sh
-cargo add blivet
-```
-
-## CLI quickstart
-
-Daemonize any program:
+## CLI
 
 ```sh
 # Simplest: daemonize a program
 daemonize -- /usr/bin/my-server --port 8080
 
-# Typical service: pidfile, log redirection (stderr mirrors stdout),
-# working directory, and drop to an unprivileged user
-daemonize \
-  -p /var/run/myapp.pid \
-  -o /var/log/myapp.log \
-  -c /var/lib/myapp \
-  -u www-data -g www-data \
-  -- /usr/bin/my-server
+# Typical service: pidfile, log redirect, working dir, drop to an unprivileged user
+daemonize -p /var/run/myapp.pid -o /var/log/myapp.log -c /var/lib/myapp \
+  -u www-data -g www-data -- /usr/bin/my-server
 ```
 
-See [CLI flags](#cli-flags) for the rest (foreground mode, split stdout/stderr,
-a separate lockfile, environment variables).
-
-The parent process blocks until the daemon successfully calls `exec`, then
-exits 0. If anything fails (lockfile conflict, permission denied, exec error),
-the parent prints the error to stderr and exits with a `sysexits.h` code.
-
-When `-u`/`-g` are specified, the CLI transfers ownership of the pidfile,
-lockfile, and log files to the target user/group before dropping privileges,
-so the daemon can continue to write to them after the switch.
-
-### CLI flags
+The parent blocks until the daemon successfully `exec`s, then exits 0. On
+failure (lockfile conflict, permission denied, exec error) it prints the error
+to stderr and exits with a `sysexits.h` code. When `-u`/`-g` are given, the CLI
+transfers ownership of the pidfile, lockfile, and log files to the target
+user/group before dropping privileges, so the daemon can keep writing to them.
 
 | Flag | Long                | Description |
 | ---- | ------------------- | --- |
@@ -153,25 +116,13 @@ so the daemon can continue to write to them after the switch.
 | `-f` | `--foreground`      | Stay in foreground (no fork/setsid)                            |
 | `-v` | `--verbose`         | Print diagnostic info before daemonizing |
 
-## Library quickstart
+## Library
 
-The smallest useful daemon -- write a pidfile, signal readiness, run:
-
-```rust
-use blivet::{daemonize, DaemonConfig};
-
-let mut config = DaemonConfig::new();
-config.pidfile("/var/run/myapp.pid");
-
-let mut ctx = daemonize(&config)?;   // safe: verifies single-threaded, then double-forks
-ctx.notify_parent()?;                // tell the launcher we're up; it exits 0
-// daemon runs here
-```
-
-A fuller setup -- lock file, log redirection, working directory. As with
-`daemonize(1)`, the defaults are standard daemon behavior: stdout/stderr go to
-`/dev/null` and the working directory becomes `/`, so use absolute paths and
-redirect any output you want to keep:
+The smallest daemon is at the top of this README. A fuller setup adds a lock
+file, log redirection, and a working directory. As with `daemonize(1)`, the
+defaults are standard daemon behavior -- stdout/stderr go to `/dev/null` and the
+working directory becomes `/` -- so use absolute paths and redirect any output
+you want to keep:
 
 ```rust
 use blivet::{DaemonConfig, daemonize};
@@ -186,149 +137,95 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .chdir("/var/lib/myapp");
 
     let mut ctx = daemonize(&config)?;
-
-    // Application initialization goes here (open sockets, load config, etc.)
-
-    ctx.notify_parent()?;  // signal readiness; the parent exits 0
-
-    // Daemon continues running...
+    // fallible initialization here (open sockets, load config, …)
+    ctx.notify_parent()?; // signal readiness; the parent exits 0
     Ok(())
 }
 ```
 
-> **Tip:** see [`examples/echo_server.rs`](examples/echo_server.rs) for a
-> complete, runnable daemonized TCP echo server with clean signal-based
-> shutdown and pidfile removal.
-
-### Entry points
-
-There are two ways to daemonize:
-
-- **`daemonize(&config)`** -- the safe, recommended entry point. It verifies the
-  process is single-threaded, then daemonizes. No `unsafe` needed. Available on
-  **Linux, macOS, FreeBSD, NetBSD, and OpenBSD** (it reads the kernel's thread
-  count: `/proc/self/status` on Linux, `proc_pidinfo` on macOS, `sysctl` on the
-  BSDs). On any other target it is a `#[deprecated]` stub that never daemonizes.
-- **`unsafe { daemonize_unchecked(&config) }`** -- the escape hatch, available on
-  all Unix platforms. It skips the thread-count check, so *you* must guarantee
-  the process is single-threaded (see
-  [Safety](#safety-the-single-threaded-rule)).
-
-### Split-phase privilege dropping
-
-When your daemon needs to perform privileged operations (like binding to
-port 80, calling `chroot`, or setting resource limits) before dropping to
-an unprivileged user:
+**Split-phase privilege dropping.** Do privileged work (bind port 80, `chroot`,
+set rlimits) between `daemonize()` and `drop_privileges()`:
 
 ```rust
 use blivet::{DaemonConfig, daemonize};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut config = DaemonConfig::new();
-    config
-        .pidfile("/var/run/myapp.pid")
-        .user("www-data")
-        .group("www-data");
+    config.pidfile("/var/run/myapp.pid").user("www-data").group("www-data");
 
     let mut ctx = daemonize(&config)?;
 
-    // Still running as root here -- bind privileged port, chroot, set rlimits, etc.
+    // Still root here -- bind a privileged port, chroot, set rlimits…
     // let listener = TcpListener::bind("0.0.0.0:80")?;
 
-    // Transfer file ownership, then drop privileges
-    ctx.chown_paths()?;
-    ctx.drop_privileges()?;
-
+    ctx.chown_paths()?;     // transfer file ownership to the target user
+    ctx.drop_privileges()?; // then switch user/group
     ctx.notify_parent()?;
-    // Now running as www-data...
+    // now running as www-data…
     Ok(())
 }
 ```
 
-### Foreground mode
-
-For systemd, containers, or debugging, use foreground mode to skip forking
-while still applying all other daemon setup (umask, chdir, signal reset, etc.).
-Stdout and stderr are left inherited (not redirected to `/dev/null`) unless
-explicitly configured with `.stdout()`/`.stderr()`:
+**Foreground mode.** For systemd, containers, or debugging: skip forking while
+applying all other setup (umask, chdir, signal reset, …). Stdout/stderr stay
+inherited unless explicitly redirected with `.stdout()`/`.stderr()`:
 
 ```rust
-let mut config = DaemonConfig::new();
-config
-    .foreground(true)
-    .close_fds(false);  // keep supervisor-passed fds
+config.foreground(true).close_fds(false); // keep supervisor-passed fds
 ```
 
-## Safety: the single-threaded rule
+> See [`examples/echo_server.rs`](examples/echo_server.rs) for a complete,
+> runnable daemonized TCP echo server with signal-based shutdown and pidfile
+> cleanup.
+
+### Entry points
+
+- **`daemonize(&config)`** -- the safe, recommended entry point. It verifies the
+  process is single-threaded, then daemonizes. Available on **Linux, macOS,
+  FreeBSD, NetBSD, and OpenBSD** (it reads the kernel thread count:
+  `/proc/self/status` on Linux, `proc_pidinfo` on macOS, `sysctl` on the BSDs).
+  On any other target it is a `#[deprecated]` stub that never daemonizes.
+- **`unsafe { daemonize_unchecked(&config) }`** -- the escape hatch, on all Unix
+  platforms. It skips the thread-count check, so *you* must guarantee the
+  process is single-threaded.
+
+`DaemonContext::drop_privileges()` mirrors this split: it is safe and checked
+(panicking if a user switch is configured while multithreaded), with
+`unsafe { drop_privileges_unchecked() }` as the opt-out. See [Safety](#safety).
+
+## Safety
 
 Forking a multithreaded process is unsound: mutexes held by other threads stay
 locked forever in the child, deadlocking it. A second thread-unsafe step
-follows: `drop_privileges()` calls `setenv` (`USER`/`HOME`/`LOGNAME`) when
-switching users. So the single-threaded window runs from the fork through the
-last `setenv` -- i.e. through `drop_privileges()`:
+follows -- `drop_privileges()` calls `setenv` (`USER`/`HOME`/`LOGNAME`) when
+switching users -- so the single-threaded window runs from the fork through
+`drop_privileges()` (see [the lifecycle](#the-lifecycle) diagram). Spawn
+threads, an async runtime, or an accept loop only *after* `drop_privileges()`
+returns -- or after `daemonize()` returns if you don't switch users.
 
-```text
-[single-threaded required]
-  daemonize()           <- forks here
-  chown_paths()         <- still single-threaded
-  drop_privileges()     <- last unsafe step: setenv (USER/HOME/LOGNAME)
-[now safe to spawn threads / start tokio / accept connections]
-  notify_parent()       <- thread-safe; just writes one byte to the pipe
-```
+Both checked entry points read the kernel thread count and panic if violated:
+`daemonize()` at the fork, and `drop_privileges()` at its `setenv` (only when a
+user switch is configured -- the sole `setenv` path; a group-only switch is not
+guarded). `daemonize_unchecked()` and `drop_privileges_unchecked()` are the
+`unsafe` opt-outs for callers who manage the contract themselves, or who run on
+a target without a thread-count source.
 
-Both guards check for you and panic if violated: `daemonize()` at the fork,
-`drop_privileges()` at its `setenv` (when a user is configured).
-`daemonize_unchecked()` and `drop_privileges_unchecked()` are the `unsafe`
-opt-outs.
-
-Spawn threads, an async runtime, or a thread-per-connection accept loop only
-*after* `drop_privileges()` returns -- or after `daemonize()` returns if you
-don't switch users. The unsafe window to avoid is between `daemonize()` and
-`drop_privileges()`.
-
-## API overview
+## API reference
 
 Full reference is on [docs.rs](https://docs.rs/blivet); this is the shape of it.
 
-### `DaemonConfig`
-
-A builder of infallible `&mut self` setters; validation is deferred to
-`validate()` (which `daemonize()` runs for you). Common settings: `pidfile`,
+**`DaemonConfig`** -- a builder of infallible `&mut self` setters; validation is
+deferred to `validate()`, which `daemonize()` runs for you. Settings: `pidfile`,
 `lockfile`, `stdout`/`stderr` (+ `append`), `chdir`, `umask`, `user`/`group`,
 `foreground`, `close_fds`, `cleanup_on_drop`, and `env`. Defaults worth knowing:
-working directory is `/`, stdout/stderr go to `/dev/null`, `close_fds` and
-`cleanup_on_drop` are `true`. See the
-[`DaemonConfig` docs](https://docs.rs/blivet/latest/blivet/struct.DaemonConfig.html)
-for every method.
+working directory `/`, stdout/stderr `/dev/null`, and `close_fds` and
+`cleanup_on_drop` both `true`.
 
-### The `daemonize` call
-
-`daemonize(&config) -> Result<DaemonContext, DaemonizeError>` performs the full
-sequence: pipe, double-fork, setsid, umask, chdir, `/dev/null` redirect,
-lockfile, pidfile, signal reset, signal mask clear, env vars, output redirect,
-fd close. It returns a `DaemonContext` in the grandchild (or the current process
-in foreground mode); the original parent blocks on the notification pipe.
-
-User/group switching is **not** performed during this call -- use
-`DaemonContext::drop_privileges()` after any privileged work.
-
-### `DaemonContext`
-
-Returned by a successful `daemonize()`; owns the lockfile, notification pipe,
-and the state needed for privilege operations. The methods you'll use most:
-
-- `notify_parent()` -- signal readiness so the parent exits 0. **Dropping the
-  context without calling it makes the parent exit non-zero.**
-- `chown_paths()` / `drop_privileges()` -- transfer file ownership, then switch
-  user/group (`initgroups` + `setgid` + `setuid`).
-- `cleanup()` and `cleanup_on_term_signals()` -- remove the pidfile (see
-  [pidfile cleanup](#pidfile-cleanup-on-signals)).
-- `report_error(_msg)` / `notify_parent_or_report()` -- report a failure to the
-  parent and `_exit` (see [recipes](#reporting-your-own-failures)).
-
-See the
-[`DaemonContext` docs](https://docs.rs/blivet/latest/blivet/struct.DaemonContext.html)
-for the full set.
+**`DaemonContext`** -- returned by a successful `daemonize()`; owns the lockfile
+and notification pipe. The methods you reach for most: `notify_parent()`,
+`chown_paths()` / `drop_privileges()`, `cleanup()` /
+`cleanup_on_term_signals()`, and `report_error()` / `report_error_msg()` /
+`notify_parent_or_report()`.
 
 ### Errors & exit codes
 
@@ -362,13 +259,11 @@ so failures reach the shell with a meaningful status:
 ### Pidfile cleanup on signals
 
 When `cleanup_on_drop` is `true` (the default), the pidfile is removed when
-`DaemonContext` is dropped. However, **`Drop` does not run when the process is
-killed by a signal** (`SIGTERM`, `SIGKILL`, etc.) — which is how most daemons
-are stopped, so the pidfile would be left behind.
-
-The simplest fix is the built-in `cleanup_on_term_signals()`, which installs
-async-signal-safe handlers that remove the pidfile on `SIGINT`/`SIGTERM` and
-then re-raise so the process still terminates normally:
+`DaemonContext` is dropped. But **`Drop` does not run when the process is killed
+by a signal** (`SIGTERM`, `SIGKILL`, …) -- which is how most daemons stop -- so
+the pidfile would be left behind. The built-in fix installs async-signal-safe
+handlers that remove the pidfile on `SIGINT`/`SIGTERM`, then re-raise so the
+process still terminates normally:
 
 ```rust
 use blivet::{DaemonConfig, daemonize};
@@ -378,29 +273,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     config.pidfile("/var/run/myapp.pid");
     let mut ctx = daemonize(&config)?;
 
-    // Remove the pidfile on SIGINT/SIGTERM (pass custom signal numbers to
-    // `cleanup_on_signals(&[...])` instead, if needed).
-    ctx.cleanup_on_term_signals()?;
-
+    ctx.cleanup_on_term_signals()?; // or cleanup_on_signals(&[...]) for custom signals
     ctx.notify_parent()?;
-    // ... daemon work ...
+    // … daemon work …
     Ok(())
 }
 ```
 
-> **Note:** this is library-only. The `daemonize` **CLI** cannot do this: it
-> `exec`s the target program, and `exec` resets all custom signal handlers to
-> their default disposition. A program launched via the CLI must clean up its
-> own pidfile.
+> **Library-only.** The `daemonize` **CLI** cannot do this: it `exec`s the
+> target program, and `exec` resets custom signal handlers to their default
+> disposition, so a CLI-launched program must clean up its own pidfile.
 
-If you already run a signal loop (e.g. to drive a graceful shutdown), you can
-instead clear the flag yourself and call `cleanup()` / let `ctx` drop. The
-example below uses the [`signal_hook`](https://crates.io/crates/signal-hook)
-crate for that; `blivet` does not re-export it, so add it yourself:
-
-```sh
-cargo add signal_hook
-```
+If you already run a signal loop (e.g. for graceful shutdown), clear the flag
+yourself and call `cleanup()` (or let `ctx` drop). The
+[`signal_hook`](https://crates.io/crates/signal-hook) crate is one way; `blivet`
+does not re-export it, so `cargo add signal_hook` first:
 
 ```rust
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -408,19 +295,18 @@ use std::sync::Arc;
 use blivet::{DaemonConfig, daemonize};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let config = DaemonConfig::new();
+    let mut config = DaemonConfig::new();
+    config.pidfile("/var/run/myapp.pid");
     let mut ctx = daemonize(&config)?;
     ctx.notify_parent()?;
 
-    // Set a flag on SIGTERM/SIGINT so the main loop exits cleanly
     let running = Arc::new(AtomicBool::new(true));
     signal_hook::flag::register(signal_hook::consts::SIGTERM, Arc::clone(&running))?;
     signal_hook::flag::register(signal_hook::consts::SIGINT, Arc::clone(&running))?;
 
     while running.load(Ordering::Relaxed) {
-        // ... daemon work ...
+        // … daemon work …
     }
-
     ctx.cleanup(); // or just let ctx drop
     Ok(())
 }
@@ -430,7 +316,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 If startup work in the privileged init window fails (a socket bind, a database
 connect), report it to the parent with a `sysexits.h` code of your choosing via
-`report_error_msg` — no need to construct a `DaemonizeError` by hand:
+`report_error_msg` -- no need to construct a `DaemonizeError` by hand:
 
 ```rust
 let listener = match TcpListener::bind("0.0.0.0:80") {
@@ -459,7 +345,7 @@ fn main() {
 fn run() -> Result<(), DaemonizeError> {
     let config = DaemonConfig::new();
     let mut ctx = daemonize(&config)?;
-    // ... application init ...
+    // … application init …
     // notify_parent() returns DaemonizeError (NotifyFailed, exit 71), so `?`
     // keeps a single error type and preserves the exit code.
     ctx.notify_parent()?;
@@ -470,6 +356,13 @@ fn run() -> Result<(), DaemonizeError> {
 ## Minimum supported Rust version
 
 1.85
+
+## Why the name `blivet`?
+
+A [blivet](https://en.wikipedia.org/wiki/Impossible_trident) is the "impossible
+pitchfork" optical illusion, also known as the devil's fork, where the prongs
+are mysteriously detached from the base. Daemons are created by forking to
+detach from their parent terminal.
 
 ## License
 
