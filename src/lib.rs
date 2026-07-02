@@ -287,27 +287,6 @@ pub unsafe fn daemonize_unchecked(config: &DaemonConfig) -> Result<DaemonContext
 // inside `cfg` attributes): linux, macos, freebsd, netbsd, openbsd. The count
 // itself lives in the `thread_count` module.
 
-/// Daemonize the current process, verifying it is single-threaded first.
-///
-/// Counts the threads in the current process and panics unless exactly one is
-/// running, then calls [`daemonize_unchecked`]. This upholds the
-/// single-threaded contract for you, so no `unsafe` block is needed, and is the
-/// recommended entry point.
-///
-/// # Platform support
-///
-/// Available on **Linux, macOS, FreeBSD, NetBSD, and OpenBSD**, each using the
-/// kernel's own thread count (`/proc/self/status` on Linux, `proc_pidinfo` on
-/// macOS, `sysctl` on the BSDs). On any other target it is a `#[deprecated]`
-/// stub that never daemonizes — calling it warns with guidance (and is a hard
-/// compile error under `-D warnings` / `#![deny(deprecated)]`), and panics if
-/// invoked anyway; call [`daemonize_unchecked`] yourself there inside an
-/// `unsafe` block.
-///
-/// # Panics
-///
-/// Panics if the thread count is anything other than exactly 1, or if the
-/// thread count cannot be determined.
 /// Returns the panic message if `count` is not exactly one thread, else `None`.
 ///
 /// The checked entry points require *exactly* one thread (R45): forking — or
@@ -358,6 +337,32 @@ pub(crate) fn assert_single_threaded(caller: &str) {
     }
 }
 
+/// Daemonize the current process, verifying it is single-threaded first.
+///
+/// Counts the threads in the current process and panics unless exactly one is
+/// running, then calls [`daemonize_unchecked`]. This upholds the
+/// single-threaded contract for you, so no `unsafe` block is needed, and is the
+/// recommended entry point.
+///
+/// # Platform support
+///
+/// Available on **Linux, macOS, FreeBSD, NetBSD, and OpenBSD**, each using the
+/// kernel's own thread count (`/proc/self/status` on Linux, `proc_pidinfo` on
+/// macOS, `sysctl` on the BSDs). On any other target it is a `#[deprecated]`
+/// stub that never daemonizes — calling it warns with guidance (and is a hard
+/// compile error under `-D warnings` / `#![deny(deprecated)]`), and panics if
+/// invoked anyway; call [`daemonize_unchecked`] yourself there inside an
+/// `unsafe` block.
+///
+/// # Errors
+///
+/// As [`daemonize_unchecked`]: `DaemonizeError` on validation failure or any
+/// syscall error during the daemonization sequence.
+///
+/// # Panics
+///
+/// Panics if the thread count is anything other than exactly 1, or if the
+/// thread count cannot be determined.
 #[cfg(any(
     target_os = "linux",
     target_os = "macos",
