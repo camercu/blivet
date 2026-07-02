@@ -275,7 +275,10 @@ pub(crate) fn execute_output_redirect(plan: &OutputRedirectPlan) -> Result<(), D
 
 /// Step 12: Redirect stdout/stderr to configured files.
 ///
-/// Opened after user switching so files have correct ownership.
+/// Runs before the caller's split-phase privilege drop (R102), so files are
+/// created with the original (often root) ownership;
+/// [`chown_paths`](crate::DaemonContext::chown_paths) transfers them to the
+/// target user afterward.
 /// Same-path optimization: if stdout and stderr resolve to the same path,
 /// open once for stdout and dup2 to stderr.
 pub(crate) fn redirect_output(

@@ -27,7 +27,7 @@ name = "daemonize"
 path = "src/main.rs"
 
 [package.metadata.docs.rs]
-# Render the cfg-gated daemonize_checked thread-count paths for the supported
+# Render the cfg-gated daemonize thread-count paths for the supported
 # Unix targets, not just the default Linux build. OpenBSD is omitted: it is a
 # tier-3 target without a prebuilt std for docs.rs to build against.
 default-target = "x86_64-unknown-linux-gnu"

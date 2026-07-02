@@ -439,8 +439,9 @@ pub(crate) unsafe fn daemonize_inner(
         };
 
         // SAFETY: daemonize_unchecked() is unsafe and requires the caller to
-        // ensure the process is single-threaded. daemonize() verifies this
-        // on Linux via /proc/self/status before calling daemonize_inner().
+        // ensure the process is single-threaded. The checked daemonize()
+        // verifies this via the kernel thread count before calling
+        // daemonize_inner().
         match (unsafe { forker.fork() })? {
             ForkResult::Parent { .. } => {
                 // Parent: close write end, read from pipe, exit
