@@ -1,3 +1,24 @@
+## 0.9.0 (2026-07-02)
+
+* build(just): cross-check FreeBSD/NetBSD/Linux targets in `just check` ([2d186f1](https://github.com/camercu/blivet/commit/2d186f1))
+* fix(steps): make clamp_max_fd portable to signed rlim_t ([fdfbf11](https://github.com/camercu/blivet/commit/fdfbf11))
+* fix(steps): saturate fd-close bound instead of wrapping to i32 ([6c0aa86](https://github.com/camercu/blivet/commit/6c0aa86))
+* docs: fix three stale comments ([7e20c1f](https://github.com/camercu/blivet/commit/7e20c1f))
+* docs: point pidfile-cleanup docs at cleanup_on_term_signals ([83a1098](https://github.com/camercu/blivet/commit/83a1098))
+* docs(config): correct validate() error listing ([191d49b](https://github.com/camercu/blivet/commit/191d49b))
+* docs(lib): reattach daemonize rustdoc lost to a private helper ([26da3e8](https://github.com/camercu/blivet/commit/26da3e8))
+* docs(unsafe): add the CLI's unsafe blocks to the containment inventory ([2d0af53](https://github.com/camercu/blivet/commit/2d0af53))
+* test(traceability): raise coverage ratchet to 103 ([3c6125d](https://github.com/camercu/blivet/commit/3c6125d))
+* fix(signals)!: preserve caller's SIGPIPE disposition across daemonize ([e35e04b](https://github.com/camercu/blivet/commit/e35e04b))
+* chore(deps): bump semantic-release to 25 for security fixes ([7767b37](https://github.com/camercu/blivet/commit/7767b37))
+
+### BREAKING CHANGE
+
+* after daemonize()/daemonize_unchecked(), SIGPIPE keeps
+the disposition it had at entry (for Rust programs: ignored) instead of
+being reset to SIG_DFL. Callers that relied on daemonize() installing
+default SIGPIPE must set it themselves.
+
 ## [0.8.0](https://github.com/camercu/blivet/compare/v0.7.0...v0.8.0) (2026-06-23)
 
 
