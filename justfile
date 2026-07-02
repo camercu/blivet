@@ -25,8 +25,18 @@ lint-deny:
 doc:
     RUSTDOCFLAGS="-D warnings" cargo doc {{locked}} --no-deps
 
+# Cross-check the non-host Unix targets CI smoke-tests, catching platform
+# type differences (e.g. rlim_t is i64 on FreeBSD, u64 elsewhere) before
+# push. `cargo check` needs only the target's std (rustup-installable);
+# OpenBSD is tier-3 without one, so CI's OpenBSD smoke remains the backstop.
+check-cross:
+    rustup target add x86_64-unknown-linux-gnu x86_64-unknown-freebsd x86_64-unknown-netbsd
+    cargo check {{locked}} --target x86_64-unknown-linux-gnu
+    cargo check {{locked}} --target x86_64-unknown-freebsd
+    cargo check {{locked}} --target x86_64-unknown-netbsd
+
 # Run all static checks
-check: fmt-check lint lint-deny doc
+check: fmt-check lint lint-deny doc check-cross
 
 # Run tests (excludes ignored root/Linux tests)
 test:
