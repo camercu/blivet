@@ -307,12 +307,16 @@ fn write_all_fd(fd: impl AsFd, buf: &[u8]) -> Result<(), nix::errno::Errno> {
 /// Convert an `rlim_cur` value to the exclusive upper bound of the fd-close
 /// range, saturating at `i32::MAX`.
 ///
-/// A plain `as i32` cast wraps huge limits — `RLIM_INFINITY` (`u64::MAX`)
-/// becomes `-1`, emptying the close range so *no* fds are closed. Saturating
-/// is lossless in practice: fds are C ints, so no open fd can exceed
-/// `i32::MAX`.
-pub(crate) fn clamp_max_fd(rlim_cur: u64) -> i32 {
-    rlim_cur.min(i32::MAX as u64) as i32
+/// A plain `as i32` cast wraps huge limits — `RLIM_INFINITY` becomes `-1`,
+/// emptying the close range so *no* fds are closed. Saturating is lossless in
+/// practice: fds are C ints, so no open fd can exceed `i32::MAX`.
+///
+/// `rlim_t` is unsigned on Linux/macOS/NetBSD but signed (`i64`) on FreeBSD,
+/// so the conversion goes through `try_from`: any value outside `i32` range —
+/// including a negative one, which no kernel should report — maps to
+/// `i32::MAX`, erring toward closing everything rather than nothing.
+pub(crate) fn clamp_max_fd(rlim_cur: libc::rlim_t) -> i32 {
+    i32::try_from(rlim_cur).unwrap_or(i32::MAX)
 }
 
 /// Query the process fd limit via getrlimit.
@@ -820,12 +824,13 @@ mod tests {
     // Covers: R103
     #[test]
     fn clamp_max_fd_saturates_instead_of_wrapping() {
-        // RLIM_INFINITY (u64::MAX) formerly wrapped to -1 via `as i32`,
-        // emptying the close range so no fds were closed at all. The
-        // conversion must saturate: closing up to i32::MAX covers every
-        // possible fd (fds are C ints).
-        assert_eq!(clamp_max_fd(u64::MAX), i32::MAX);
-        assert_eq!(clamp_max_fd(i32::MAX as u64 + 1), i32::MAX);
+        // RLIM_INFINITY formerly wrapped to -1 via `as i32`, emptying the
+        // close range so no fds were closed at all. The conversion must
+        // saturate: closing up to i32::MAX covers every possible fd (fds are
+        // C ints). rlim_t::MAX covers both the unsigned (u64::MAX, which IS
+        // RLIM_INFINITY on Linux) and signed-FreeBSD (i64::MAX) cases.
+        assert_eq!(clamp_max_fd(libc::rlim_t::MAX), i32::MAX);
+        assert_eq!(clamp_max_fd(i32::MAX as libc::rlim_t + 1), i32::MAX);
         // Ordinary limits pass through unchanged.
         assert_eq!(clamp_max_fd(1024), 1024);
         assert_eq!(clamp_max_fd(0), 0);
