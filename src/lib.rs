@@ -136,9 +136,14 @@
 //! the pidfile is removed when [`DaemonContext`] is dropped — but `Drop`
 //! **does not run** when the process is killed by a signal such as
 //! `SIGTERM`, which is how daemons are normally stopped. Without a signal
-//! handler the pidfile is left stale on disk. See
-//! [`DaemonContext::cleanup`] and the `examples/echo_server.rs` example for
-//! the recommended pattern.
+//! handler the pidfile is left stale on disk. Two supported fixes:
+//!
+//! - [`DaemonContext::cleanup_on_term_signals`] — one call installs
+//!   async-signal-safe handlers that unlink the pidfile and re-raise.
+//!   Simplest, no extra dependency, but the process still dies mid-flight.
+//! - Run your own signal loop for graceful shutdown and let the context
+//!   drop (or call [`DaemonContext::cleanup`]) on the way out — see the
+//!   `examples/echo_server.rs` example.
 //!
 //! # Exit codes
 //!

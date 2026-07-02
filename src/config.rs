@@ -196,8 +196,10 @@ impl DaemonConfig {
     /// **Caveat:** `Drop` does not run when the process is killed by a signal
     /// (`SIGTERM`, `SIGINT`, `SIGKILL`, …), which is how daemons are normally
     /// stopped — so with the default the pidfile is still left stale on signal
-    /// termination. To remove it on shutdown, install a signal handler that
-    /// exits the main loop cleanly (letting this context drop) or calls
+    /// termination. To remove it on shutdown, call
+    /// [`DaemonContext::cleanup_on_term_signals`](crate::DaemonContext::cleanup_on_term_signals)
+    /// once, or install a signal handler that exits the main loop cleanly
+    /// (letting this context drop) or calls
     /// [`DaemonContext::cleanup`](crate::DaemonContext::cleanup) explicitly. See
     /// the `examples/echo_server.rs` example.
     ///

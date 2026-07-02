@@ -32,9 +32,10 @@ use crate::notify::NotifyPipe;
 /// is `true` (the default), dropping also removes the pidfile from disk.
 ///
 /// **Signal caveat:** `Drop` does not run when the process is killed by a
-/// signal. To clean up the pidfile on `SIGTERM`/`SIGINT`, install a signal
-/// handler that exits the main loop cleanly so this context can drop (or
-/// call [`cleanup()`](DaemonContext::cleanup) explicitly). See the
+/// signal. To clean up the pidfile on `SIGTERM`/`SIGINT`, either call
+/// [`cleanup_on_term_signals`](DaemonContext::cleanup_on_term_signals) once
+/// (built-in handlers that unlink and re-raise), or install a signal handler
+/// that exits the main loop cleanly so this context can drop — see the
 /// [README](https://github.com/camercu/blivet#pidfile-cleanup-on-signals) for an example
 /// using [`signal_hook`](https://docs.rs/signal-hook).
 ///
@@ -158,7 +159,9 @@ impl DaemonContext {
     /// [`cleanup_on_drop`](crate::DaemonConfig::cleanup_on_drop) is `true`
     /// (the default). Note that `Drop` **does not run** when the process is
     /// killed by a signal (`SIGTERM`, `SIGKILL`, etc.). To remove the pidfile
-    /// on signal termination, install a signal handler (e.g., with
+    /// on signal termination, call
+    /// [`cleanup_on_term_signals`](Self::cleanup_on_term_signals) once, or
+    /// install a signal handler (e.g., with
     /// [`signal_hook`](https://docs.rs/signal-hook)) that exits the main loop
     /// cleanly, allowing this context to drop or calling `cleanup()` explicitly.
     pub fn cleanup(&mut self) {
