@@ -14,6 +14,11 @@
 //! - `std::env::set_var` (USER/HOME/LOGNAME) in `drop_privileges_unchecked`
 //!   (`context.rs`) and the post-fork env step `set_env_vars` (`steps.rs`)
 //! - `nix::sys::signal::sigaction` in test code
+//!
+//! The CLI binary (`main.rs`) is a separate crate root that cannot reach this
+//! module, so it carries its own documented `unsafe` blocks: the
+//! `daemonize_unchecked` / `drop_privileges_unchecked` calls (single-threaded
+//! contract) and the pre-exec `libc::signal(SIGPIPE, SIG_DFL)` reset (R128).
 
 #![allow(unsafe_code)]
 
