@@ -301,6 +301,17 @@ fn write_all_fd(fd: impl AsFd, buf: &[u8]) -> Result<(), nix::errno::Errno> {
     Ok(())
 }
 
+/// Convert an `rlim_cur` value to the exclusive upper bound of the fd-close
+/// range, saturating at `i32::MAX`.
+///
+/// A plain `as i32` cast wraps huge limits — `RLIM_INFINITY` (`u64::MAX`)
+/// becomes `-1`, emptying the close range so *no* fds are closed. Saturating
+/// is lossless in practice: fds are C ints, so no open fd can exceed
+/// `i32::MAX`.
+pub(crate) fn clamp_max_fd(rlim_cur: u64) -> i32 {
+    rlim_cur.min(i32::MAX as u64) as i32
+}
+
 /// Query the process fd limit via getrlimit.
 ///
 /// # Panics
@@ -309,7 +320,7 @@ fn write_all_fd(fd: impl AsFd, buf: &[u8]) -> Result<(), nix::errno::Errno> {
 pub(crate) fn get_max_fd() -> i32 {
     let limit = nix::sys::resource::getrlimit(nix::sys::resource::Resource::RLIMIT_NOFILE)
         .expect("getrlimit(RLIMIT_NOFILE) failed");
-    limit.0 as i32
+    clamp_max_fd(limit.0)
 }
 
 /// Return an iterator of fd numbers to close, filtering out skip_fds.
@@ -763,6 +774,20 @@ mod tests {
     }
 
     // --- Step 13: close inherited fds (pure plan tests) ---
+
+    // Covers: R103
+    #[test]
+    fn clamp_max_fd_saturates_instead_of_wrapping() {
+        // RLIM_INFINITY (u64::MAX) formerly wrapped to -1 via `as i32`,
+        // emptying the close range so no fds were closed at all. The
+        // conversion must saturate: closing up to i32::MAX covers every
+        // possible fd (fds are C ints).
+        assert_eq!(clamp_max_fd(u64::MAX), i32::MAX);
+        assert_eq!(clamp_max_fd(i32::MAX as u64 + 1), i32::MAX);
+        // Ordinary limits pass through unchanged.
+        assert_eq!(clamp_max_fd(1024), 1024);
+        assert_eq!(clamp_max_fd(0), 0);
+    }
 
     // Covers: R104
     #[test]
