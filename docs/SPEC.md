@@ -568,13 +568,26 @@ is `true` (the default); see `DaemonContext::cleanup()`.
 
 ### Signal reset
 
-Iterate from 1 through `libc::SIGRTMAX()`, skipping `SIGKILL` and
-`SIGSTOP`. Reset each to `SIG_DFL` via `libc::sigaction()`. If
-`sigaction` returns `EINVAL` (e.g., NPTL-reserved signals 32–33),
-skip silently. Use `libc::sigaction()` directly — nix's `sigaction`
-only accepts the `Signal` enum which cannot represent real-time signal
-numbers. `libc::SIGRTMAX()` is a function; if a future `libc` version
-removes it, 64 is an acceptable ceiling.
+Iterate from 1 through `libc::SIGRTMAX()`, skipping `SIGKILL`,
+`SIGSTOP`, and `SIGPIPE`. Reset each to `SIG_DFL` via
+`libc::sigaction()`. If `sigaction` returns `EINVAL` (e.g.,
+NPTL-reserved signals 32–33), skip silently. Use `libc::sigaction()`
+directly — nix's `sigaction` only accepts the `Signal` enum which
+cannot represent real-time signal numbers. `libc::SIGRTMAX()` is a
+function; if a future `libc` version removes it, 64 is an acceptable
+ceiling.
+
+**SIGPIPE is preserved, not reset.** The Rust runtime installs
+`SIG_IGN` for SIGPIPE so writes to a closed pipe/socket return `EPIPE`
+instead of killing the process. Resetting it to `SIG_DFL` would
+silently revoke that guarantee for the whole daemon — the first write
+to a disconnected peer would terminate it — and would make
+`notify_parent`'s documented `NotifyFailed` error unobservable when
+the parent has died (the daemon would die of SIGPIPE inside the
+write). The daemonization sequence therefore leaves the caller's
+SIGPIPE disposition untouched. The CLI restores `SIG_DFL` immediately
+before `exec` so target programs still start with the conventional
+disposition (an ignored SIGPIPE would otherwise survive `exec(2)`).
 
 ### User/group switching (DaemonContext::drop_privileges)
 
@@ -863,7 +876,8 @@ env) use `#[serial]`.
 - **Umask:** set, read back, assert, restore.
 - **Signal mask:** block signal, clear, read back, assert empty.
 - **Signal dispositions:** install handler for SIGUSR1, reset, assert
-  `SIG_DFL`. Repeat for SIGRTMIN.
+  `SIG_DFL`. Repeat for SIGRTMIN. For SIGPIPE, assert the pre-reset
+  disposition (both `SIG_IGN` and `SIG_DFL`) survives unchanged.
 - **Environment:** set pairs with duplicates, assert last-write-wins.
 - **chdir:** change to tempdir, assert current_dir, restore.
 - **fd redirect:** redirect fd 1 to tempfile, write, read back, assert.
@@ -1095,7 +1109,8 @@ verification points.
 - R96. Lockfile opened with `O_WRONLY | O_CREAT | O_CLOEXEC`, 0644.
 - R97. Shared lockfile/pidfile: lock first, then seek/truncate/write.
 - R98. File-creating opens use mode 0644, subject to process umask.
-- R99. Signal reset: 1..SIGRTMAX, skip SIGKILL/SIGSTOP, EINVAL → skip.
+- R99. Signal reset: 1..SIGRTMAX, skip SIGKILL/SIGSTOP/SIGPIPE,
+  EINVAL → skip.
 - R100. Signal reset uses `libc::sigaction()` directly.
 - R101. `drop_privileges()` user switch order: `getpwnam` →
   `initgroups` → `setgid` → `setuid`.
@@ -1141,3 +1156,9 @@ verification points.
   which is not thread-safe). The unchecked `unsafe fn
   drop_privileges_unchecked()` skips the check; on targets without a
   thread-count source the checked form is a `#[deprecated]` stub.
+- R127. The caller's SIGPIPE disposition is preserved across
+  daemonization: the signal reset never touches SIGPIPE (see signal
+  reset), so the Rust runtime's `SIG_IGN` — and with it `EPIPE`-on-write
+  semantics — survives `daemonize()`.
+- R128. The CLI sets SIGPIPE to `SIG_DFL` immediately before `exec`, so
+  the target program starts with the conventional default disposition.

@@ -120,6 +120,16 @@
 //!   file". Use absolute paths for all files, or set
 //!   [`chdir`](DaemonConfig::chdir) to your desired working directory.
 //!
+//! # Signals
+//!
+//! Daemonization resets every signal disposition to its default and clears
+//! the signal mask — with one exception: **SIGPIPE is preserved**. The Rust
+//! runtime ignores SIGPIPE so writes to a closed pipe or socket return
+//! [`ErrorKind::BrokenPipe`](std::io::ErrorKind::BrokenPipe) instead of
+//! killing the process, and that guarantee survives [`daemonize`]. (The
+//! `daemonize` CLI restores the default disposition just before `exec`, so
+//! spawned programs still start with conventional signal state.)
+//!
 //! # Pidfile cleanup on signals
 //!
 //! With [`cleanup_on_drop`](DaemonConfig::cleanup_on_drop) (the default),

@@ -691,6 +691,28 @@ fn reported_error_after_fork_removes_pidfile() {
     );
 }
 
+// Covers: R128
+#[test]
+fn exec_target_gets_default_sigpipe() {
+    use std::os::unix::process::ExitStatusExt;
+
+    // The daemonization sequence preserves the launcher's SIGPIPE disposition
+    // (R127) — for this Rust binary that is SIG_IGN, which would survive
+    // exec(2). The CLI must restore SIG_DFL before exec so the target program
+    // starts with the conventional disposition. A shell that SIGPIPEs itself
+    // dies only if the disposition is default; ignored, it exits 0.
+    let status = daemonize_cmd()
+        .args(["-f", "--", "sh", "-c", "kill -PIPE $$"])
+        .status()
+        .unwrap();
+
+    assert_eq!(
+        status.signal(),
+        Some(libc::SIGPIPE),
+        "exec'd program should start with default SIGPIPE and die from it"
+    );
+}
+
 // --- Error exit codes per table row (R51) ---
 
 // Covers: R32, R51

@@ -552,6 +552,45 @@ mod tests {
         let _ = unsafe { sigaction(Signal::SIGUSR1, &old) };
     }
 
+    // Covers: R127
+    #[test]
+    #[serial]
+    #[allow(unsafe_code)]
+    fn reset_signal_dispositions_preserves_sigpipe() {
+        use nix::sys::signal::{sigaction, SaFlags, SigAction, SigHandler, SigSet, Signal};
+
+        // Read the harness's current SIGPIPE disposition so it can be
+        // restored at the end (install-and-put-back is the only read API).
+        let probe = SigAction::new(SigHandler::SigIgn, SaFlags::empty(), SigSet::empty());
+        let original = unsafe { sigaction(Signal::SIGPIPE, &probe) }.unwrap();
+        let _ = unsafe { sigaction(Signal::SIGPIPE, &original) };
+
+        // SIG_IGN (what the Rust runtime installs) must survive the reset:
+        // resetting it would turn every write to a closed pipe/socket into
+        // silent process death instead of an EPIPE error.
+        let ign = SigAction::new(SigHandler::SigIgn, SaFlags::empty(), SigSet::empty());
+        unsafe { sigaction(Signal::SIGPIPE, &ign) }.unwrap();
+        crate::unsafe_ops::reset_signal_dispositions();
+        let after = unsafe { sigaction(Signal::SIGPIPE, &ign) }.unwrap();
+        assert!(
+            matches!(after.handler(), SigHandler::SigIgn),
+            "SIGPIPE SIG_IGN must survive the disposition reset"
+        );
+
+        // The reset preserves the caller's choice, whatever it is — it does
+        // not force SIG_IGN: an explicit SIG_DFL stays SIG_DFL.
+        let dfl = SigAction::new(SigHandler::SigDfl, SaFlags::empty(), SigSet::empty());
+        unsafe { sigaction(Signal::SIGPIPE, &dfl) }.unwrap();
+        crate::unsafe_ops::reset_signal_dispositions();
+        let after = unsafe { sigaction(Signal::SIGPIPE, &dfl) }.unwrap();
+        assert!(
+            matches!(after.handler(), SigHandler::SigDfl),
+            "an explicit SIG_DFL must also be preserved, not overridden"
+        );
+
+        let _ = unsafe { sigaction(Signal::SIGPIPE, &original) };
+    }
+
     // --- Step 10: clear signal mask ---
 
     #[test]

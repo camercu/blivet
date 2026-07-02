@@ -24,10 +24,18 @@
 /// On other platforms, iterates 1..=64 and silently skips EINVAL.
 ///
 /// SIGKILL and SIGSTOP are always skipped (cannot be caught/reset).
+///
+/// SIGPIPE is also skipped, preserving the caller's disposition (R127): the
+/// Rust runtime installs SIG_IGN so writes to a closed pipe/socket return
+/// `EPIPE` instead of killing the process, and resetting it would silently
+/// revoke that for the entire daemon — including the library's own
+/// `notify_parent` write, whose documented `NotifyFailed` error could then
+/// never be observed. The CLI restores SIG_DFL just before `exec` (R128), so
+/// exec'd programs still start with the conventional disposition.
 pub(crate) fn reset_signal_dispositions() {
     let signals = signal_range();
     for sig in signals {
-        if sig == libc::SIGKILL || sig == libc::SIGSTOP {
+        if sig == libc::SIGKILL || sig == libc::SIGSTOP || sig == libc::SIGPIPE {
             continue;
         }
 

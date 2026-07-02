@@ -34,6 +34,8 @@ Acquires the lock file and writes the PID file (if configured).
 .IP " 6." 4
 Resets all signal dispositions to \f[B]SIG_DFL\f[R] and clears the
 signal mask.
+SIGPIPE is deferred until step 11 so a broken notification pipe cannot
+kill the intervening steps.
 .IP " 7." 4
 Applies environment variables and redirects stdout/stderr to files (if
 configured).
@@ -46,7 +48,8 @@ user/group (if configured) via \f[B]chown\f[R](2).
 Switches user and group (if configured) via \f[B]setuid\f[R](2),
 \f[B]setgid\f[R](2), and \f[B]initgroups\f[R](3).
 .IP "11." 4
-Exec\(cqs \f[I]program\f[R].
+Restores the default SIGPIPE disposition and exec\(cqs
+\f[I]program\f[R].
 .PP
 In foreground mode (\f[B]\-f\f[R]), steps 1\-3 are skipped: no fork or
 setsid occurs, and the notification pipe is not created.

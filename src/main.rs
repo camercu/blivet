@@ -241,6 +241,15 @@ fn main() -> ExitCode {
         })
         .collect();
 
+    // Restore the conventional default SIGPIPE disposition for the target
+    // program: daemonization preserves the launcher's disposition (Rust
+    // ignores SIGPIPE), and an ignored disposition would survive exec(2).
+    // SAFETY: SIG_DFL is a valid disposition; the process is single-threaded.
+    #[allow(unsafe_code)]
+    unsafe {
+        libc::signal(libc::SIGPIPE, libc::SIG_DFL)
+    };
+
     // exec — if this returns, it failed
     let Err(err) = nix::unistd::execvp(&c_program, &c_args);
     ctx.report_error(&DaemonizeError::ExecFailed(format!(

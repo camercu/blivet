@@ -30,6 +30,8 @@ The daemonization sequence:
    */dev/null* (stdout/stderr too, unless in foreground mode).
 5. Acquires the lock file and writes the PID file (if configured).
 6. Resets all signal dispositions to **SIG_DFL** and clears the signal mask.
+   SIGPIPE is deferred until step 11 so a broken notification pipe cannot
+   kill the intervening steps.
 7. Applies environment variables and redirects stdout/stderr to files
    (if configured).
 8. Closes all inherited file descriptors (except the lock file).
@@ -37,7 +39,7 @@ The daemonization sequence:
    user/group (if configured) via **chown**(2).
 10. Switches user and group (if configured) via **setuid**(2), **setgid**(2),
     and **initgroups**(3).
-11. Exec's *program*.
+11. Restores the default SIGPIPE disposition and exec's *program*.
 
 In foreground mode (**-f**), steps 1-3 are skipped: no fork or setsid occurs,
 and the notification pipe is not created. Stdout and stderr are left inherited

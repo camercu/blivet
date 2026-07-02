@@ -446,7 +446,10 @@ impl DaemonContext {
     /// of shipping a daemon running as root.
     ///
     /// Returns [`DaemonizeError::NotifyFailed`] (exit code 71, `EX_OSERR`) if
-    /// writing to the pipe fails. Returning `DaemonizeError` — rather than a
+    /// writing to the pipe fails — e.g. the parent was killed before the
+    /// daemon signalled (this error is observable because daemonization
+    /// preserves the Rust runtime's ignored SIGPIPE; see
+    /// [Signals](crate#signals)). Returning `DaemonizeError` — rather than a
     /// bare `io::Error` — lets a `fn run() -> Result<(), DaemonizeError>` use
     /// `?` here without wrapping, and preserves the exit code via
     /// [`exit_code`](DaemonizeError::exit_code).
