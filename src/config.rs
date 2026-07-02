@@ -235,8 +235,11 @@ impl DaemonConfig {
     /// - The pidfile path is a directory
     /// - Parent directories of configured paths are not writable
     /// - Lockfile or pidfile overlaps with stdout or stderr
+    /// - The umask does not fit in the 12 permission bits (`> 0o7777`)
     /// - An environment key is empty or contains `=`
-    /// - A user is configured but the effective UID is not 0
+    ///
+    /// Returns `DaemonizeError::PermissionDenied` if a user or group is
+    /// configured but the effective UID is not 0.
     #[must_use = "validate() returns a Result that must be checked"]
     pub fn validate(&self) -> Result<(), DaemonizeError> {
         // Check chdir is absolute, exists, and is a directory
