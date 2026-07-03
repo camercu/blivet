@@ -241,7 +241,7 @@ are lowercase with no trailing punctuation.
 | Variant            | Condition                                               |
 | ------------------ | ------------------------------------------------------- |
 | `ValidationError`  | Bad path, bad env key, path overlap, other config error |
-| `ProgramNotFound`  | CLI-only: program missing or not executable (pre-fork path check, or `ENOENT` at exec) |
+| `ProgramNotFound`  | CLI-only: program missing or not executable (pre-fork path check, or `ENOENT`/`EACCES` at exec) |
 | `UserNotFound`     | User does not exist at runtime during user switching    |
 | `GroupNotFound`    | Group does not exist at runtime during group switching  |
 | `LockConflict`     | flock already held by another process                   |
@@ -253,7 +253,7 @@ are lowercase with no trailing punctuation.
 | `PidfileError`     | Pidfile cannot be written                               |
 | `OutputFileError`  | stdout/stderr file cannot be opened/dup2'd              |
 | `ChownError`       | chown of pidfile/lockfile/output file failed             |
-| `ExecFailed`       | CLI-only: exec of target program failed (other than `ENOENT`) |
+| `ExecFailed`       | CLI-only: exec of target program failed (other than `ENOENT`/`EACCES`) |
 
 `ProgramNotFound` and `ExecFailed` are produced only by the CLI, never
 by the library. They are in the shared enum so the CLI can use the
@@ -720,9 +720,10 @@ remains valid after `chdir` changes the working directory:
 - **Absolute path** (e.g., `/usr/bin/foo`): validate existence and
   executability. No canonicalization needed.
 - **Bare name without `/`** (e.g., `my-app`): leave as-is. `execvp`
-  searches PATH, which works regardless of CWD. A missing bare name is
-  therefore only discovered at exec time; the resulting `ENOENT` still
-  exits `ProgramNotFound` (66) — see Program execution.
+  searches PATH, which works regardless of CWD. A bare name that is
+  missing or not executable is therefore only discovered at exec time;
+  the resulting `ENOENT`/`EACCES` still exits `ProgramNotFound` (66) —
+  see Program execution.
 
 > POSIX `execvp` semantics: paths containing `/` are resolved relative
 > to CWD; paths without `/` are searched via PATH. Since `daemonize`
@@ -762,10 +763,12 @@ process, CLOEXEC closes the pipe write end, and the parent reads EOF
 
 If `execvp` fails, the CLI calls `ctx.report_error(...)`, which writes
 the error to the notification pipe and calls `_exit()`. The parent
-reads the error and exits with the mapped code. `ENOENT` — the program,
-or a script's interpreter, does not exist — is reported as
-`ProgramNotFound` (exit 66), matching the pre-fork path check; any
-other exec error is `ExecFailed` (exit 71). (R130)
+reads the error and exits with the mapped code. `ENOENT` (the program,
+or a script's interpreter, does not exist) and `EACCES` (the program is
+not executable) are reported as `ProgramNotFound` (exit 66), matching
+the pre-fork path check, so a missing-or-unusable program is exit 66 in
+both path and bare form; any other exec error is `ExecFailed` (exit 71).
+(R130)
 
 If clearing `CLOEXEC` on the lockfile fd fails, the CLI likewise calls
 `report_error` with `ExecFailed` (exit 71).
@@ -1175,5 +1178,7 @@ verification points.
   error (which names the failing signal) is returned, so an `Err`
   leaves the process exactly as it was.
 - R130. CLI exec failure with `ENOENT` (missing program or script
-  interpreter) is reported as `ProgramNotFound` (exit 66), matching the
-  pre-fork path check; any other exec error is `ExecFailed` (exit 71).
+  interpreter) or `EACCES` (program not executable) is reported as
+  `ProgramNotFound` (exit 66), matching the pre-fork path check — so a
+  missing-or-unusable program is exit 66 in both path and bare form. Any
+  other exec error is `ExecFailed` (exit 71).

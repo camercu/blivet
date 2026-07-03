@@ -250,16 +250,29 @@ fn main() -> ExitCode {
         libc::signal(libc::SIGPIPE, libc::SIG_DFL)
     };
 
-    // exec — if this returns, it failed. ENOENT means the program (or a
-    // script's interpreter) does not exist, so it maps to ProgramNotFound
-    // like the pre-fork path check; anything else is ExecFailed (R130).
+    // exec — if this returns, it failed. ENOENT/EACCES mean the program (or a
+    // script's interpreter) is missing or not executable, mapping to
+    // ProgramNotFound like the pre-fork path check; anything else is a genuine
+    // OS error (R130).
     let Err(err) = nix::unistd::execvp(&c_program, &c_args);
-    let message = format!("exec {program_path}: {err}");
-    ctx.report_error(&if err == nix::errno::Errno::ENOENT {
-        DaemonizeError::ProgramNotFound(message)
-    } else {
-        DaemonizeError::ExecFailed(message)
-    });
+    ctx.report_error(&exec_error_variant(
+        err,
+        format!("exec {program_path}: {err}"),
+    ));
+}
+
+/// Maps an `execvp` errno to the reported error. `ENOENT` (program or script
+/// interpreter missing) and `EACCES` (program not executable) both become
+/// [`DaemonizeError::ProgramNotFound`], matching the pre-fork path check so a
+/// missing-or-unusable program is exit 66 in both path and bare form. Every
+/// other errno is a genuine OS-level exec failure ([`DaemonizeError::ExecFailed`],
+/// exit 71) (R130).
+fn exec_error_variant(err: nix::errno::Errno, message: String) -> DaemonizeError {
+    use nix::errno::Errno;
+    match err {
+        Errno::ENOENT | Errno::EACCES => DaemonizeError::ProgramNotFound(message),
+        _ => DaemonizeError::ExecFailed(message),
+    }
 }
 
 fn resolve_program_path(program: &str) -> Result<String, DaemonizeError> {
@@ -306,6 +319,41 @@ fn clear_cloexec(fd: BorrowedFd<'_>) -> Result<(), nix::Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // --- exec_error_variant ---
+
+    // Covers: R130
+    #[test]
+    fn exec_enoent_maps_to_program_not_found() {
+        assert!(matches!(
+            exec_error_variant(nix::errno::Errno::ENOENT, "m".into()),
+            DaemonizeError::ProgramNotFound(_)
+        ));
+    }
+
+    // Covers: R130
+    #[test]
+    fn exec_eacces_maps_to_program_not_found() {
+        // A missing-or-unusable program is one exit code (66) in both path and
+        // bare form; EACCES is the bare-form counterpart to the path-form X_OK
+        // check.
+        assert!(matches!(
+            exec_error_variant(nix::errno::Errno::EACCES, "m".into()),
+            DaemonizeError::ProgramNotFound(_)
+        ));
+    }
+
+    // Covers: R130
+    #[test]
+    fn exec_other_errno_stays_exec_failed() {
+        // Anything that is not "program missing/unusable" is a genuine OS error
+        // (exit 71). E2BIG stands in for that class; it is not integration-
+        // reachable, hence the unit test.
+        assert!(matches!(
+            exec_error_variant(nix::errno::Errno::E2BIG, "m".into()),
+            DaemonizeError::ExecFailed(_)
+        ));
+    }
 
     // --- README flag table parity ---
 

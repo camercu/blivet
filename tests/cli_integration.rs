@@ -290,10 +290,11 @@ fn bare_name_not_found_exits_66() {
 
 // Covers: R130
 #[test]
-fn exec_failure_other_than_enoent_exits_71() {
-    // The non-ENOENT exec branch must stay ExecFailed (71). A bare name that
-    // resolves via PATH to a non-executable file skips the pre-fork path
-    // check and fails execvp with EACCES.
+fn bare_non_executable_exits_66() {
+    // A non-executable program exits 66 via the pre-fork X_OK check in path
+    // form; a bare name skips that check and only fails execvp with EACCES.
+    // That EACCES maps to ProgramNotFound (66) too, so "not executable" is one
+    // exit code in both forms — the same path/bare parity as "not found".
     let dir = tempfile::tempdir().unwrap();
     let prog = dir.path().join("unexecutable-blivet-test");
     std::fs::write(&prog, "#!/bin/sh\n").unwrap(); // not executable
@@ -306,8 +307,8 @@ fn exec_failure_other_than_enoent_exits_71() {
 
     assert_eq!(
         output.status.code(),
-        Some(71),
-        "non-ENOENT exec failure should stay 71 (ExecFailed), stderr: {}",
+        Some(66),
+        "non-executable bare-name program should exit 66, stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
 }

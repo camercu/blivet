@@ -139,8 +139,8 @@ Exit codes follow the **sysexits.h** conventions:
 
 **66** (EX_NOINPUT)
 :   Program not found or not executable — whether detected before
-    daemonizing or at exec time (e.g. a missing PATH command or script
-    interpreter).
+    daemonizing or at exec time (e.g. a missing or non-executable PATH
+    command, or a missing script interpreter).
 
 **67** (EX_NOUSER)
 :   User or group not found.
@@ -150,7 +150,7 @@ Exit codes follow the **sysexits.h** conventions:
 
 **71** (EX_OSERR)
 :   OS error: fork, setsid, or chdir failed, or exec failed for a
-    reason other than a missing program.
+    reason other than a missing or non-executable program.
 
 **73** (EX_CANTCREAT)
 :   Cannot create lock file, PID file, or output file; or **chown**(2)
