@@ -288,6 +288,30 @@ fn bare_name_not_found_exits_66() {
     );
 }
 
+// Covers: R130
+#[test]
+fn exec_failure_other_than_enoent_exits_71() {
+    // The non-ENOENT exec branch must stay ExecFailed (71). A bare name that
+    // resolves via PATH to a non-executable file skips the pre-fork path
+    // check and fails execvp with EACCES.
+    let dir = tempfile::tempdir().unwrap();
+    let prog = dir.path().join("unexecutable-blivet-test");
+    std::fs::write(&prog, "#!/bin/sh\n").unwrap(); // not executable
+
+    let output = daemonize_cmd()
+        .env("PATH", dir.path())
+        .args(["--", "unexecutable-blivet-test"])
+        .output()
+        .unwrap();
+
+    assert_eq!(
+        output.status.code(),
+        Some(71),
+        "non-ENOENT exec failure should stay 71 (ExecFailed), stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 // Covers: R52
 #[test]
 fn verbose_mode_prints_diagnostics() {
