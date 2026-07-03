@@ -202,7 +202,7 @@ so failures reach the shell with a meaningful status:
 | Variant            | Exit code   | Meaning                                  |
 | ------------------ | ----------- | ---------------------------------------- |
 | `ValidationError`  | 64          | Bad config (paths, env keys, overlaps)   |
-| `ProgramNotFound`  | 66          | CLI: program missing or not executable   |
+| `ProgramNotFound`  | 66          | CLI: program missing or not executable (pre-fork check or exec `ENOENT`) |
 | `UserNotFound`     | 67          | User doesn't exist                       |
 | `GroupNotFound`    | 67          | Group doesn't exist                      |
 | `LockConflict`     | 69          | Lockfile held by another process         |
@@ -214,7 +214,7 @@ so failures reach the shell with a meaningful status:
 | `SetsidFailed`     | 71          | `setsid()` error                         |
 | `ChdirFailed`      | 71          | `chdir()` error                          |
 | `PermissionDenied` | 77          | Not root, or setuid/setgid failed        |
-| `ExecFailed`       | 71          | CLI: `exec` of target program failed     |
+| `ExecFailed`       | 71          | CLI: `exec` failed (other than `ENOENT`) |
 | `NotifyFailed`     | 71          | Can't write readiness byte to launcher   |
 | `PrivilegesNotDropped` | 70      | user/group set but `drop_privileges()` never called |
 | `Application`      | caller's    | App-level failure you report yourself    |

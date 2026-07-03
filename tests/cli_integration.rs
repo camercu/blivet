@@ -264,6 +264,30 @@ fn program_not_found_exits_66() {
     );
 }
 
+// Covers: R130
+#[test]
+fn bare_name_not_found_exits_66() {
+    // A bare name skips pre-fork validation (execvp searches PATH), so the
+    // missing program is only discovered at exec time. ENOENT from execvp
+    // must still map to ProgramNotFound (66), not the generic ExecFailed
+    // (71), so "program doesn't exist" is one exit code in both forms.
+    let output = daemonize_cmd()
+        .args(["--", "no-such-command-blivet-test-12345"])
+        .output()
+        .unwrap();
+
+    assert_eq!(
+        output.status.code(),
+        Some(66),
+        "missing bare-name program should exit 66, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("no-such-command-blivet-test-12345"),
+        "error should name the program"
+    );
+}
+
 // Covers: R52
 #[test]
 fn verbose_mode_prints_diagnostics() {
@@ -661,7 +685,8 @@ fn reported_error_after_fork_removes_pidfile() {
     //
     // Trigger: a script with a missing interpreter passes the pre-fork
     // executability check but fails execvp with ENOENT (no shell fallback),
-    // yielding ExecFailed (71) via report_error after the pidfile is written.
+    // yielding ProgramNotFound (66, R130) via report_error after the pidfile
+    // is written.
     let dir = tempfile::tempdir().unwrap();
     let script = dir.path().join("script");
     std::fs::write(&script, "#!/nonexistent/interpreter\n").unwrap();
@@ -680,8 +705,8 @@ fn reported_error_after_fork_removes_pidfile() {
 
     assert_eq!(
         output.status.code(),
-        Some(71),
-        "missing interpreter should exit 71 (ExecFailed), stderr: {}",
+        Some(66),
+        "missing interpreter should exit 66 (exec ENOENT → ProgramNotFound), stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(

@@ -250,11 +250,16 @@ fn main() -> ExitCode {
         libc::signal(libc::SIGPIPE, libc::SIG_DFL)
     };
 
-    // exec — if this returns, it failed
+    // exec — if this returns, it failed. ENOENT means the program (or a
+    // script's interpreter) does not exist, so it maps to ProgramNotFound
+    // like the pre-fork path check; anything else is ExecFailed (R130).
     let Err(err) = nix::unistd::execvp(&c_program, &c_args);
-    ctx.report_error(&DaemonizeError::ExecFailed(format!(
-        "exec {program_path}: {err}"
-    )));
+    let message = format!("exec {program_path}: {err}");
+    ctx.report_error(&if err == nix::errno::Errno::ENOENT {
+        DaemonizeError::ProgramNotFound(message)
+    } else {
+        DaemonizeError::ExecFailed(message)
+    });
 }
 
 fn resolve_program_path(program: &str) -> Result<String, DaemonizeError> {

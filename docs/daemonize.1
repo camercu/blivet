@@ -166,7 +166,9 @@ Daemon started successfully.
 Configuration or validation error.
 .TP
 \f[B]66\f[R] (EX_NOINPUT)
-Program not found or not executable.
+Program not found or not executable \(em whether detected before
+daemonizing or at exec time (e.g.\ a missing PATH command or script
+interpreter).
 .TP
 \f[B]67\f[R] (EX_NOUSER)
 User or group not found.
@@ -175,7 +177,8 @@ User or group not found.
 Lock file held by another process.
 .TP
 \f[B]71\f[R] (EX_OSERR)
-OS error: fork, setsid, chdir, or exec failed.
+OS error: fork, setsid, or chdir failed, or exec failed for a reason
+other than a missing program.
 .TP
 \f[B]73\f[R] (EX_CANTCREAT)
 Cannot create lock file, PID file, or output file; or \f[B]chown\f[R](2)

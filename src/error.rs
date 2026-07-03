@@ -11,7 +11,9 @@ pub enum DaemonizeError {
     #[error("validation error: {0}")]
     ValidationError(String),
 
-    /// CLI-only: program path missing or not executable.
+    /// CLI-only: program missing or not executable — caught by the pre-fork
+    /// path check, or by `ENOENT` at exec time (missing PATH command or
+    /// script interpreter).
     #[error("program not found: {0}")]
     ProgramNotFound(String),
 
@@ -59,7 +61,8 @@ pub enum DaemonizeError {
     #[error("chown error: {0}")]
     ChownError(String),
 
-    /// CLI-only: exec of target program failed.
+    /// CLI-only: exec of target program failed for a reason other than
+    /// `ENOENT` (which maps to [`ProgramNotFound`](Self::ProgramNotFound)).
     #[error("exec failed: {0}")]
     ExecFailed(String),
 
