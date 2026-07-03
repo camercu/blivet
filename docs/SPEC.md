@@ -178,6 +178,8 @@ resolved target user/group. Skips files that are not configured. Must
 be called while still privileged (before `drop_privileges()`). No-op
 if neither user nor group is configured. User/group resolution uses
 the same string-parsing strategy as `drop_privileges()` (see below).
+On error, paths already processed remain chowned; the operation is
+idempotent, so retrying after fixing the cause is safe.
 
 `drop_privileges(&mut self) -> Result<(), DaemonizeError>` performs
 user/group switching. Resolution: if the string parses as a `u32`,

@@ -250,7 +250,9 @@ impl DaemonContext {
     ///
     /// Returns `DaemonizeError::ChownError` if `chown()` fails on any path.
     /// Returns `DaemonizeError::UserNotFound` or `DaemonizeError::GroupNotFound`
-    /// if the configured user/group cannot be resolved.
+    /// if the configured user/group cannot be resolved. On error, paths
+    /// already processed remain chowned; the operation is idempotent, so
+    /// retrying after fixing the cause is safe.
     pub fn chown_paths(&mut self) -> Result<(), DaemonizeError> {
         if self.config.user.is_none() && self.config.group.is_none() {
             return Ok(());
