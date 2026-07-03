@@ -946,7 +946,8 @@ continues; (2) split-phase with `chown_paths()` → `drop_privileges()`
   re-raise (SA_RESETHAND) so the default termination action still runs.
   Library-only — the CLI's `exec` resets handlers. No-op without a
   pidfile; `ValidationError` on a NUL path or an uncatchable/invalid
-  signal.
+  signal. A failed install names the failing signal and rolls back
+  completely (R129).
 - `set_cleanup_on_drop()`: runtime override for cleanup-on-drop.
 - `DaemonContext`: drop releases lock, writes failure to pipe if
   `notify_parent()` was not called, removes pidfile if
@@ -1162,3 +1163,8 @@ verification points.
   semantics — survives `daemonize()`.
 - R128. The CLI sets SIGPIPE to `SIG_DFL` immediately before `exec`, so
   the target program starts with the conventional default disposition.
+- R129. `cleanup_on_signals()` is all-or-nothing: if installing a
+  handler fails, dispositions already replaced for earlier signals in
+  the slice — and the handler's pidfile path — are restored before the
+  error (which names the failing signal) is returned, so an `Err`
+  leaves the process exactly as it was.

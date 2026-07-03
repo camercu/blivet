@@ -145,8 +145,12 @@ extern "C" fn pidfile_cleanup_handler(signum: i32) {
 ///
 /// Stores `pidfile` (leaked, so it outlives any later free) for the handler to
 /// unlink. Uses `SA_RESETHAND` so the handler runs once and the re-raise hits
-/// the default action. Returns the OS error if `sigaction` fails (e.g. EINVAL
-/// for a signal that cannot be caught, like SIGKILL/SIGSTOP).
+/// the default action.
+///
+/// All-or-nothing (R129): if `sigaction` fails for any signal (e.g. EINVAL
+/// for one that cannot be caught, like SIGKILL/SIGSTOP), the dispositions
+/// already replaced for earlier signals in the slice and the prior pidfile
+/// pointer are restored, and the returned error names the failing signal.
 pub(crate) fn install_pidfile_cleanup_signals(
     pidfile: &std::ffi::CStr,
     signals: &[i32],
@@ -154,9 +158,13 @@ pub(crate) fn install_pidfile_cleanup_signals(
     use std::sync::atomic::Ordering;
 
     // Leak a stable copy of the path. Repeated installs leak the prior copy,
-    // a small bounded cost for a rarely-repeated setup call.
+    // a small bounded cost for a rarely-repeated setup call. The prior pointer
+    // (null or an earlier leaked path, both valid forever) is kept for rollback.
     let leaked: *mut libc::c_char = pidfile.to_owned().into_raw();
-    CLEANUP_PIDFILE.store(leaked, Ordering::Release);
+    let prior_path = CLEANUP_PIDFILE.swap(leaked, Ordering::AcqRel);
+
+    // Dispositions replaced so far, so a failure can restore them.
+    let mut replaced: Vec<(i32, libc::sigaction)> = Vec::with_capacity(signals.len());
 
     for &sig in signals {
         let mut sa: libc::sigaction = unsafe { std::mem::zeroed() };
@@ -167,10 +175,22 @@ pub(crate) fn install_pidfile_cleanup_signals(
         unsafe { libc::sigemptyset(&mut sa.sa_mask) };
         sa.sa_flags = libc::SA_RESETHAND;
 
-        let ret = unsafe { libc::sigaction(sig, &sa, std::ptr::null_mut()) };
+        let mut old: libc::sigaction = unsafe { std::mem::zeroed() };
+        let ret = unsafe { libc::sigaction(sig, &sa, &mut old) };
         if ret != 0 {
-            return Err(std::io::Error::last_os_error());
+            let err = std::io::Error::last_os_error();
+            for (s, prev) in replaced.iter().rev() {
+                // SAFETY: `prev` is the exact disposition sigaction reported
+                // for `s` moments ago; re-installing it is always valid.
+                unsafe { libc::sigaction(*s, prev, std::ptr::null_mut()) };
+            }
+            CLEANUP_PIDFILE.store(prior_path, Ordering::Release);
+            return Err(std::io::Error::new(
+                err.kind(),
+                format!("signal {sig}: {err}"),
+            ));
         }
+        replaced.push((sig, old));
     }
     Ok(())
 }
@@ -332,4 +352,74 @@ pub(crate) fn at_fdcwd() -> std::os::fd::BorrowedFd<'static> {
     // SAFETY: AT_FDCWD is a well-known sentinel value (-100 on Linux, -2 on
     // macOS) that the kernel recognises; it does not alias any real fd.
     unsafe { std::os::fd::BorrowedFd::borrow_raw(libc::AT_FDCWD) }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_support::{is_subprocess, run_in_subprocess};
+    use std::sync::atomic::Ordering;
+
+    /// Current disposition of `sig` (the `sa_sigaction` word), read without
+    /// changing it.
+    fn current_disposition(sig: i32) -> usize {
+        let mut old: libc::sigaction = unsafe { std::mem::zeroed() };
+        let ret = unsafe { libc::sigaction(sig, std::ptr::null(), &mut old) };
+        assert_eq!(ret, 0, "sigaction query for signal {sig} failed");
+        old.sa_sigaction
+    }
+
+    // Covers: R129
+    #[test]
+    fn failed_install_rolls_back() {
+        run_in_subprocess("unsafe_ops::tests::failed_install_rolls_back_subprocess");
+    }
+
+    /// A failing install must leave no trace: handlers installed for signals
+    /// earlier in the slice are restored, the failing signal is named in the
+    /// error, and the handler's pidfile pointer reverts to its prior value.
+    /// Mutates process-global signal state, hence the subprocess isolation.
+    #[test]
+    #[ignore]
+    fn failed_install_rolls_back_subprocess() {
+        if !is_subprocess() {
+            return;
+        }
+
+        // Establish a prior successful install so pointer rollback is
+        // distinguishable from "still null".
+        install_pidfile_cleanup_signals(c"/tmp/rollback-prior.pid", &[libc::SIGUSR2])
+            .expect("SIGUSR2 install should succeed");
+        let prior_ptr = CLEANUP_PIDFILE.load(Ordering::Acquire);
+        let prior_usr1 = current_disposition(libc::SIGUSR1);
+
+        // SIGUSR1 installs, then SIGKILL fails with EINVAL.
+        let err = install_pidfile_cleanup_signals(
+            c"/tmp/rollback-new.pid",
+            &[libc::SIGUSR1, libc::SIGKILL],
+        )
+        .expect_err("SIGKILL cannot be caught");
+
+        assert!(
+            err.to_string()
+                .contains(&format!("signal {}", libc::SIGKILL)),
+            "error should name the failing signal, got: {err}"
+        );
+        assert_eq!(
+            current_disposition(libc::SIGUSR1),
+            prior_usr1,
+            "SIGUSR1 disposition should be rolled back after the failed install"
+        );
+        assert_eq!(
+            CLEANUP_PIDFILE.load(Ordering::Acquire),
+            prior_ptr,
+            "pidfile pointer should revert to the prior install's path"
+        );
+        // The prior install must keep working: SIGUSR2 still has the handler.
+        assert_eq!(
+            current_disposition(libc::SIGUSR2),
+            pidfile_cleanup_handler as extern "C" fn(i32) as usize,
+            "earlier successful install should be untouched"
+        );
+    }
 }

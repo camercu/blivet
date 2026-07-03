@@ -219,7 +219,10 @@ impl DaemonContext {
     /// Returns [`DaemonizeError::ValidationError`] if the pidfile path contains
     /// a NUL byte, or if installing a handler fails — most likely `EINVAL` from
     /// passing a signal that cannot be caught (`SIGKILL`, `SIGSTOP`) or an
-    /// invalid signal number.
+    /// invalid signal number. The error names the failing signal, and a failed
+    /// install is all-or-nothing: handlers already installed for signals
+    /// earlier in the slice are removed again, so an `Err` leaves the process
+    /// exactly as it was.
     pub fn cleanup_on_signals(&self, signals: &[i32]) -> Result<(), DaemonizeError> {
         let Some(ref pidfile) = self.config.pidfile else {
             return Ok(());
