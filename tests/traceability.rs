@@ -115,7 +115,7 @@ fn requirement_coverage_does_not_regress() {
     // `#![deny(unsafe_code)]`, unsafe confinement, type signatures, internal
     // step ordering, panic-on-OS-failure) with no discrete runtime test —
     // see `report_uncovered_requirements` for the current list.
-    const BASELINE: usize = 103;
+    const BASELINE: usize = 105;
     let covered = covered_requirements().len();
     assert!(
         covered >= BASELINE,
