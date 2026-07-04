@@ -250,10 +250,7 @@ fn main() -> ExitCode {
         libc::signal(libc::SIGPIPE, libc::SIG_DFL)
     };
 
-    // exec — if this returns, it failed. ENOENT/EACCES mean the program (or a
-    // script's interpreter) is missing or not executable, mapping to
-    // ProgramNotFound like the pre-fork path check; anything else is a genuine
-    // OS error (R130).
+    // exec — if this returns, it failed; exec_error_variant classifies the errno.
     let Err(err) = nix::unistd::execvp(&c_program, &c_args);
     ctx.report_error(&exec_error_variant(
         err,

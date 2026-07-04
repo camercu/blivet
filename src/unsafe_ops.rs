@@ -168,8 +168,7 @@ pub(crate) fn install_pidfile_cleanup_signals(
     // unlink the new path. That install-loop window is inherent to non-atomic
     // multi-`sigaction` setup and cannot be closed without weakening the common
     // path (publishing last would leave the pidfile if a term signal lands in
-    // the post-install/pre-publish gap). Rollback below narrows its own share of
-    // this window by restoring the pointer first.
+    // the post-install/pre-publish gap).
     let leaked: *mut libc::c_char = pidfile.to_owned().into_raw();
     let prior_path = CLEANUP_PIDFILE.swap(leaked, Ordering::AcqRel);
 
