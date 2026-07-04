@@ -160,6 +160,16 @@ pub(crate) fn install_pidfile_cleanup_signals(
     // Leak a stable copy of the path. Repeated installs leak the prior copy,
     // a small bounded cost for a rarely-repeated setup call. The prior pointer
     // (null or an earlier leaked path, both valid forever) is kept for rollback.
+    //
+    // The path is published *before* the install loop so that in the common
+    // single-call case a term signal arriving mid-setup still unlinks the
+    // intended pidfile (the whole point of the feature). The unavoidable cost:
+    // between this swap and full install, a still-live prior handler would
+    // unlink the new path. That install-loop window is inherent to non-atomic
+    // multi-`sigaction` setup and cannot be closed without weakening the common
+    // path (publishing last would leave the pidfile if a term signal lands in
+    // the post-install/pre-publish gap). Rollback below narrows its own share of
+    // this window by restoring the pointer first.
     let leaked: *mut libc::c_char = pidfile.to_owned().into_raw();
     let prior_path = CLEANUP_PIDFILE.swap(leaked, Ordering::AcqRel);
 
@@ -179,12 +189,16 @@ pub(crate) fn install_pidfile_cleanup_signals(
         let ret = unsafe { libc::sigaction(sig, &sa, &mut old) };
         if ret != 0 {
             let err = std::io::Error::last_os_error();
+            // Restore the pointer first, then the dispositions: any handler
+            // still live during the restore loop (a prior install's, or one this
+            // call installed and hasn't reverted yet) then reads the prior path,
+            // matching the pre-call state instead of unlinking the new path.
+            CLEANUP_PIDFILE.store(prior_path, Ordering::Release);
             for (s, prev) in replaced.iter().rev() {
                 // SAFETY: `prev` is the exact disposition sigaction reported
                 // for `s` moments ago; re-installing it is always valid.
                 unsafe { libc::sigaction(*s, prev, std::ptr::null_mut()) };
             }
-            CLEANUP_PIDFILE.store(prior_path, Ordering::Release);
             return Err(std::io::Error::new(
                 err.kind(),
                 format!("signal {sig}: {err}"),
