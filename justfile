@@ -1,13 +1,20 @@
 # Environment variable: set CARGO_LOCKED=--locked in CI for reproducibility
 locked := env("CARGO_LOCKED", "")
 
+# cargo driver. Defaults to plain `cargo`; set RTK_CARGO="rtk cargo" (see the
+# `ci-rtk` target) to route the compile-heavy recipes through rtk for
+# token-compressed output. Only used where rtk both compresses the subcommand
+# and the output is for reading — recipes whose output is consumed (public-api)
+# stay on plain cargo.
+cargo := env("RTK_CARGO", "cargo")
+
 # Set up development environment (pre-commit hooks, node deps)
 setup:
     ./scripts/setup-dev.sh
 
 # Build all targets including tests
 build:
-    cargo build {{locked}} --tests
+    {{cargo}} build {{locked}} --tests
 
 # Check formatting
 fmt-check:
@@ -15,7 +22,7 @@ fmt-check:
 
 # Run clippy lints
 lint:
-    cargo clippy {{locked}} -- -D warnings
+    {{cargo}} clippy {{locked}} -- -D warnings
 
 # Run cargo-deny checks (advisories, licenses, bans)
 lint-deny:
@@ -31,16 +38,16 @@ doc:
 # OpenBSD is tier-3 without one, so CI's OpenBSD smoke remains the backstop.
 check-cross:
     rustup target add x86_64-unknown-linux-gnu x86_64-unknown-freebsd x86_64-unknown-netbsd
-    cargo check {{locked}} --target x86_64-unknown-linux-gnu
-    cargo check {{locked}} --target x86_64-unknown-freebsd
-    cargo check {{locked}} --target x86_64-unknown-netbsd
+    {{cargo}} check {{locked}} --target x86_64-unknown-linux-gnu
+    {{cargo}} check {{locked}} --target x86_64-unknown-freebsd
+    {{cargo}} check {{locked}} --target x86_64-unknown-netbsd
 
 # Run all static checks
 check: fmt-check lint lint-deny doc check-cross
 
 # Run tests (excludes ignored root/Linux tests)
 test:
-    RUSTFLAGS="-D warnings" cargo test {{locked}}
+    RUSTFLAGS="-D warnings" {{cargo}} test {{locked}}
 
 # Build and run Docker container for root + Linux-specific tests
 docker-test:
@@ -81,6 +88,12 @@ public-api-check:
 
 # Run everything CI runs (except Docker)
 ci: check test
+
+# Agent-facing CI: same steps as `ci`, but routes the compile-heavy recipes
+# (build/clippy/check/test) through rtk for token-compressed output. Prefer this
+# over `ci` when an agent runs the suite. Same pass/fail semantics.
+ci-rtk:
+    RTK_CARGO="rtk cargo" just ci
 
 # Run the full CI suite including Docker tests
 ci-full: check test docker-test
