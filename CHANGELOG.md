@@ -1,3 +1,21 @@
+## 0.10.0 (2026-07-04)
+
+* docs(comments): trim two redundant comments ([5bf787c](https://github.com/camercu/blivet/commit/5bf787c))
+* docs(context): document chown_paths partial effect on error ([3ee8162](https://github.com/camercu/blivet/commit/3ee8162))
+* fix(signals): make cleanup_on_signals install all-or-nothing ([a2d77ad](https://github.com/camercu/blivet/commit/a2d77ad))
+* fix(signals): restore cleanup pointer before dispositions on rollback ([54facb9](https://github.com/camercu/blivet/commit/54facb9))
+* fix(cli)!: map exec-time EACCES to ProgramNotFound (exit 66) ([c2a6577](https://github.com/camercu/blivet/commit/c2a6577))
+* fix(cli)!: map exec-time ENOENT to ProgramNotFound (exit 66) ([ebc012d](https://github.com/camercu/blivet/commit/ebc012d))
+* test(cli): cover the non-ENOENT exec-failure branch ([b4f2d95](https://github.com/camercu/blivet/commit/b4f2d95))
+* test(traceability): raise coverage ratchet to 105 ([d5fd633](https://github.com/camercu/blivet/commit/d5fd633))
+
+### BREAKING CHANGE
+
+* the daemonize CLI exits 66 instead of 71 when a
+bare-name (PATH-resolved) target program exists but is not executable.
+* the daemonize CLI exits 66 instead of 71 when the
+target program or its script interpreter does not exist at exec time.
+
 ## 0.9.0 (2026-07-02)
 
 * build(just): cross-check FreeBSD/NetBSD/Linux targets in `just check` ([2d186f1](https://github.com/camercu/blivet/commit/2d186f1))
