@@ -522,6 +522,29 @@ mod tests {
         assert_eq!(pid, std::process::id());
     }
 
+    #[test]
+    fn write_pidfile_shared_writes_through_locked_fd_not_path() {
+        // When the pidfile shares the lockfile path, write_pidfile must reuse the
+        // already-locked fd (seek + truncate + write), *not* re-open the path.
+        // Both routes leave identical file *content*, so a content check alone
+        // cannot tell them apart — a mutant that forces the standalone
+        // `fs::write` branch survives it. Pin the distinguishing behavior:
+        // unlink the path after locking, leaving the held fd pointing at the
+        // now-orphaned inode. Writing through that fd leaves the directory entry
+        // gone; the standalone branch would `O_CREAT` the path back.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("shared.pid");
+        let flock = open_and_lock(&path).unwrap();
+        std::fs::remove_file(&path).unwrap();
+
+        write_pidfile(&path, Some((path.as_path(), &flock))).unwrap();
+
+        assert!(
+            !path.exists(),
+            "shared path must write through the locked fd, not re-create the pidfile at its path"
+        );
+    }
+
     // --- Step 9: signal disposition reset ---
 
     #[test]
