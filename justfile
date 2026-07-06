@@ -61,9 +61,13 @@ manpage:
     @version=$(grep -E '^version = ' Cargo.toml | head -1 | sed -E 's/.*"(.*)".*/\1/'); \
     sed "s/@VERSION@/$version/" docs/daemonize.1.md | pandoc -f markdown -s -t man -o docs/daemonize.1
 
-# Generate code coverage report (requires cargo-llvm-cov)
+# Generate code coverage report (requires cargo-llvm-cov + cargo-nextest).
+# Runs under nextest, not the plain `cargo test` harness: several tests have
+# process-global side effects (redirect/close std fds) that clobber the shared
+# harness's result pipe, failing the run with a BrokenPipe. nextest isolates
+# each test in its own process, so those tests can't corrupt the collector.
 coverage:
-    cargo llvm-cov --html {{locked}}
+    cargo llvm-cov nextest --html {{locked}}
     @echo "Coverage report: target/llvm-cov/html/index.html"
 
 # ── Public API surface ──────────────────────────────────────
