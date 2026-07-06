@@ -1,4 +1,6 @@
 /target
+/mutants.out
+/mutants.out.old
 .claude/
 .direnv/
 node_modules/
