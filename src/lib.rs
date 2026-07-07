@@ -534,20 +534,15 @@ fn run_post_fork(
 
     // Step 7: Open and lock lockfile (explicit path, or the pidfile itself
     // unless derivation was opted out)
-    let lockfile = match config.effective_lockfile() {
+    let lockfile_path = config.effective_lockfile().map(std::path::PathBuf::as_path);
+    let lockfile = match lockfile_path {
         Some(path) => Some(steps::open_and_lock(path)?),
         None => None,
     };
 
     // Step 8: Write pidfile
     if let Some(ref pidfile_path) = config.pidfile {
-        steps::write_pidfile(
-            pidfile_path,
-            config
-                .effective_lockfile()
-                .map(std::path::PathBuf::as_path)
-                .zip(lockfile.as_ref()),
-        )?;
+        steps::write_pidfile(pidfile_path, lockfile_path.zip(lockfile.as_ref()))?;
     }
 
     // Step 9: Reset signal dispositions

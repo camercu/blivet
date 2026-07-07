@@ -725,8 +725,9 @@ clap parse error.
 (see Lockfile derivation): `-l path` calls `.lockfile(path)`,
 `--no-lock` calls `.no_lockfile()`, and neither flag leaves the default
 derive-from-pidfile state, so a pidfile alone enforces a single
-instance. The two flags conflict (clap usage error). The CLI performs
-no derivation of its own; `-v` merely mirrors the rule for display.
+instance. The two flags conflict (clap usage error). The CLI does not
+implement a separate derivation rule; its `-v` output re-states the
+library's resolution purely for diagnostic display.
 
 ### Program path resolution
 

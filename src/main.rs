@@ -386,10 +386,16 @@ mod tests {
         const README: &str = include_str!("../README.md");
         let mut readme_longs: Vec<String> = README
             .lines()
-            // CLI flag-table rows carry the long flag in a backticked cell,
-            // e.g. "| `--pidfile PATH`". The short-flag cell may be empty
-            // (long-only flags like --no-lock).
-            .filter(|line| line.contains("| `--"))
+            // CLI flag-table rows carry the long flag in their *second* cell,
+            // e.g. "| `-p` | `--pidfile PATH` | …". The short-flag cell may be
+            // empty (long-only flags like --no-lock). Keying on that cell —
+            // not the whole line — keeps description prose that mentions a
+            // flag from matching.
+            .filter(|line| {
+                line.split('|')
+                    .nth(2)
+                    .is_some_and(|cell| cell.trim().starts_with("`--"))
+            })
             .filter_map(parse_long_flag)
             .collect();
         readme_longs.sort();

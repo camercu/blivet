@@ -288,12 +288,7 @@ impl DaemonConfig {
     #[must_use = "validate() returns a Result that must be checked"]
     pub fn validate(&self) -> Result<(), DaemonizeError> {
         // Check chdir is absolute, exists, and is a directory
-        if !self.chdir.is_absolute() {
-            return Err(DaemonizeError::ValidationError(format!(
-                "chdir path must be absolute: {}",
-                self.chdir.display()
-            )));
-        }
+        validate_absolute(&self.chdir, "chdir")?;
         if !self.chdir.exists() {
             return Err(DaemonizeError::ValidationError(format!(
                 "chdir path does not exist: {}",
@@ -338,12 +333,22 @@ impl DaemonConfig {
         }
 
         // Path overlap checks: lockfile/pidfile must not equal stdout/stderr.
-        let lockfile = self.effective_lockfile().cloned();
+        let lockfile = self.effective_lockfile();
         let overlap_checks = [
-            (&lockfile, "lockfile", &self.stdout, "stdout"),
-            (&lockfile, "lockfile", &self.stderr, "stderr"),
-            (&self.pidfile, "pidfile", &self.stdout, "stdout"),
-            (&self.pidfile, "pidfile", &self.stderr, "stderr"),
+            (lockfile, "lockfile", self.stdout.as_ref(), "stdout"),
+            (lockfile, "lockfile", self.stderr.as_ref(), "stderr"),
+            (
+                self.pidfile.as_ref(),
+                "pidfile",
+                self.stdout.as_ref(),
+                "stdout",
+            ),
+            (
+                self.pidfile.as_ref(),
+                "pidfile",
+                self.stderr.as_ref(),
+                "stderr",
+            ),
         ];
         for (first, first_name, second, second_name) in overlap_checks {
             if let (Some(first), Some(second)) = (first, second) {
