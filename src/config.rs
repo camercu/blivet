@@ -327,13 +327,13 @@ impl DaemonConfig {
         }
 
         // Check lockfile (the derived case re-checks the pidfile; harmless)
-        if let Some(p) = self.effective_lockfile() {
+        let lockfile = self.effective_lockfile();
+        if let Some(p) = lockfile {
             validate_absolute(p, "lockfile")?;
             validate_parent_writable(p, "lockfile")?;
         }
 
         // Path overlap checks: lockfile/pidfile must not equal stdout/stderr.
-        let lockfile = self.effective_lockfile();
         let overlap_checks = [
             (lockfile, "lockfile", self.stdout.as_ref(), "stdout"),
             (lockfile, "lockfile", self.stderr.as_ref(), "stderr"),
