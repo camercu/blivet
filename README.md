@@ -266,11 +266,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut ctx = daemonize(&config)?;
     ctx.notify_parent()?;
 
-    let running = Arc::new(AtomicBool::new(true));
-    signal_hook::flag::register(signal_hook::consts::SIGTERM, Arc::clone(&running))?;
-    signal_hook::flag::register(signal_hook::consts::SIGINT, Arc::clone(&running))?;
+    // `flag::register` *sets* the flag when the signal arrives, so start at
+    // `false` and loop until it flips.
+    let shutdown = Arc::new(AtomicBool::new(false));
+    signal_hook::flag::register(signal_hook::consts::SIGTERM, Arc::clone(&shutdown))?;
+    signal_hook::flag::register(signal_hook::consts::SIGINT, Arc::clone(&shutdown))?;
 
-    while running.load(Ordering::Relaxed) {
+    while !shutdown.load(Ordering::Relaxed) {
         // … daemon work …
     }
     ctx.cleanup(); // or just let ctx drop
