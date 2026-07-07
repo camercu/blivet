@@ -701,6 +701,7 @@ for `--help` and `--version` are acceptable.
 | `-e`  | `--stderr`        | path         | Redirect stderr to file              |
 | `-a`  | `--append`        |              | Append to stdout/stderr files        |
 | `-l`  | `--lock`          | path         | Lockfile path                        |
+|       | `--no-lock`       |              | Do not lock the pidfile              |
 | `-E`  | `--env`           | `name=value` | Set environment variable             |
 | `-u`  | `--user`          | name or uid  | Run daemon as user                   |
 | `-g`  | `--group`         | name or gid  | Run daemon as group                  |
@@ -719,6 +720,13 @@ clap parse error.
 
 **`-E`** splits on the first `=`. Missing `=` means empty value
 (`-E FOO` = `-E FOO=`).
+
+**`-l`/`--no-lock`** map onto the library's tri-state lockfile setting
+(see Lockfile derivation): `-l path` calls `.lockfile(path)`,
+`--no-lock` calls `.no_lockfile()`, and neither flag leaves the default
+derive-from-pidfile state, so a pidfile alone enforces a single
+instance. The two flags conflict (clap usage error). The CLI performs
+no derivation of its own; `-v` merely mirrors the rule for display.
 
 ### Program path resolution
 

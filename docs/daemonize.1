@@ -115,6 +115,14 @@ pidfile alone is sufficient for single\-instance enforcement.
 Use \f[B]\(enlock\f[R] with a different path to separate the lock file
 from the PID file.
 .TP
+\f[B]\(enno\-lock\f[R]
+Do not lock the pidfile: no lock file is created or acquired, so
+multiple instances may run with the same pidfile (later instances
+overwrite it).
+For deployments where a supervisor or service manager enforces
+single\-instance.
+Conflicts with \f[B]\(enlock\f[R].
+.TP
 \f[B]\-E\f[R], \f[B]\(enenv\f[R] \f[I]name\f[R]=\f[I]value\f[R]
 Set environment variable \f[I]name\f[R] to \f[I]value\f[R] in the
 daemon.

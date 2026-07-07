@@ -93,6 +93,12 @@ dropped, so the daemon can continue to write to them after the switch.
     sufficient for single-instance enforcement. Use **--lock** with a
     different path to separate the lock file from the PID file.
 
+**--no-lock**
+:   Do not lock the pidfile: no lock file is created or acquired, so
+    multiple instances may run with the same pidfile (later instances
+    overwrite it). For deployments where a supervisor or service manager
+    enforces single-instance. Conflicts with **--lock**.
+
 **-E**, **--env** *name*=*value*
 :   Set environment variable *name* to *value* in the daemon. May be
     specified multiple times. If *value* is omitted (no **=**), the

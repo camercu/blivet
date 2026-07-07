@@ -1085,6 +1085,79 @@ fn pidfile_without_lockfile_enforces_single_instance() {
     kill_process(pid);
 }
 
+// Covers: R132
+#[test]
+fn no_lock_flag_disables_single_instance() {
+    let dir = tempfile::tempdir().unwrap();
+    let pidfile = dir.path().join("test.pid");
+
+    let output1 = daemonize_cmd()
+        .args([
+            "-p",
+            pidfile.to_str().unwrap(),
+            "--no-lock",
+            "--",
+            "sleep",
+            "30",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output1.status.success(),
+        "first instance should succeed: {}",
+        String::from_utf8_lossy(&output1.stderr)
+    );
+    let pid1 = wait_for_pidfile(&pidfile).expect("pidfile should appear");
+
+    // With --no-lock the pidfile is not flock'd, so a second instance starts.
+    let output2 = daemonize_cmd()
+        .args([
+            "-p",
+            pidfile.to_str().unwrap(),
+            "--no-lock",
+            "--",
+            "sleep",
+            "30",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output2.status.success(),
+        "second --no-lock instance should succeed: {}",
+        String::from_utf8_lossy(&output2.stderr)
+    );
+    let pid2 = wait_for_pidfile(&pidfile).expect("pidfile should appear");
+
+    kill_process(pid1);
+    if pid2 != pid1 {
+        kill_process(pid2);
+    }
+}
+
+// Covers: R132
+#[test]
+fn no_lock_conflicts_with_explicit_lockfile() {
+    let dir = tempfile::tempdir().unwrap();
+    let lockfile = dir.path().join("test.lock");
+    let output = daemonize_cmd()
+        .args([
+            "-l",
+            lockfile.to_str().unwrap(),
+            "--no-lock",
+            "--",
+            "sleep",
+            "1",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "clap should reject --no-lock with -l, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 // --- Hyphen arguments pass through to program ---
 
 // Covers: R111, R112

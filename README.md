@@ -357,6 +357,7 @@ them.
 | `-e` | `--stderr PATH`     | Redirect stderr to file (default: stdout path; `.stdout`→`.stderr`, `.out`→`.err`) |
 | `-a` | `--append`          | Append to stdout/stderr files instead of truncating |
 | `-l` | `--lock PATH`       | Exclusive lockfile (default: pidfile path, if set) |
+|      | `--no-lock`         | Do not lock the pidfile (allows multiple instances) |
 | `-E` | `--env NAME=VAL`    | Set environment variable (repeatable; a bare `NAME` sets the empty string) |
 | `-u` | `--user NAME\|UID`  | Switch to user after daemonizing (requires root) |
 | `-g` | `--group NAME\|GID` | Switch to group after daemonizing (requires root) |

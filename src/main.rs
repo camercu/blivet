@@ -45,6 +45,10 @@ struct Args {
     #[arg(short = 'l', long = "lock")]
     lockfile: Option<PathBuf>,
 
+    /// Do not lock the pidfile (allows multiple instances)
+    #[arg(long = "no-lock", conflicts_with = "lockfile")]
+    no_lock: bool,
+
     /// Set environment variable (name=value; a bare name sets the empty string)
     #[arg(short = 'E', long = "env")]
     env: Vec<String>,
@@ -118,9 +122,11 @@ fn main() -> ExitCode {
         config.stderr(p);
     }
     config.append(args.append);
-    // Default lockfile to pidfile path for single-instance enforcement
-    let lockfile = args.lockfile.as_ref().or(args.pidfile.as_ref());
-    if let Some(p) = lockfile {
+    // The library derives the lockfile from the pidfile by default; only the
+    // explicit path and the opt-out need forwarding.
+    if args.no_lock {
+        config.no_lockfile();
+    } else if let Some(ref p) = args.lockfile {
         config.lockfile(p);
     }
     for env_str in &args.env {
@@ -151,6 +157,13 @@ fn main() -> ExitCode {
         if let Some(ref p) = args.pidfile {
             eprintln!("daemonize: pidfile={}", p.display());
         }
+        // Display-only mirror of the library's lockfile derivation
+        // (explicit path, else the pidfile, unless --no-lock).
+        let lockfile = if args.no_lock {
+            None
+        } else {
+            args.lockfile.as_ref().or(args.pidfile.as_ref())
+        };
         if let Some(p) = lockfile {
             eprintln!("daemonize: lockfile={}", p.display());
         }
@@ -373,8 +386,10 @@ mod tests {
         const README: &str = include_str!("../README.md");
         let mut readme_longs: Vec<String> = README
             .lines()
-            // CLI flag-table rows start with a short flag cell, e.g. "| `-p`".
-            .filter(|line| line.starts_with("| `-"))
+            // CLI flag-table rows carry the long flag in a backticked cell,
+            // e.g. "| `--pidfile PATH`". The short-flag cell may be empty
+            // (long-only flags like --no-lock).
+            .filter(|line| line.contains("| `--"))
             .filter_map(parse_long_flag)
             .collect();
         readme_longs.sort();
@@ -406,6 +421,10 @@ mod tests {
         assert_eq!(
             parse_long_flag("| `-f` | `--foreground` | Stay |").as_deref(),
             Some("foreground")
+        );
+        assert_eq!(
+            parse_long_flag("|      | `--no-lock` | Do not lock |").as_deref(),
+            Some("no-lock")
         );
     }
 
