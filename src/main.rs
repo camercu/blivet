@@ -45,7 +45,7 @@ struct Args {
     #[arg(short = 'l', long = "lock")]
     lockfile: Option<PathBuf>,
 
-    /// Set environment variable (name=value)
+    /// Set environment variable (name=value; a bare name sets the empty string)
     #[arg(short = 'E', long = "env")]
     env: Vec<String>,
 
