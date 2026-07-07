@@ -16,15 +16,18 @@ launcher over a notification pipe, with `sysexits.h` exit codes. The
 shell, `systemd`, or a supervisor sees a real success or failure -- not a
 detached process that may have already died during init.
 
-```rust
+```rust,no_run
 use blivet::{daemonize, DaemonConfig};
 
-let mut config = DaemonConfig::new();
-config.pidfile("/var/run/myapp.pid");
+fn main() -> Result<(), blivet::DaemonizeError> {
+    let mut config = DaemonConfig::new();
+    config.pidfile("/var/run/myapp.pid");
 
-let mut ctx = daemonize(&config)?; // safe: checks single-threaded, then double-forks
-ctx.notify_parent()?;              // tell the launcher we're up; it exits 0
-// daemon runs here
+    let mut ctx = daemonize(&config)?; // safe: checks single-threaded, then double-forks
+    ctx.notify_parent()?;              // tell the launcher we're up; it exits 0
+    // daemon runs here
+    Ok(())
+}
 ```
 
 ## Why blivet
@@ -90,7 +93,7 @@ directory. As with
 `/dev/null` and the working directory becomes `/` -- so use absolute paths and
 redirect any output you want to keep:
 
-```rust
+```rust,no_run
 use blivet::{daemonize, DaemonConfig};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -112,7 +115,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 **Split-phase privilege dropping.** Do privileged work (bind port 80, `chroot`,
 set rlimits) between `daemonize()` and `drop_privileges()`:
 
-```rust
+```rust,no_run
 use blivet::{daemonize, DaemonConfig};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -136,7 +139,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 applying all other setup (umask, chdir, signal reset, …). Stdout/stderr stay
 inherited unless explicitly redirected with `.stdout()`/`.stderr()`:
 
-```rust
+```rust,ignore
 config.foreground(true).close_fds(false); // keep supervisor-passed fds
 ```
 
@@ -235,7 +238,7 @@ the pidfile would be left behind. The built-in fix installs async-signal-safe
 handlers that remove the pidfile on `SIGINT`/`SIGTERM`, then re-raise so the
 process still terminates normally:
 
-```rust
+```rust,no_run
 use blivet::{daemonize, DaemonConfig};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -260,7 +263,7 @@ let `ctx` drop. The [`signal_hook`](https://crates.io/crates/signal-hook) crate
 is one way to drive that loop; `blivet` does not re-export it, so
 `cargo add signal_hook` first:
 
-```rust
+```rust,no_run
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use blivet::{daemonize, DaemonConfig};
@@ -291,7 +294,7 @@ If startup work in the privileged init window fails (a socket bind, a database
 connect), report it to the launcher with a `sysexits.h` code of your choosing
 via `report_error_msg` -- no need to construct a `DaemonizeError` by hand:
 
-```rust
+```rust,ignore
 let listener = match TcpListener::bind("0.0.0.0:80") {
     Ok(l) => l,
     // 71 == EX_OSERR; the launcher prints the message and exits with this code.
@@ -305,7 +308,7 @@ The `sysexits.h` codes only reach the shell if you use them. The idiomatic
 `fn main() -> Result<(), E>` prints the error via `Termination` and exits **1**,
 ignoring `exit_code()`. To preserve the codes, drive `exit_code()` yourself:
 
-```rust
+```rust,no_run
 use blivet::{daemonize, DaemonConfig, DaemonizeError};
 
 fn main() {
