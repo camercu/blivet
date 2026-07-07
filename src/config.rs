@@ -246,28 +246,32 @@ impl DaemonConfig {
     pub fn validate(&self) -> Result<(), DaemonizeError> {
         // Check chdir is absolute, exists, and is a directory
         if !self.chdir.is_absolute() {
-            return Err(DaemonizeError::ValidationError(
-                "chdir path must be absolute".into(),
-            ));
+            return Err(DaemonizeError::ValidationError(format!(
+                "chdir path must be absolute: {}",
+                self.chdir.display()
+            )));
         }
         if !self.chdir.exists() {
-            return Err(DaemonizeError::ValidationError(
-                "chdir path does not exist".into(),
-            ));
+            return Err(DaemonizeError::ValidationError(format!(
+                "chdir path does not exist: {}",
+                self.chdir.display()
+            )));
         }
         if !self.chdir.is_dir() {
-            return Err(DaemonizeError::ValidationError(
-                "chdir path is not a directory".into(),
-            ));
+            return Err(DaemonizeError::ValidationError(format!(
+                "chdir path is not a directory: {}",
+                self.chdir.display()
+            )));
         }
 
         // Check pidfile
         if let Some(ref p) = self.pidfile {
             validate_absolute(p, "pidfile")?;
             if p.is_dir() {
-                return Err(DaemonizeError::ValidationError(
-                    "pidfile path is a directory".into(),
-                ));
+                return Err(DaemonizeError::ValidationError(format!(
+                    "pidfile path is a directory: {}",
+                    p.display()
+                )));
             }
             validate_parent_writable(p, "pidfile")?;
         }
@@ -301,7 +305,8 @@ impl DaemonConfig {
             if let (Some(first), Some(second)) = (first, second) {
                 if paths_same(first, second) {
                     return Err(DaemonizeError::ValidationError(format!(
-                        "{first_name} and {second_name} must not be the same path"
+                        "{first_name} and {second_name} must not be the same path: {}",
+                        first.display()
                     )));
                 }
             }
@@ -343,7 +348,8 @@ impl DaemonConfig {
 fn validate_absolute(path: &std::path::Path, name: &str) -> Result<(), DaemonizeError> {
     if !path.is_absolute() {
         return Err(DaemonizeError::ValidationError(format!(
-            "{name} path must be absolute"
+            "{name} path must be absolute: {}",
+            path.display()
         )));
     }
     Ok(())
@@ -354,11 +360,15 @@ fn validate_parent_writable(path: &std::path::Path, name: &str) -> Result<(), Da
     use nix::unistd::AccessFlags;
 
     let parent = path.parent().ok_or_else(|| {
-        DaemonizeError::ValidationError(format!("{name} path has no parent directory"))
+        DaemonizeError::ValidationError(format!(
+            "{name} path has no parent directory: {}",
+            path.display()
+        ))
     })?;
     if !parent.exists() {
         return Err(DaemonizeError::ValidationError(format!(
-            "{name} parent directory does not exist"
+            "{name} parent directory does not exist: {}",
+            parent.display()
         )));
     }
     // Check writability using faccessat(AT_EACCESS) which tests against the
@@ -371,7 +381,8 @@ fn validate_parent_writable(path: &std::path::Path, name: &str) -> Result<(), Da
     ) {
         Ok(()) => Ok(()),
         Err(_) => Err(DaemonizeError::ValidationError(format!(
-            "{name} parent directory is not writable"
+            "{name} parent directory is not writable: {}",
+            parent.display()
         ))),
     }
 }
@@ -425,6 +436,77 @@ mod tests {
                 ("A".into(), "3".into()),
             ]
         );
+    }
+
+    /// Every path-shaped validation message names the offending path, so a
+    /// consumer with several configured paths knows which value to fix.
+    #[test]
+    fn validation_errors_include_offending_path() {
+        let msg = |config: &DaemonConfig| match config.validate() {
+            Err(DaemonizeError::ValidationError(msg)) => msg,
+            other => panic!("expected ValidationError, got {other:?}"),
+        };
+
+        let cases: [(&str, &dyn Fn(&mut DaemonConfig), &str); 7] = [
+            (
+                "chdir relative",
+                &|c| {
+                    c.chdir("relative/path");
+                },
+                "relative/path",
+            ),
+            (
+                "chdir missing",
+                &|c| {
+                    c.chdir("/nonexistent_daemonize_test_dir");
+                },
+                "/nonexistent_daemonize_test_dir",
+            ),
+            (
+                "chdir not a dir",
+                &|c| {
+                    c.chdir("/etc/hosts");
+                },
+                "/etc/hosts",
+            ),
+            (
+                "pidfile relative",
+                &|c| {
+                    c.pidfile("relative.pid");
+                },
+                "relative.pid",
+            ),
+            (
+                "pidfile is dir",
+                &|c| {
+                    c.pidfile("/tmp");
+                },
+                "/tmp",
+            ),
+            (
+                "stdout parent missing",
+                &|c| {
+                    c.stdout("/nonexistent_daemonize_test_dir/out.log");
+                },
+                "/nonexistent_daemonize_test_dir",
+            ),
+            (
+                "pidfile/stdout overlap",
+                &|c| {
+                    c.pidfile("/tmp/same.pid").stdout("/tmp/same.pid");
+                },
+                "/tmp/same.pid",
+            ),
+        ];
+        for (name, setup, expected_path) in cases {
+            let mut config = DaemonConfig::new();
+            setup(&mut config);
+            let m = msg(&config);
+            assert!(
+                m.contains(expected_path),
+                "{name}: message {m:?} does not name the offending path {expected_path:?}"
+            );
+        }
     }
 
     #[test]
