@@ -91,7 +91,10 @@ impl fmt::Debug for DaemonContext {
                 &OptFmt(&self.notify_pipe.as_ref().map(|_| "open")),
             )
             .field("pidfile", &OptFmt(&self.config.pidfile))
-            .field("lockfile_path", &OptFmt(&self.config.lockfile))
+            .field(
+                "lockfile_path",
+                &OptFmt(&self.config.effective_lockfile().cloned()),
+            )
             .field("stdout", &OptFmt(&self.config.stdout))
             .field("stderr", &OptFmt(&self.config.stderr))
             .field("user", &OptFmt(&self.config.user))
@@ -129,7 +132,8 @@ impl DaemonContext {
     }
 
     /// Returns a borrowed reference to the lockfile fd, or `None` if no
-    /// lockfile was configured.
+    /// lock is held (no lockfile configured or derived, or locking disabled
+    /// via [`DaemonConfig::no_lockfile`](crate::DaemonConfig::no_lockfile)).
     ///
     /// The returned fd has `O_CLOEXEC` set. If you intend to `exec` and want
     /// the lock to survive, clear `CLOEXEC` before calling `exec`.
@@ -263,13 +267,13 @@ impl DaemonContext {
         let (owner, group) = identity.chown_ids();
 
         let paths: Vec<&PathBuf> = [
-            &self.config.pidfile,
-            &self.config.lockfile,
-            &self.config.stdout,
-            &self.config.stderr,
+            self.config.pidfile.as_ref(),
+            self.config.effective_lockfile(),
+            self.config.stdout.as_ref(),
+            self.config.stderr.as_ref(),
         ]
-        .iter()
-        .filter_map(|p| p.as_ref())
+        .into_iter()
+        .flatten()
         .collect();
 
         for path in paths {

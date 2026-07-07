@@ -46,6 +46,7 @@ pub fn blivet::DaemonConfig::foreground(&mut self, foreground: bool) -> &mut Sel
 pub fn blivet::DaemonConfig::group(&mut self, name: impl core::convert::Into<alloc::string::String>) -> &mut Self
 pub fn blivet::DaemonConfig::lockfile(&mut self, path: impl core::convert::Into<std::path::PathBuf>) -> &mut Self
 pub fn blivet::DaemonConfig::new() -> Self
+pub fn blivet::DaemonConfig::no_lockfile(&mut self) -> &mut Self
 pub fn blivet::DaemonConfig::pidfile(&mut self, path: impl core::convert::Into<std::path::PathBuf>) -> &mut Self
 pub fn blivet::DaemonConfig::stderr(&mut self, path: impl core::convert::Into<std::path::PathBuf>) -> &mut Self
 pub fn blivet::DaemonConfig::stdout(&mut self, path: impl core::convert::Into<std::path::PathBuf>) -> &mut Self

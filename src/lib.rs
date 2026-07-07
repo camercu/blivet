@@ -532,8 +532,9 @@ fn run_post_fork(
     // inherited so output reaches the terminal or supervisor).
     steps::redirect_to_devnull(!config.foreground);
 
-    // Step 7: Open and lock lockfile
-    let lockfile = match config.lockfile.as_ref() {
+    // Step 7: Open and lock lockfile (explicit path, or the pidfile itself
+    // unless derivation was opted out)
+    let lockfile = match config.effective_lockfile() {
         Some(path) => Some(steps::open_and_lock(path)?),
         None => None,
     };
@@ -542,7 +543,10 @@ fn run_post_fork(
     if let Some(ref pidfile_path) = config.pidfile {
         steps::write_pidfile(
             pidfile_path,
-            config.lockfile.as_deref().zip(lockfile.as_ref()),
+            config
+                .effective_lockfile()
+                .map(std::path::PathBuf::as_path)
+                .zip(lockfile.as_ref()),
         )?;
     }
 
@@ -779,6 +783,33 @@ mod tests {
         let result = run_inner(&config, &mut forker);
         let ctx = result.expect("foreground daemonize_inner should succeed");
         assert!(ctx.lockfile_fd().is_none());
+    }
+
+    // Covers: R131
+    #[test]
+    fn pidfile_only_holds_derived_lock() {
+        run_in_subprocess("tests::pidfile_only_holds_derived_lock_subprocess");
+    }
+
+    #[test]
+    #[ignore]
+    fn pidfile_only_holds_derived_lock_subprocess() {
+        if !is_subprocess() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let pidfile = dir.path().join("app.pid");
+        let mut config = DaemonConfig::new();
+        config.foreground(true).close_fds(false).pidfile(&pidfile);
+        let mut forker = NullForker::new(vec![], Ok(()));
+        let ctx = run_inner(&config, &mut forker).expect("daemonize should succeed");
+        assert!(
+            ctx.lockfile_fd().is_some(),
+            "a lone pidfile should be flock'd by default"
+        );
+        // A second acquisition of the same path must conflict.
+        let second = steps::open_and_lock(&pidfile);
+        assert!(matches!(second, Err(DaemonizeError::LockConflict(_))));
     }
 
     // Covers: R67

@@ -89,7 +89,7 @@ All fields are private; callers use builder methods.
 | `stdout`     | `Option<PathBuf>`       | `None`               | `.stdout(path)`      | `impl Into<PathBuf>`       | Setter      |
 | `stderr`     | `Option<PathBuf>`       | `None`               | `.stderr(path)`      | `impl Into<PathBuf>`       | Setter      |
 | `append`     | `bool`                  | `false`              | `.append(bool)`      | `bool`                     | Setter      |
-| `lockfile`   | `Option<PathBuf>`       | `None`               | `.lockfile(path)`    | `impl Into<PathBuf>`       | Setter      |
+| `lockfile`   | `LockfileSetting` (private tri-state) | derive from `pidfile` | `.lockfile(path)` / `.no_lockfile()` | `impl Into<PathBuf>` / none | Setter      |
 | `user`       | `Option<String>`        | `None`               | `.user(name)`        | `impl Into<String>`        | Setter      |
 | `group`      | `Option<String>`        | `None`               | `.group(name)`       | `impl Into<String>`        | Setter      |
 | `foreground` | `bool`                  | `false`              | `.foreground(bool)`  | `bool`                     | Setter      |
@@ -155,7 +155,8 @@ derives `Debug` (Flock formatted as present/absent). Do not derive
 **Accessors:**
 
 `lockfile_fd()` returns `Option<BorrowedFd<'_>>` (lifetime tied to the
-context). Returns `None` when no lockfile was configured.
+context). Returns `None` when no lockfile was held (none configured,
+none derived, or locking disabled via `no_lockfile()`).
 
 `set_cleanup_on_drop(bool)` overrides the config-level
 `cleanup_on_drop` setting at runtime.
@@ -383,6 +384,18 @@ operands. If either path does not exist, fall back to byte-equal
 > actual failure mode (fd interference) would produce a clear runtime
 > error.
 
+### Lockfile derivation
+
+The lockfile setting is tri-state: **derive** (default), an **explicit
+path** from `.lockfile(path)`, or **disabled** from `.no_lockfile()`.
+The last call wins between `.lockfile(path)` and `.no_lockfile()`. In
+the derive state the effective lockfile is the pidfile itself (if one
+is configured), so a lone pidfile enforces a single instance; a second
+instance fails with `LockConflict` instead of silently overwriting the
+pidfile. `no_lockfile()` writes the pidfile without any flock, for
+callers whose exclusivity is enforced elsewhere. Everywhere below,
+"lockfile" means this resolved (effective) path.
+
 ### Path overlap rules
 
 Lockfile and pidfile may be the same path (see step 8). Neither may
@@ -448,7 +461,8 @@ configured, step 12 still redirects them.
 6. **Redirect standard streams to `/dev/null`.** Always redirects
    stdin. Redirects stdout and stderr only in daemon mode (not
    foreground). See /dev/null redirect policy.
-7. **Open and lock lockfile** (if configured). Open with
+7. **Open and lock lockfile** (if configured or derived from the
+   pidfile — see Lockfile derivation). Open with
    `O_WRONLY | O_CREAT | O_CLOEXEC`, mode 0644, then
    `flock(LOCK_EX | LOCK_NB)`. Open failure: `LockfileError`.
    Flock failure: `LockConflict`. Fd is retained through step 13.
@@ -1182,3 +1196,9 @@ verification points.
   `ProgramNotFound` (exit 66), matching the pre-fork path check — so a
   missing-or-unusable program is exit 66 in both path and bare form. Any
   other exec error is `ExecFailed` (exit 71).
+- R131. With a pidfile configured and the lockfile setting in its
+  default (derive) state, the pidfile itself is exclusively flocked;
+  no pidfile means no derived lockfile.
+- R132. `no_lockfile()` disables locking: the pidfile is written
+  without a flock and no lockfile is created.
+- R133. `.lockfile(path)` and `.no_lockfile()` are last-call-wins.

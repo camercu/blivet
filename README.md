@@ -82,8 +82,10 @@ The crate is `blivet`; the installed binary is `daemonize`. See
 
 ## Library
 
-The minimal example above writes a pidfile and signals readiness. A fuller setup
-adds a lock file, log redirection, and a working directory. As with
+The minimal example above writes a pidfile and signals readiness; the pidfile
+is also locked, so a second instance fails fast instead of clobbering it. A
+fuller setup adds a separate lock file, log redirection, and a working
+directory. As with
 `daemonize(1)`, the defaults are standard daemon behavior -- stdout/stderr go to
 `/dev/null` and the working directory becomes `/` -- so use absolute paths and
 redirect any output you want to keep:
@@ -181,10 +183,13 @@ Full reference is on [docs.rs](https://docs.rs/blivet); this is the shape of it.
 
 **`DaemonConfig`** -- a builder of infallible `&mut self` setters; validation is
 deferred to `validate()`, which `daemonize()` runs for you. Settings: `pidfile`,
-`lockfile`, `stdout`/`stderr` (+ `append`), `chdir`, `umask`, `user`/`group`,
-`foreground`, `close_fds`, `cleanup_on_drop`, and `env`. Defaults worth knowing:
-working directory `/`, stdout/stderr `/dev/null`, and `close_fds` and
-`cleanup_on_drop` both `true`.
+`lockfile`/`no_lockfile`, `stdout`/`stderr` (+ `append`), `chdir`, `umask`,
+`user`/`group`, `foreground`, `close_fds`, `cleanup_on_drop`, and `env`.
+Defaults worth knowing: working directory `/`, stdout/stderr `/dev/null`,
+`close_fds` and `cleanup_on_drop` both `true`, and a configured pidfile doubles
+as the lockfile -- a second instance fails with `LockConflict` (exit 69) rather
+than silently overwriting the pidfile. Point `lockfile()` at a separate path,
+or call `no_lockfile()` to write the pidfile unlocked.
 
 **`DaemonContext`** -- returned by a successful `daemonize()`; owns the lockfile
 and notification pipe. The methods you reach for most: `notify_parent()`,

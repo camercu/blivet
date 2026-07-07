@@ -5,6 +5,18 @@ use std::path::PathBuf;
 use crate::error::DaemonizeError;
 use crate::util::paths_same;
 
+/// How the lockfile is determined. Tri-state so "not set" (derive from the
+/// pidfile) is distinguishable from an explicit opt-out.
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub(crate) enum LockfileSetting {
+    /// Default: lock the pidfile itself when one is configured.
+    DeriveFromPidfile,
+    /// Explicit path from [`DaemonConfig::lockfile`].
+    Path(PathBuf),
+    /// Explicit opt-out from [`DaemonConfig::no_lockfile`].
+    Disabled,
+}
+
 /// Configuration for the daemonization process.
 ///
 /// All fields are private; use builder methods to configure.
@@ -44,7 +56,7 @@ pub struct DaemonConfig {
     pub(crate) stdout: Option<PathBuf>,
     pub(crate) stderr: Option<PathBuf>,
     pub(crate) append: bool,
-    pub(crate) lockfile: Option<PathBuf>,
+    pub(crate) lockfile: LockfileSetting,
     pub(crate) user: Option<String>,
     pub(crate) group: Option<String>,
     pub(crate) foreground: bool,
@@ -62,7 +74,7 @@ impl Default for DaemonConfig {
             stdout: None,
             stderr: None,
             append: false,
-            lockfile: None,
+            lockfile: LockfileSetting::DeriveFromPidfile,
             user: None,
             group: None,
             foreground: false,
@@ -82,6 +94,12 @@ impl DaemonConfig {
     }
 
     /// Sets the pidfile path. Default: none.
+    ///
+    /// Unless a separate [`lockfile`](DaemonConfig::lockfile) is set, the
+    /// pidfile is also exclusively flock'd, so a second instance fails with
+    /// [`LockConflict`](crate::DaemonizeError::LockConflict) instead of
+    /// silently overwriting the pidfile. Opt out with
+    /// [`no_lockfile`](DaemonConfig::no_lockfile).
     pub fn pidfile(&mut self, path: impl Into<PathBuf>) -> &mut Self {
         self.pidfile = Some(path.into());
         self
@@ -145,10 +163,35 @@ impl DaemonConfig {
         self
     }
 
-    /// Sets the lockfile path. Default: none.
+    /// Sets an explicit lockfile path, separate from the pidfile.
+    ///
+    /// Default: derived — the pidfile (if any) doubles as the lockfile, so a
+    /// pidfile alone enforces a single instance. Overrides a previous
+    /// [`no_lockfile`](DaemonConfig::no_lockfile) (last call wins).
     pub fn lockfile(&mut self, path: impl Into<PathBuf>) -> &mut Self {
-        self.lockfile = Some(path.into());
+        self.lockfile = LockfileSetting::Path(path.into());
         self
+    }
+
+    /// Disables locking: the pidfile (if any) is written without being
+    /// flock'd, and no lockfile is created.
+    ///
+    /// Use when something else enforces single-instance (a supervisor, a
+    /// service manager) or when multiple instances are intended. Overrides a
+    /// previous [`lockfile`](DaemonConfig::lockfile) (last call wins).
+    pub fn no_lockfile(&mut self) -> &mut Self {
+        self.lockfile = LockfileSetting::Disabled;
+        self
+    }
+
+    /// The lockfile path after resolving the tri-state setting: an explicit
+    /// path, the pidfile (derived default), or none (disabled / no pidfile).
+    pub(crate) fn effective_lockfile(&self) -> Option<&PathBuf> {
+        match &self.lockfile {
+            LockfileSetting::Path(path) => Some(path),
+            LockfileSetting::DeriveFromPidfile => self.pidfile.as_ref(),
+            LockfileSetting::Disabled => None,
+        }
     }
 
     /// Sets the user to run the daemon as. Default: none (no user switch).
@@ -288,16 +331,17 @@ impl DaemonConfig {
             validate_parent_writable(p, "stderr")?;
         }
 
-        // Check lockfile
-        if let Some(ref p) = self.lockfile {
+        // Check lockfile (the derived case re-checks the pidfile; harmless)
+        if let Some(p) = self.effective_lockfile() {
             validate_absolute(p, "lockfile")?;
             validate_parent_writable(p, "lockfile")?;
         }
 
         // Path overlap checks: lockfile/pidfile must not equal stdout/stderr.
+        let lockfile = self.effective_lockfile().cloned();
         let overlap_checks = [
-            (&self.lockfile, "lockfile", &self.stdout, "stdout"),
-            (&self.lockfile, "lockfile", &self.stderr, "stderr"),
+            (&lockfile, "lockfile", &self.stdout, "stdout"),
+            (&lockfile, "lockfile", &self.stderr, "stderr"),
             (&self.pidfile, "pidfile", &self.stdout, "stdout"),
             (&self.pidfile, "pidfile", &self.stderr, "stderr"),
         ];
@@ -407,12 +451,63 @@ mod tests {
         assert_eq!(config.stdout, None);
         assert_eq!(config.stderr, None);
         assert!(!config.append);
-        assert_eq!(config.lockfile, None);
+        assert_eq!(config.lockfile, LockfileSetting::DeriveFromPidfile);
         assert_eq!(config.user, None);
         assert_eq!(config.group, None);
         assert!(!config.foreground);
         assert!(config.close_fds);
         assert!(config.env.is_empty());
+    }
+
+    // Covers: R131
+    #[test]
+    fn lockfile_derives_from_pidfile_by_default() {
+        let mut config = DaemonConfig::new();
+        config.pidfile("/tmp/x.pid");
+        assert_eq!(
+            config.effective_lockfile(),
+            Some(&PathBuf::from("/tmp/x.pid"))
+        );
+    }
+
+    // Covers: R131
+    #[test]
+    fn no_pidfile_means_no_derived_lockfile() {
+        assert_eq!(DaemonConfig::new().effective_lockfile(), None);
+    }
+
+    // Covers: R131
+    #[test]
+    fn explicit_lockfile_overrides_derivation() {
+        let mut config = DaemonConfig::new();
+        config.pidfile("/tmp/x.pid").lockfile("/tmp/x.lock");
+        assert_eq!(
+            config.effective_lockfile(),
+            Some(&PathBuf::from("/tmp/x.lock"))
+        );
+    }
+
+    // Covers: R132
+    #[test]
+    fn no_lockfile_disables_locking() {
+        let mut config = DaemonConfig::new();
+        config.pidfile("/tmp/x.pid").no_lockfile();
+        assert_eq!(config.effective_lockfile(), None);
+    }
+
+    // Covers: R133
+    #[test]
+    fn lockfile_setting_is_last_wins() {
+        let mut config = DaemonConfig::new();
+        config.no_lockfile().lockfile("/tmp/x.lock");
+        assert_eq!(
+            config.effective_lockfile(),
+            Some(&PathBuf::from("/tmp/x.lock"))
+        );
+
+        let mut config = DaemonConfig::new();
+        config.lockfile("/tmp/x.lock").no_lockfile();
+        assert_eq!(config.effective_lockfile(), None);
     }
 
     // Covers: R84
@@ -447,7 +542,8 @@ mod tests {
             other => panic!("expected ValidationError, got {other:?}"),
         };
 
-        let cases: [(&str, &dyn Fn(&mut DaemonConfig), &str); 7] = [
+        type Setup<'a> = &'a dyn Fn(&mut DaemonConfig);
+        let cases: [(&str, Setup, &str); 7] = [
             (
                 "chdir relative",
                 &|c| {
