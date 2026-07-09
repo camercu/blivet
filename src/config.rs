@@ -334,9 +334,9 @@ impl DaemonConfig {
         }
 
         // Path overlap checks: lockfile/pidfile must not equal stdout/stderr.
+        // Pidfile pairs come first so a derived lockfile (== pidfile) is
+        // reported as the pidfile the user actually configured.
         let overlap_checks = [
-            (lockfile, "lockfile", self.stdout.as_ref(), "stdout"),
-            (lockfile, "lockfile", self.stderr.as_ref(), "stderr"),
             (
                 self.pidfile.as_ref(),
                 "pidfile",
@@ -349,6 +349,8 @@ impl DaemonConfig {
                 self.stderr.as_ref(),
                 "stderr",
             ),
+            (lockfile, "lockfile", self.stdout.as_ref(), "stdout"),
+            (lockfile, "lockfile", self.stderr.as_ref(), "stderr"),
         ];
         for (first, first_name, second, second_name) in overlap_checks {
             if let (Some(first), Some(second)) = (first, second) {
@@ -929,6 +931,21 @@ mod tests {
         assert!(matches!(
             config.validate(),
             Err(DaemonizeError::ValidationError(_))
+        ));
+    }
+
+    #[test]
+    fn derived_lockfile_overlap_reports_pidfile() {
+        // Only a pidfile is configured; the derived lockfile also overlaps,
+        // but the message must name the path the user actually set.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("file.log");
+        let path_str = path.to_str().unwrap();
+        let mut config = DaemonConfig::new();
+        config.pidfile(path_str).stdout(path_str);
+        assert!(matches!(
+            config.validate(),
+            Err(DaemonizeError::ValidationError(msg)) if msg.starts_with("pidfile and stdout")
         ));
     }
 
