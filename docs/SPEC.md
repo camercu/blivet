@@ -446,6 +446,12 @@ Stdout and stderr are left inherited so output reaches the parent
 terminal or supervisor. If stdout/stderr paths are explicitly
 configured, step 12 still redirects them.
 
+Step failures in foreground mode return `Err` to the caller instead
+of the write-to-pipe-and-`_exit()` behavior described per step below
+(see Error paths, R134). Steps completed before the failure remain in
+effect — the caller resumes in a partially configured process (umask,
+chdir, stdin redirect, and env changes may already have happened).
+
 ### Steps
 
 1. **Create notification pipe, first fork.** *(Skipped in foreground
@@ -496,10 +502,11 @@ configured, step 12 still redirects them.
 
 Post-fork errors in steps 2–13 that have a named `DaemonizeError`
 variant are written to the notification pipe per the error protocol
-and the process calls `_exit()` with the mapped exit code. Unspecified
-syscall failures (e.g., `sigprocmask`, `setenv`) panic with a
-descriptive message. Individual `close()` errors in step 13 are
-silently ignored.
+and the process calls `_exit()` with the mapped exit code. In
+foreground mode there is no pipe and no `_exit()`; failures return
+`Err` (see Foreground mode). Unspecified syscall failures (e.g.,
+`sigprocmask`, `setenv`) panic with a descriptive message. Individual
+`close()` errors in step 13 are silently ignored.
 
 > Panics for unspecified failures indicate a broken OS environment
 > where no reasonable recovery is possible, consistent with the
