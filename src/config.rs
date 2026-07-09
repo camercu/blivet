@@ -502,14 +502,18 @@ mod tests {
 
     // Covers: R133
     #[test]
-    fn lockfile_setting_is_last_wins() {
+    fn lockfile_after_no_lockfile_wins() {
         let mut config = DaemonConfig::new();
         config.no_lockfile().lockfile("/tmp/x.lock");
         assert_eq!(
             config.effective_lockfile(),
             Some(&PathBuf::from("/tmp/x.lock"))
         );
+    }
 
+    // Covers: R133
+    #[test]
+    fn no_lockfile_after_lockfile_wins() {
         let mut config = DaemonConfig::new();
         config.lockfile("/tmp/x.lock").no_lockfile();
         assert_eq!(config.effective_lockfile(), None);
@@ -955,6 +959,39 @@ mod tests {
         assert!(matches!(
             config.validate(),
             Err(DaemonizeError::ValidationError(msg)) if msg.contains("parent")
+        ));
+    }
+
+    #[test]
+    fn validate_path_without_parent_rejected() {
+        let mut config = DaemonConfig::new();
+        config.stdout("/");
+        assert!(matches!(
+            config.validate(),
+            Err(DaemonizeError::ValidationError(msg))
+                if msg.contains("no parent directory") && msg.contains('/')
+        ));
+    }
+
+    #[test]
+    fn validate_unwritable_parent_rejected() {
+        use std::os::unix::fs::PermissionsExt;
+
+        // Root bypasses W_OK checks, so this arm is unreachable under docker CI.
+        if nix::unistd::geteuid().is_root() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o555)).unwrap();
+        let mut config = DaemonConfig::new();
+        config.stdout(dir.path().join("out.log"));
+        let result = config.validate();
+        // Restore before asserting so tempdir cleanup succeeds either way.
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(matches!(
+            result,
+            Err(DaemonizeError::ValidationError(msg))
+                if msg.contains("not writable") && msg.contains(&dir.path().display().to_string())
         ));
     }
 

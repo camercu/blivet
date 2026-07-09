@@ -806,9 +806,16 @@ mod tests {
         config.foreground(true).close_fds(false).pidfile(&pidfile);
         let mut forker = NullForker::new(vec![], Ok(()));
         let ctx = run_inner(&config, &mut forker).expect("daemonize should succeed");
-        assert!(
-            ctx.lockfile_fd().is_some(),
-            "a lone pidfile should be flock'd by default"
+        let lock_fd = ctx
+            .lockfile_fd()
+            .expect("a lone pidfile should be flock'd by default");
+        // The held lock must be on the pidfile itself, not some other file.
+        let lock_stat = nix::sys::stat::fstat(lock_fd).unwrap();
+        let pidfile_stat = nix::sys::stat::stat(&pidfile).unwrap();
+        assert_eq!(
+            (lock_stat.st_dev, lock_stat.st_ino),
+            (pidfile_stat.st_dev, pidfile_stat.st_ino),
+            "derived lock fd should refer to the pidfile"
         );
         // A second acquisition of the same path must conflict.
         let second = steps::open_and_lock(&pidfile);

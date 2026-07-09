@@ -1132,6 +1132,10 @@ fn no_lock_flag_disables_single_instance() {
     if pid2 != pid1 {
         kill_process(pid2);
     }
+    assert_ne!(
+        pid1, pid2,
+        "second instance should be a distinct daemon, not a stale pidfile read"
+    );
 }
 
 // Covers: R132
