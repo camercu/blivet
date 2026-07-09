@@ -346,6 +346,9 @@ no-op.
   with the mapped exit code. The grandchild's `_exit()` code uses the
   mapped code for consistency in process accounting, but is not
   observable — the parent's exit code is authoritative.
+- In foreground mode every error (steps 4–14 included) returns `Err`
+  to the caller: no fork happened, so the caller is still the running
+  process and the library never exits it.
 
 The library does not accept a program path or call exec.
 
@@ -393,8 +396,9 @@ the derive state the effective lockfile is the pidfile itself (if one
 is configured), so a lone pidfile enforces a single instance; a second
 instance fails with `LockConflict` instead of silently overwriting the
 pidfile. `no_lockfile()` writes the pidfile without any flock, for
-callers whose exclusivity is enforced elsewhere. Everywhere below,
-"lockfile" means this resolved (effective) path.
+callers whose exclusivity is enforced elsewhere. Elsewhere in this
+spec (including Path rules above), "lockfile" means this resolved
+(effective) path.
 
 ### Path overlap rules
 
@@ -1211,3 +1215,5 @@ verification points.
 - R132. `no_lockfile()` disables locking: the pidfile is written
   without a flock and no lockfile is created.
 - R133. `.lockfile(path)` and `.no_lockfile()` are last-call-wins.
+- R134. In foreground mode, setup errors (steps 4–14) return `Err` to
+  the caller; the library never exits the caller's process.

@@ -1284,6 +1284,43 @@ fn foreground_mode_no_orphan() {
     );
 }
 
+// Covers: R134
+#[test]
+fn foreground_lock_conflict_reports_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let pidfile = dir.path().join("test.pid");
+
+    let output1 = daemonize_cmd()
+        .args(["-p", pidfile.to_str().unwrap(), "--", "sleep", "30"])
+        .output()
+        .unwrap();
+    assert!(
+        output1.status.success(),
+        "first instance should succeed: {}",
+        String::from_utf8_lossy(&output1.stderr)
+    );
+    let pid = wait_for_pidfile(&pidfile).expect("pidfile should appear");
+
+    // A foreground second instance must report the conflict, not die silently.
+    let output2 = daemonize_cmd()
+        .args(["-f", "-p", pidfile.to_str().unwrap(), "--", "sleep", "30"])
+        .output()
+        .unwrap();
+    kill_process(pid);
+
+    assert_eq!(
+        output2.status.code(),
+        Some(69),
+        "foreground second instance should exit 69, stderr: {}",
+        String::from_utf8_lossy(&output2.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output2.stderr);
+    assert!(
+        stderr.contains("lock"),
+        "stderr should name the lock conflict, got: {stderr:?}"
+    );
+}
+
 // --- Group flag ---
 
 // Covers: R35, R51

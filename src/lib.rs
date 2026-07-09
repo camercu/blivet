@@ -292,6 +292,8 @@ use notify::NotifyPipe;
 /// Returns `DaemonizeError` on validation failure or any syscall error
 /// during the daemonization sequence. Pre-fork errors are returned
 /// directly; post-fork errors are reported via the notification pipe.
+/// In foreground mode every error is returned directly — the library
+/// never exits the caller's process.
 ///
 /// # Panics
 ///
@@ -508,10 +510,14 @@ pub(crate) unsafe fn daemonize_inner(
     };
 
     // Steps 4–14 run in the final daemon process and report failures as a
-    // single Result. Funnel any error through one place: notify the parent and
-    // exit. `pipe_wr` stays available so the error path can still signal it.
+    // single Result. In foreground mode no fork happened, so errors simply
+    // propagate to the caller. In daemon mode the child cannot return to the
+    // original caller, so funnel any error through one place: notify the
+    // parent and exit. `pipe_wr` stays available so the error path can still
+    // signal it.
     match run_post_fork(config, &mut pipe_wr) {
         Ok(ctx) => Ok(ctx),
+        Err(e) if foreground => Err(e),
         Err(e) => {
             signal_error_to_parent(&mut pipe_wr, &e);
             forker.exit(e.exit_code() as i32);
@@ -820,6 +826,31 @@ mod tests {
         // A second acquisition of the same path must conflict.
         let second = steps::open_and_lock(&pidfile);
         assert!(matches!(second, Err(DaemonizeError::LockConflict(_))));
+    }
+
+    // Covers: R134
+    #[test]
+    fn foreground_lock_conflict_returns_err() {
+        run_in_subprocess("tests::foreground_lock_conflict_returns_err_subprocess");
+    }
+
+    #[test]
+    #[ignore]
+    fn foreground_lock_conflict_returns_err_subprocess() {
+        if !is_subprocess() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let pidfile = dir.path().join("app.pid");
+        let _held = steps::open_and_lock(&pidfile).expect("first lock should succeed");
+        let mut config = DaemonConfig::new();
+        config.foreground(true).close_fds(false).pidfile(&pidfile);
+        let mut forker = NullForker::new(vec![], Ok(()));
+        let result = run_inner(&config, &mut forker);
+        assert!(
+            matches!(result, Err(DaemonizeError::LockConflict(_))),
+            "foreground mode should surface setup errors as Err, not exit"
+        );
     }
 
     // Covers: R67
