@@ -336,14 +336,57 @@ pub(crate) fn fds_to_close(max_fd: i32, skip_fds: &[i32]) -> impl Iterator<Item 
     (3..max_fd).filter(move |fd| !skip_fds.contains(fd))
 }
 
+/// List this process's open fds from the fd directory, or `None` where no
+/// reliable listing exists: the BSDs' `/dev/fd` exposes only 0-2 unless
+/// fdescfs is mounted, and Linux may lack `/proc` in minimal containers
+/// (read failure also returns `None`).
+///
+/// The listing includes the fd `read_dir` itself uses; it is already closed
+/// when the caller acts on the list, and re-closing is a harmless `EBADF`.
+///
+/// Safe post-fork: `daemonize` requires a single-threaded caller, so the
+/// child's allocator lock cannot be held mid-operation by another thread.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub(crate) fn list_open_fds() -> Option<Vec<i32>> {
+    #[cfg(target_os = "linux")]
+    const FD_LIST_DIR: &str = "/proc/self/fd";
+    #[cfg(target_os = "macos")]
+    const FD_LIST_DIR: &str = "/dev/fd";
+
+    let entries = std::fs::read_dir(FD_LIST_DIR).ok()?;
+    Some(
+        entries
+            .filter_map(|entry| entry.ok()?.file_name().to_str()?.parse().ok())
+            .collect(),
+    )
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+pub(crate) fn list_open_fds() -> Option<Vec<i32>> {
+    None
+}
+
 /// Step 13: Close inherited file descriptors.
 ///
-/// Iterates 3..rlim_cur, skipping fds in the skip list.
+/// Closes the fds named by [`list_open_fds`] (minus 0-2 and the skip list),
+/// falling back to iterating 3..rlim_cur where no listing is available.
+/// The fallback matters for speed, not just portability: `RLIMIT_NOFILE` is
+/// commonly raised to 1M+ (systemd `LimitNOFILE`) and `RLIM_INFINITY` clamps
+/// to `i32::MAX`, turning the brute-force loop into billions of `close`
+/// calls that stall daemon startup.
 ///
 /// # Panics
 ///
-/// Panics if getrlimit fails.
+/// Panics if getrlimit fails (fallback path only).
 pub(crate) fn close_inherited_fds(skip_fds: &[i32]) {
+    if let Some(open_fds) = list_open_fds() {
+        for fd in open_fds {
+            if fd >= 3 && !skip_fds.contains(&fd) {
+                unsafe_ops::raw_close(fd);
+            }
+        }
+        return;
+    }
     let max_fd = get_max_fd();
     for fd in fds_to_close(max_fd, skip_fds) {
         unsafe_ops::raw_close(fd);
@@ -897,6 +940,21 @@ mod tests {
     fn fds_to_close_max_below_3() {
         let result: Vec<i32> = fds_to_close(2, &[]).collect();
         assert!(result.is_empty());
+    }
+
+    // Covers: R135
+    #[test]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    fn list_open_fds_sees_an_open_fd() {
+        use std::os::fd::AsRawFd;
+        let file = tempfile::tempfile().unwrap();
+        let listed = list_open_fds().expect("fd listing is available on this platform");
+        assert!(
+            listed.contains(&file.as_raw_fd()),
+            "an open fd must appear in the listing"
+        );
+        // No assertion that a *closed* fd disappears: the listing itself
+        // opens the fd directory, which can reuse the just-freed number.
     }
 
     // --- Step 13: close inherited fds (executor smoke test, subprocess-isolated) ---

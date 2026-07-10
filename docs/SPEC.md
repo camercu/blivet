@@ -490,8 +490,9 @@ chdir, stdin redirect, and env changes may already have happened).
     is preserved.
 12. **Redirect stdout/stderr to configured files** (if configured).
     See output file redirect.
-13. **Close inherited fds** (if `close_fds` is true). Iterate
-    3..`rlim_cur`, skipping lockfile fd and notification pipe fd.
+13. **Close inherited fds** (if `close_fds` is true). Close the
+    enumerated open fds (or iterate 3..`rlim_cur` where enumeration
+    is unavailable), skipping lockfile fd and notification pipe fd.
     See fd closing.
 14. **Return `DaemonContext`** owning lockfile `Option<Flock>`,
     `pipe_wr` as `Option<OwnedFd>`, and cloned path/user/group
@@ -682,18 +683,28 @@ temporarily override umask.
 
 ### Fd closing
 
-When `close_fds` is true (the default), iterate
-3..`rlimit(RLIMIT_NOFILE).rlim_cur` by brute force. Skip the lockfile
-fd (from step 7, identified via `AsRawFd::as_raw_fd()` on the `Flock`)
-and the notification pipe write fd. If `getrlimit` fails, panic.
-Individual `close()` errors are silently ignored. `/proc/self/fd`
-enumeration must not be used.
+When `close_fds` is true (the default), close every open fd except
+0-2, the lockfile fd (from step 7, identified via
+`AsRawFd::as_raw_fd()` on the `Flock`), and the notification pipe
+write fd. Open fds are enumerated via the platform fd directory —
+`/proc/self/fd` on Linux, `/dev/fd` on macOS — when available; where
+no reliable listing exists (the BSDs' `/dev/fd` covers only 0-2
+without fdescfs) or reading it fails (e.g. minimal containers without
+`/proc`), fall back to brute-force iteration of
+3..`rlimit(RLIMIT_NOFILE).rlim_cur`. If `getrlimit` fails in the
+fallback, panic. Individual `close()` errors are silently ignored.
 
 When `close_fds` is false, this step is skipped entirely.
 
-> Brute-force is the required strategy for portability across Unix
-> systems. `EBADF` is expected for most fds; `EIO` on an inherited fd
-> is not actionable.
+> Earlier revisions required brute force and forbade `/proc/self/fd`
+> for portability. That held until `RLIMIT_NOFILE` grew: systemd
+> commonly configures 1M+, and `RLIM_INFINITY` clamps to `i32::MAX`,
+> turning the loop into billions of `close` calls that stall daemon
+> startup for seconds to hours. Enumeration is now preferred exactly
+> where it is reliable, and the brute-force loop remains the fallback
+> everywhere else, so portability is unchanged. `EBADF` is expected
+> when the fallback closes unopened fds; `EIO` on an inherited fd is
+> not actionable.
 >
 > Setting `close_fds` to false is useful in foreground mode where the
 > caller is running under a supervisor (systemd, launchd) that passes
@@ -1230,3 +1241,7 @@ verification points.
 - R133. `.lockfile(path)` and `.no_lockfile()` are last-call-wins.
 - R134. In foreground mode, setup errors (steps 4–14) return `Err` to
   the caller; the library never exits the caller's process.
+- R135. With `close_fds` true, open fds are enumerated via the
+  platform fd directory where reliable (Linux `/proc/self/fd`, macOS
+  `/dev/fd`); enumeration failure degrades to the brute-force
+  3..rlim_cur fallback, never to skipping the step.
