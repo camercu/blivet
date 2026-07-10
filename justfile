@@ -71,23 +71,32 @@ coverage:
     @echo "Coverage report: target/llvm-cov/html/index.html"
 
 # ── Public API surface ──────────────────────────────────────
-# cargo-public-api builds rustdoc JSON, which is nightly-only, so these
-# recipes require a nightly toolchain (rustup installs one on demand).
+# cargo-public-api builds rustdoc JSON, which is nightly-only. The nightly is
+# pinned because rustdoc's rendering changes across nightlies (e.g. io::Error
+# moving from std to core paths), which would show up as false snapshot
+# drift. Bump the pin deliberately and re-bless the snapshot in the same
+# commit. cargo-public-api itself is pinned via shell.nix for the same
+# reason.
+public_api_nightly := "nightly-2026-07-10"
+
+# Install the pinned nightly used by the public-api recipes (used by CI).
+public-api-toolchain:
+    rustup toolchain install {{public_api_nightly}} --profile minimal
 
 # Print the current public API surface (--simplified omits blanket/auto-trait
 # impl noise, keeping the snapshot readable and stable across toolchains).
 public-api:
-    cargo public-api --simplified
+    cargo +{{public_api_nightly}} public-api --simplified
 
 # Regenerate the committed public API snapshot after an intended change.
 public-api-bless:
-    cargo public-api --simplified > public-api.txt
+    cargo +{{public_api_nightly}} public-api --simplified > public-api.txt
 
 # Fail if the public API has drifted from the committed snapshot.
 public-api-check:
     #!/usr/bin/env bash
     set -euo pipefail
-    cargo public-api --simplified | diff -u public-api.txt - \
+    cargo +{{public_api_nightly}} public-api --simplified | diff -u public-api.txt - \
         || { echo "public API drifted from public-api.txt — review, then run 'just public-api-bless'"; exit 1; }
 
 # Run everything CI runs (except Docker)

@@ -11,7 +11,7 @@ pub blivet::DaemonizeError::GroupNotFound(alloc::string::String)
 pub blivet::DaemonizeError::LockConflict
 pub blivet::DaemonizeError::LockConflict::path: std::path::PathBuf
 pub blivet::DaemonizeError::LockfileError(alloc::string::String)
-pub blivet::DaemonizeError::NotifyFailed(std::io::error::Error)
+pub blivet::DaemonizeError::NotifyFailed(core::io::error::Error)
 pub blivet::DaemonizeError::OutputFileError(alloc::string::String)
 pub blivet::DaemonizeError::PermissionDenied(alloc::string::String)
 pub blivet::DaemonizeError::PidfileError(alloc::string::String)

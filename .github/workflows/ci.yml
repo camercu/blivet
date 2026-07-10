@@ -85,16 +85,17 @@ jobs:
             exit 1
           }
 
-  # nix-shell pins cargo-public-api (shell.nix), so CI diffs the snapshot with
-  # the same version that blessed it — version drift would cause false alarms.
-  # cargo-public-api builds rustdoc JSON, which needs a nightly toolchain.
+  # nix-shell pins cargo-public-api (shell.nix) and the justfile pins the
+  # nightly that renders rustdoc JSON, so CI diffs the snapshot with the
+  # exact toolchain that blessed it — either drifting would cause false
+  # alarms (e.g. io::Error's path moving from std to core between nightlies).
   public-api:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
       - uses: cachix/install-nix-action@v31
       - name: Check public API matches committed snapshot
-        run: nix-shell --run 'rustup toolchain install nightly --profile minimal && just public-api-check'
+        run: nix-shell --run 'just public-api-toolchain public-api-check'
 
   commitlint:
     if: github.event_name == 'pull_request'
