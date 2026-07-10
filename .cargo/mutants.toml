@@ -28,4 +28,7 @@ exclude_re = [
     # -- cfg-dead unsupported-target stubs --
     'replace daemonize -> Result<DaemonContext, DaemonizeError> with Ok\(Default::default\(\)\)',
     'src/context\.rs:36\d:9: replace DaemonContext::drop_privileges -> Result<\(\), DaemonizeError> with Ok\(\(\)\)',
+    # The cfg(not(linux, macos)) list_open_fds stub is dead on every sweep
+    # host; line-pinned to spare the live implementation just above it.
+    'src/steps\.rs:36\d:5: replace list_open_fds',
 ]

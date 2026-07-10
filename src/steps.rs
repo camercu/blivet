@@ -942,6 +942,14 @@ mod tests {
         assert!(result.is_empty());
     }
 
+    // Covers: R103
+    #[test]
+    fn get_max_fd_reflects_a_real_limit() {
+        // 0-2 always exist, so any true fd limit is at least 3. Guards the
+        // fallback close range against collapsing (0/1) or inverting (-1).
+        assert!(get_max_fd() >= 3);
+    }
+
     // Covers: R135
     #[test]
     #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -992,12 +1000,25 @@ mod tests {
         // after we close all non-skipped fds (which includes harness-internal fds).
         let restore = SavedFds::new(&[1, 2]);
         let (rd, wr) = nix::unistd::pipe().unwrap();
+        // A second pipe deliberately left out of the skip list: it must be
+        // closed, or the step silently no-oped (a mutation sweep caught the
+        // original test asserting only preservation, never closure).
+        let (victim_rd, victim_wr) = nix::unistd::pipe().unwrap();
+        drop(victim_rd);
         let mut skip = vec![rd.as_raw_fd(), wr.as_raw_fd()];
         // Also skip the SavedFds backup copies so they survive for restoration.
         skip.extend(restore.saved_fds());
         close_inherited_fds(&skip);
         // Our pipe fds should still be open
         assert!(nix::unistd::write(&wr, b"ok").is_ok());
+        // The non-skipped fd must be gone.
+        assert_eq!(
+            nix::unistd::write(&victim_wr, b"x"),
+            Err(nix::errno::Errno::EBADF),
+            "a non-skipped fd must be closed"
+        );
+        // close_inherited_fds already closed it; don't double-close on drop.
+        std::mem::forget(victim_wr);
     }
 
     #[test]
