@@ -400,6 +400,12 @@ callers whose exclusivity is enforced elsewhere. Elsewhere in this
 spec (including Path rules above), "lockfile" means this resolved
 (effective) path.
 
+> Locking the pidfile itself is established practice: FreeBSD's
+> pidfile(3) locks the pidfile via flopen(3), and the Rust `daemonize`
+> crate flocks its pid file unconditionally. daemonize(1) writes an
+> unlocked pidfile; blivet follows the locking lineage and keeps
+> `no_lockfile()` as the escape hatch for the unlocked behavior.
+
 ### Path overlap rules
 
 Lockfile and pidfile may be the same path (see step 8). Neither may
