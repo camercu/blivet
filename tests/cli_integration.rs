@@ -73,7 +73,11 @@ fn default_cwd_is_root() {
         .output()
         .unwrap();
 
-    assert!(output.status.success());
+    assert!(
+        output.status.success(),
+        "daemonize should succeed, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 
     let pid = wait_for_pidfile(&pidfile).expect("pidfile should appear");
     let info = query_process(pid).expect("daemon process should exist");
@@ -144,7 +148,11 @@ fn stderr_redirect_writes_output() {
         .output()
         .unwrap();
 
-    assert!(output.status.success());
+    assert!(
+        output.status.success(),
+        "daemonize should succeed, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 
     let pid = wait_for_pidfile(&pidfile).expect("pidfile should appear");
 
@@ -182,7 +190,11 @@ fn append_mode_preserves_existing_content() {
         .output()
         .unwrap();
 
-    assert!(output.status.success());
+    assert!(
+        output.status.success(),
+        "daemonize should succeed, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     let pid = wait_for_pidfile(&pidfile).expect("pidfile should appear");
 
     let content = wait_for_file_content(&stdout_file, "appended");
@@ -324,7 +336,11 @@ fn verbose_mode_prints_diagnostics() {
         .output()
         .unwrap();
 
-    assert!(output.status.success());
+    assert!(
+        output.status.success(),
+        "daemonize should succeed, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         stderr.contains("daemonize:"),
@@ -346,7 +362,11 @@ fn no_verbose_no_diagnostics() {
         .output()
         .unwrap();
 
-    assert!(output.status.success());
+    assert!(
+        output.status.success(),
+        "daemonize should succeed, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         stderr.is_empty(),
@@ -380,7 +400,11 @@ fn env_vars_passed_to_daemon() {
         .output()
         .unwrap();
 
-    assert!(output.status.success());
+    assert!(
+        output.status.success(),
+        "daemonize should succeed, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     let pid = wait_for_pidfile(&pidfile).expect("pidfile should appear");
 
     let content = wait_for_file_content(&env_file, "hello_world");
@@ -415,7 +439,11 @@ fn same_path_stdout_stderr() {
         .output()
         .unwrap();
 
-    assert!(output.status.success());
+    assert!(
+        output.status.success(),
+        "daemonize should succeed, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     let pid = wait_for_pidfile(&pidfile).expect("pidfile should appear");
 
     let content = wait_for_file_content(&combined, "stderr_line");
@@ -447,7 +475,11 @@ fn stdout_only_mirrors_to_stderr() {
         .output()
         .unwrap();
 
-    assert!(output.status.success());
+    assert!(
+        output.status.success(),
+        "daemonize should succeed, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     let pid = wait_for_pidfile(&pidfile).expect("pidfile should appear");
 
     let content = wait_for_file_content(&combined, "stderr_line");
@@ -633,7 +665,11 @@ fn truncate_mode_overwrites_existing() {
         .output()
         .unwrap();
 
-    assert!(output.status.success());
+    assert!(
+        output.status.success(),
+        "daemonize should succeed, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     let pid = wait_for_pidfile(&pidfile).expect("pidfile should appear");
 
     let content = wait_for_file_content(&stdout_file, "new_content");
@@ -846,7 +882,11 @@ fn no_pidfile_when_not_configured() {
         .output()
         .unwrap();
 
-    assert!(output.status.success());
+    assert!(
+        output.status.success(),
+        "daemonize should succeed, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 
     let content = wait_for_file_content(&stdout_file, "running");
     assert!(content.contains("running"));
@@ -933,7 +973,11 @@ fn env_without_equals_sets_empty_value() {
         .output()
         .unwrap();
 
-    assert!(output.status.success());
+    assert!(
+        output.status.success(),
+        "daemonize should succeed, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     let pid = wait_for_pidfile(&pidfile).expect("pidfile should appear");
 
     let content = wait_for_file_content(&env_file, "VAL=[]");
@@ -972,7 +1016,11 @@ fn multiple_env_vars() {
         .output()
         .unwrap();
 
-    assert!(output.status.success());
+    assert!(
+        output.status.success(),
+        "daemonize should succeed, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     let pid = wait_for_pidfile(&pidfile).expect("pidfile should appear");
 
     let content = wait_for_file_content(&env_file, "beta");
