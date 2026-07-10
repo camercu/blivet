@@ -438,9 +438,9 @@ dependencies = [
 
 [[package]]
 name = "relentless"
-version = "0.7.2"
+version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d547e71a4fc74b90f9322b1ecebcd26cadea7d8e5de748b81dc912223de627df"
+checksum = "ee012ab450427252f95908c5656caed543db6b0f4bc62bde1831c0946f8e863f"
 dependencies = [
  "embassy-time",
  "pin-project-lite",
@@ -492,9 +492,9 @@ dependencies = [
 
 [[package]]
 name = "signal-hook"
-version = "0.3.18"
+version = "0.4.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d881a16cf4426aa584979d30bd82cb33429027e42122b169753d6ef1085ed6e2"
+checksum = "b2a0c28ca5908dbdbcd52e6fdaa00358ab88637f8ab33e1f188dd510eb44b53d"
 dependencies = [
  "libc",
  "signal-hook-registry",
