@@ -118,7 +118,7 @@ jobs:
     name: smoke (${{ matrix.os.name }})
     steps:
       - uses: actions/checkout@v7
-      - uses: cross-platform-actions/action@v1.3.0
+      - uses: cross-platform-actions/action@v1
         with:
           operating_system: ${{ matrix.os.name }}
           version: ${{ matrix.os.version }}
@@ -187,7 +187,7 @@ jobs:
           # Cross-build the library test harness too, to run inside the VM.
           cargo test --no-run --locked --lib --target x86_64-unknown-netbsd
       - name: Run smoke test in NetBSD VM
-        uses: cross-platform-actions/action@v1.3.0
+        uses: cross-platform-actions/action@v1
         with:
           operating_system: netbsd
           version: '10.1'
