@@ -8,7 +8,8 @@ pub blivet::DaemonizeError::ChownError(alloc::string::String)
 pub blivet::DaemonizeError::ExecFailed(alloc::string::String)
 pub blivet::DaemonizeError::ForkFailed(alloc::string::String)
 pub blivet::DaemonizeError::GroupNotFound(alloc::string::String)
-pub blivet::DaemonizeError::LockConflict(alloc::string::String)
+pub blivet::DaemonizeError::LockConflict
+pub blivet::DaemonizeError::LockConflict::path: std::path::PathBuf
 pub blivet::DaemonizeError::LockfileError(alloc::string::String)
 pub blivet::DaemonizeError::NotifyFailed(std::io::error::Error)
 pub blivet::DaemonizeError::OutputFileError(alloc::string::String)

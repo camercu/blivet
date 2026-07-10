@@ -787,7 +787,13 @@ mod tests {
         );
         assert_eq!(DaemonizeError::UserNotFound(String::new()).exit_code(), 67);
         assert_eq!(DaemonizeError::GroupNotFound(String::new()).exit_code(), 67);
-        assert_eq!(DaemonizeError::LockConflict(String::new()).exit_code(), 69);
+        assert_eq!(
+            DaemonizeError::LockConflict {
+                path: std::path::PathBuf::new()
+            }
+            .exit_code(),
+            69
+        );
         assert_eq!(DaemonizeError::LockfileError(String::new()).exit_code(), 73);
         assert_eq!(DaemonizeError::ForkFailed(String::new()).exit_code(), 71);
         assert_eq!(DaemonizeError::SetsidFailed(String::new()).exit_code(), 71);
@@ -832,7 +838,9 @@ mod tests {
             DaemonizeError::ProgramNotFound("detail".into()),
             DaemonizeError::UserNotFound("detail".into()),
             DaemonizeError::GroupNotFound("detail".into()),
-            DaemonizeError::LockConflict("detail".into()),
+            DaemonizeError::LockConflict {
+                path: "detail".into(),
+            },
             DaemonizeError::LockfileError("detail".into()),
             DaemonizeError::ForkFailed("detail".into()),
             DaemonizeError::SetsidFailed("detail".into()),
@@ -855,7 +863,7 @@ mod tests {
                 | DaemonizeError::ProgramNotFound(_)
                 | DaemonizeError::UserNotFound(_)
                 | DaemonizeError::GroupNotFound(_)
-                | DaemonizeError::LockConflict(_)
+                | DaemonizeError::LockConflict { .. }
                 | DaemonizeError::LockfileError(_)
                 | DaemonizeError::ForkFailed(_)
                 | DaemonizeError::SetsidFailed(_)

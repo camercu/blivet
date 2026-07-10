@@ -825,7 +825,7 @@ mod tests {
         );
         // A second acquisition of the same path must conflict.
         let second = steps::open_and_lock(&pidfile);
-        assert!(matches!(second, Err(DaemonizeError::LockConflict(_))));
+        assert!(matches!(second, Err(DaemonizeError::LockConflict { .. })));
     }
 
     // Covers: R134
@@ -848,7 +848,7 @@ mod tests {
         let mut forker = NullForker::new(vec![], Ok(()));
         let result = run_inner(&config, &mut forker);
         assert!(
-            matches!(result, Err(DaemonizeError::LockConflict(_))),
+            matches!(result, Err(DaemonizeError::LockConflict { .. })),
             "foreground mode should surface setup errors as Err, not exit"
         );
     }

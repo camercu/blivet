@@ -88,10 +88,9 @@ pub(crate) fn open_and_lock(path: &Path) -> Result<Flock<OwnedFd>, DaemonizeErro
 
     Flock::lock(fd, FlockArg::LockExclusiveNonblock).map_err(|(_fd, e)| {
         if e == nix::errno::Errno::EWOULDBLOCK {
-            DaemonizeError::LockConflict(format!(
-                "{} is already locked by another process",
-                path.display()
-            ))
+            DaemonizeError::LockConflict {
+                path: path.to_path_buf(),
+            }
         } else {
             DaemonizeError::LockfileError(format!("flock {}: {e}", path.display()))
         }
@@ -494,7 +493,23 @@ mod tests {
         let path = dir.path().join("test.lock");
         let _first = open_and_lock(&path).unwrap();
         let second = open_and_lock(&path);
-        assert!(matches!(second, Err(DaemonizeError::LockConflict(_))));
+        match second {
+            Err(DaemonizeError::LockConflict { path: conflicting }) => {
+                assert_eq!(conflicting, path);
+            }
+            other => panic!("expected LockConflict, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn lock_conflict_display_names_the_path() {
+        let err = DaemonizeError::LockConflict {
+            path: PathBuf::from("/run/app.pid"),
+        };
+        assert_eq!(
+            err.to_string(),
+            "lock conflict: /run/app.pid is already locked by another process"
+        );
     }
 
     // --- Step 8: write pidfile ---

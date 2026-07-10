@@ -6,7 +6,7 @@ non-breaking-able must land first.
 
 ## API freeze decisions
 
-- [ ] **Settle error payload shapes.** `#[non_exhaustive]` lets us add
+- [x] **Settle error payload shapes.** `#[non_exhaustive]` lets us add
       variants after 1.0, but changing an existing variant's payload is
       breaking. Decision: restructure `LockConflict` to carry the
       conflicting path (`LockConflict { path: PathBuf }`) so callers can

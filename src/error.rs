@@ -4,6 +4,14 @@
 ///
 /// Each variant maps to a `sysexits.h` exit code via [`exit_code`](DaemonizeError::exit_code).
 /// `ProgramNotFound` and `ExecFailed` are produced only by the CLI binary, never by the library.
+///
+/// # Payload stability
+///
+/// `String` payloads are human-readable display text, not a stable API:
+/// match on the variant and [`exit_code`](DaemonizeError::exit_code), not
+/// on payload contents. Only named struct fields (e.g.
+/// [`LockConflict::path`](DaemonizeError::LockConflict),
+/// [`Application::code`](DaemonizeError::Application)) are stable.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum DaemonizeError {
@@ -25,9 +33,15 @@ pub enum DaemonizeError {
     #[error("group not found: {0}")]
     GroupNotFound(String),
 
-    /// flock already held by another process.
-    #[error("lock conflict: {0}")]
-    LockConflict(String),
+    /// flock already held by another process — typically "the daemon is
+    /// already running".
+    #[error("lock conflict: {} is already locked by another process", path.display())]
+    LockConflict {
+        /// The effective lockfile (by default the pidfile itself). Callers
+        /// handling already-running can read the running instance's PID from
+        /// this path when it is the pidfile.
+        path: std::path::PathBuf,
+    },
 
     /// Lockfile cannot be opened.
     #[error("lockfile error: {0}")]
@@ -146,7 +160,7 @@ impl DaemonizeError {
             DaemonizeError::ProgramNotFound(_) => 66,   // EX_NOINPUT
             DaemonizeError::UserNotFound(_) => 67,      // EX_NOUSER
             DaemonizeError::GroupNotFound(_) => 67,     // EX_NOUSER
-            DaemonizeError::LockConflict(_) => 69,      // EX_UNAVAILABLE
+            DaemonizeError::LockConflict { .. } => 69,  // EX_UNAVAILABLE
             DaemonizeError::LockfileError(_) => 73,     // EX_CANTCREAT
             DaemonizeError::ForkFailed(_) => 71,        // EX_OSERR
             DaemonizeError::SetsidFailed(_) => 71,      // EX_OSERR
