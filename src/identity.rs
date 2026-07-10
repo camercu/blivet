@@ -196,6 +196,22 @@ mod tests {
     }
 
     #[test]
+    fn user_accessor_returns_resolved_user() {
+        let id = ResolvedIdentity::resolve(Some("root"), None).unwrap();
+        assert_eq!(id.user().expect("user was configured").name, "root");
+
+        let id = ResolvedIdentity::resolve(None, None).unwrap();
+        assert!(id.user().is_none());
+    }
+
+    #[test]
+    fn cname_roundtrips_the_username() {
+        let id = ResolvedIdentity::resolve(Some("root"), None).unwrap();
+        let cname = id.user().unwrap().cname().unwrap();
+        assert_eq!(cname.as_bytes(), b"root");
+    }
+
+    #[test]
     fn effective_gid_prefers_explicit_group() {
         // Explicit group overrides the user's primary group.
         let id = ResolvedIdentity::resolve(Some("root"), Some("0")).unwrap();
