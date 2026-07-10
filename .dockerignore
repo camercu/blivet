@@ -4,3 +4,5 @@ target/
 .claude/
 .direnv/
 node_modules/
+mutants.out/
+mutants.out.old/

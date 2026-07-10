@@ -1,0 +1,6 @@
+[profile.default]
+# Kill a test that stops making progress instead of stalling the whole run.
+# cargo-mutants relies on this (see .cargo/mutants.toml): mutants that hang a
+# blocked reader or a stuck loop get killed here at 30s, well inside the
+# mutants 60s floor, so they report as cleanly caught test failures.
+slow-timeout = { period = "15s", terminate-after = 2 }
