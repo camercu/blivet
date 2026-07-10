@@ -1,0 +1,11 @@
+# cargo-mutants configuration.
+#
+# Equivalent mutants: `|` over disjoint bitflag constants is value-identical
+# to `^` (no shared bits), so no test can ever kill these. Scoped to the
+# exact functions that OR constant flags; `|`→`&` is not excluded because it
+# does change the value.
+exclude_re = [
+    'replace \| with \^ in open_and_lock',
+    'replace \| with \^ in plan_output_redirect',
+    'replace \| with \^ in thread_count',
+]
