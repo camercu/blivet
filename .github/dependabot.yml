@@ -30,6 +30,12 @@ updates:
     groups:
       actions-deps:
         patterns: ["*"]
+    ignore:
+      # The @1.85 ref on dtolnay/rust-toolchain *is* the MSRV declaration;
+      # bumping it would silently change what the msrv job tests. Raise the
+      # MSRV deliberately, in a commit that also updates Cargo.toml
+      # rust-version.
+      - dependency-name: dtolnay/rust-toolchain
 
   - package-ecosystem: npm
     directory: /
