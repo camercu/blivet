@@ -27,7 +27,7 @@ jobs:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
@@ -40,7 +40,7 @@ jobs:
   msrv:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@1.85
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@just
@@ -50,7 +50,7 @@ jobs:
   docker-test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: taiki-e/install-action@just
       - name: Docker test
         run: just docker-test
@@ -59,7 +59,7 @@ jobs:
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: llvm-tools-preview
@@ -67,7 +67,7 @@ jobs:
       - uses: taiki-e/install-action@cargo-llvm-cov
       - name: Generate coverage
         run: cargo llvm-cov --lcov --output-path lcov.info
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: coverage-report
           path: lcov.info
@@ -75,7 +75,7 @@ jobs:
   manpage:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: cachix/install-nix-action@v31
       - name: Check manpage is up to date
         run: |
@@ -89,10 +89,10 @@ jobs:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: 24
       - run: npm ci
@@ -117,8 +117,8 @@ jobs:
     runs-on: ubuntu-latest
     name: smoke (${{ matrix.os.name }})
     steps:
-      - uses: actions/checkout@v4
-      - uses: cross-platform-actions/action@v1.0.0
+      - uses: actions/checkout@v7
+      - uses: cross-platform-actions/action@v1.3.0
         with:
           operating_system: ${{ matrix.os.name }}
           version: ${{ matrix.os.version }}
@@ -164,7 +164,7 @@ jobs:
     runs-on: ubuntu-latest
     name: smoke (netbsd)
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-unknown-netbsd
@@ -187,7 +187,7 @@ jobs:
           # Cross-build the library test harness too, to run inside the VM.
           cargo test --no-run --locked --lib --target x86_64-unknown-netbsd
       - name: Run smoke test in NetBSD VM
-        uses: cross-platform-actions/action@v1.0.0
+        uses: cross-platform-actions/action@v1.3.0
         with:
           operating_system: netbsd
           version: '10.1'
