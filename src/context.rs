@@ -753,6 +753,47 @@ mod tests {
         );
     }
 
+    // Same self-spawn pattern as above, through the convenience wrapper: it
+    // must actually install handlers for the standard termination signals,
+    // not just return Ok.
+    #[test]
+    fn cleanup_on_term_signals_installs_sigterm_handler() {
+        const PIDFILE_ENV: &str = "__BLIVET_TERM_CLEANUP_PIDFILE";
+
+        if let Ok(path) = std::env::var(PIDFILE_ENV) {
+            std::fs::write(&path, "123").unwrap();
+            let mut cfg = DaemonConfig::new();
+            cfg.pidfile(&path);
+            let ctx = ctx(&cfg, None, None);
+            ctx.cleanup_on_term_signals().unwrap();
+            nix::sys::signal::raise(nix::sys::signal::Signal::SIGTERM).unwrap();
+            std::thread::sleep(std::time::Duration::from_secs(5));
+            unreachable!("should have been killed by the re-raised SIGTERM");
+        }
+
+        use std::os::unix::process::ExitStatusExt;
+        let dir = tempfile::tempdir().unwrap();
+        let pidfile = dir.path().join("daemon.pid");
+        let exe = std::env::current_exe().unwrap();
+        let status = std::process::Command::new(exe)
+            .arg("--exact")
+            .arg("context::tests::cleanup_on_term_signals_installs_sigterm_handler")
+            .arg("--nocapture")
+            .env(PIDFILE_ENV, &pidfile)
+            .status()
+            .unwrap();
+
+        assert_eq!(
+            status.signal(),
+            Some(libc::SIGTERM),
+            "child should terminate via the re-raised SIGTERM"
+        );
+        assert!(
+            !pidfile.exists(),
+            "handler should have removed the pidfile before re-raising"
+        );
+    }
+
     #[test]
     fn notify_parent_idempotent() {
         let (_rd, wr) = make_pipe();

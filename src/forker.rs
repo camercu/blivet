@@ -174,6 +174,32 @@ mod tests {
     use nix::fcntl::{fcntl, FcntlArg, FdFlag};
     use std::os::fd::AsFd;
 
+    // setsid fails with EPERM when the caller already leads a process group,
+    // so run it in a self-spawned child (env marker), which inherits the
+    // parent's process group and is never a leader.
+    #[test]
+    fn real_setsid_makes_the_caller_session_leader() {
+        const MARKER: &str = "__BLIVET_REAL_SETSID";
+
+        if std::env::var(MARKER).is_ok() {
+            RealForker.setsid().expect("setsid should succeed");
+            let pid = nix::unistd::getpid();
+            let sid = nix::unistd::getsid(None).unwrap();
+            assert_eq!(sid, pid, "caller should lead the new session");
+            return;
+        }
+
+        let exe = std::env::current_exe().unwrap();
+        let status = std::process::Command::new(exe)
+            .arg("--exact")
+            .arg("forker::tests::real_setsid_makes_the_caller_session_leader")
+            .arg("--nocapture")
+            .env(MARKER, "1")
+            .status()
+            .unwrap();
+        assert!(status.success(), "subprocess assertions failed");
+    }
+
     // Covers: R107 — both notification pipe ends are created with O_CLOEXEC, so
     // the daemon's exec does not leak them to the target program.
     #[test]
