@@ -238,6 +238,9 @@ jobs:
           shell: bash
           run: |
             set -euo pipefail
+            # rustup toolchains need a system linker; the OmniOS image ships
+            # without one (pkg exit 4 = already installed / nothing to do).
+            sudo pkg install build-essential || [ $? -eq 4 ]
             curl --proto '=https' --tlsv1.2 -sSf --retry 3 --retry-delay 5 https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
             . "$HOME/.cargo/env"
             cargo build --locked
