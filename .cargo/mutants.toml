@@ -4,8 +4,31 @@
 # to `^` (no shared bits), so no test can ever kill these. Scoped to the
 # exact functions that OR constant flags; `|`→`&` is not excluded because it
 # does change the value.
+#
+# Hang-detected mutants: each mutant below is *caught*, but only by hanging
+# the suite (a reader blocks forever or a loop stops advancing), so it shows
+# up as TIMEOUT noise costing a full timeout per run. Excluded as documented
+# detections, not gaps. Line-pinned entries guard a live twin of the same
+# name; re-pin if the file shifts.
+#
+# cfg-dead stubs: the `#[deprecated]` unsupported-target stubs are never
+# compiled on any OS the suite runs on, so their mutants are unkillable
+# false positives.
 exclude_re = [
+    # -- equivalent bitflag mutants --
     'replace \| with \^ in open_and_lock',
     'replace \| with \^ in plan_output_redirect',
     'replace \| with \^ in thread_count',
+    # -- hang-detected (caught via timeout) --
+    'replace DaemonContext::notify_parent -> Result<\(\), DaemonizeError> with Ok\(\(\)\)',
+    'replace DaemonContext::notify_parent_or_report with \(\)',
+    'replace redirect_to_devnull with \(\)',
+    'replace \+= with \*= in write_all_fd',
+    'src/lib\.rs:\d+:32: delete ! in run_post_fork',
+    'src/unsafe_ops\.rs:26\d:11: replace != with == in thread_count',
+    # -- cfg-dead unsupported-target stubs --
+    # The real daemonize's twin of this mutant is unviable (DaemonContext has
+    # no Default), so a name-based exclude only removes the stub's.
+    'replace daemonize -> Result<DaemonContext, DaemonizeError> with Ok\(Default::default\(\)\)',
+    'src/context\.rs:36\d:9: replace DaemonContext::drop_privileges -> Result<\(\), DaemonizeError> with Ok\(\(\)\)',
 ]
