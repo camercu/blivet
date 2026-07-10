@@ -23,5 +23,8 @@ COPY . .
 # Build tests (this layer is cached as long as source doesn't change)
 RUN cargo build --locked --tests
 
-# Run all tests including root-only and Linux-specific
-CMD ["cargo", "test", "--locked", "--", "--include-ignored"]
+# Run all tests including root-only and Linux-specific. Doctests run
+# separately without --include-ignored: rustdoc maps `ignore` code blocks to
+# libtest-ignored tests, so --include-ignored would try to compile README
+# fragments that are marked `ignore` precisely because they cannot compile.
+CMD ["sh", "-c", "cargo test --locked --all-targets -- --include-ignored && cargo test --locked --doc"]
