@@ -1,12 +1,11 @@
 # cargo-mutants configuration.
 #
-# Tests run under nextest with a per-test kill timeout (see
+# Tests run under nextest with a 5s per-test kill timeout (see
 # .config/nextest.toml): a mutant that hangs the suite (blocked pipe reader,
-# loop that stops advancing) is killed by nextest at 30s — inside the 60s
-# mutants floor below — and reports as a cleanly caught failure instead of
+# loop that stops advancing) is killed by nextest well inside cargo-mutants'
+# own auto timeout, and reports as a cleanly caught failure instead of
 # TIMEOUT noise.
 test_tool = "nextest"
-minimum_test_timeout = 60
 
 # Unkillable false positives, excluded with reasons:
 #
