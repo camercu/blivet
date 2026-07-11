@@ -1,11 +1,11 @@
-//! A correct, full-featured Unix daemon library for Rust.
+//! A correct, full-featured Unix daemon library and CLI for Rust.
 //!
 //! A [blivet] is the "impossible fork" optical illusion, also known as the
-//! devil's tuning fork. Daemons are created by forking — and this crate
+//! devil's fork. Daemons are created by forking — and this crate
 //! performs the impossible double-fork to do it correctly.
 //!
 //! This crate provides a library and CLI tool for daemonizing processes on Unix
-//! systems. It performs a mandatory double-fork, resets signal dispositions and
+//! systems. It performs a double-fork, resets signal dispositions and
 //! mask, and uses a notification pipe so the parent can wait for daemon
 //! readiness. Privilege dropping is split-phase: `daemonize()` returns a
 //! context while still privileged, and the caller explicitly calls

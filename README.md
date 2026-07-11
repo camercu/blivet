@@ -8,18 +8,17 @@
 
 **A correct, full-featured Unix daemon library and CLI for Rust.**
 
-Daemonizing a process *correctly* is deceptively hard: the double-fork dance,
-session detachment, signal and fd hygiene, and -- the part most libraries skip
--- telling the launcher whether the daemon actually came up. Unlike `daemon(3)`
-or thin wrappers, `blivet` reports post-fork startup failures back to the
-launcher over a notification pipe, with `sysexits.h` exit codes. The
-shell, `systemd`, or a supervisor sees a real success or failure -- not a
-detached process that may have already died during init.
+Backgrounding a process is easy; doing it *correctly* is not. A daemon that
+forks, detaches, then dies mid-init looks exactly like success -- the launcher
+has already exited 0. `blivet` closes that gap: it reports readiness or failure
+back over a notification pipe, with `sysexits.h` exit codes, so the launcher
+sees a real result. And it gets the rest right by default -- signal and fd
+hygiene, privilege handling, output redirects -- with no `unsafe` in your code.
 
 ```rust,no_run
-use blivet::{daemonize, DaemonConfig};
+use blivet::{daemonize, DaemonConfig, DaemonizeError};
 
-fn main() -> Result<(), blivet::DaemonizeError> {
+fn main() -> Result<(), DaemonizeError> {
     let mut config = DaemonConfig::new();
     config.pidfile("/var/run/myapp.pid");
 
@@ -32,21 +31,24 @@ fn main() -> Result<(), blivet::DaemonizeError> {
 
 ## Why blivet
 
-- **Correct by default.** Mandatory double-fork, `setsid`, signal reset
-  (including real-time signals on Linux; SIGPIPE stays ignored so pipe writes
-  keep returning errors instead of killing the daemon), signal-mask clear, fd
-  close, and `/dev/null` redirect -- the things hand-rolled daemonizers forget.
 - **Parent notification.** The launcher blocks until the daemon signals
   readiness or reports an error -- no "did it start?" polling. Forget to call
   `notify_parent()` and the launcher exits non-zero automatically.
+- **Correct by default.** Double-fork, `setsid`, signal reset
+  (including real-time signals on Linux; SIGPIPE stays ignored so pipe writes
+  keep returning errors instead of killing the daemon), signal-mask clear, fd
+  close, and `/dev/null` redirect -- the things hand-rolled daemonizers forget.
 - **Split-phase privileges.** `daemonize()` returns while still privileged, so
   you can bind port 80 or `chroot` before `drop_privileges()`.
 - **Safe by default.** The checked entry points verify single-threadedness, so
   you write no `unsafe`; the crate's own `unsafe` (libc FFI, `fork`, `setenv`)
   is isolated under `#![deny(unsafe_code)]` and documented. Opt-out variants are
   there when you manage the single-threaded contract yourself.
-- **Library and CLI.** A builder API, or the standalone `daemonize` binary
-  (`cargo install blivet`) that wraps any program.
+- **Library and CLI.** A builder API in the familiar shape --
+  infallible setters, deferred validation, `?`-friendly errors with `sysexits.h`
+  codes -- or the standalone `daemonize` binary (`cargo install blivet`) that
+  wraps any program. The ergonomics of the simple wrappers, with the power they
+  skip.
 
 ## How it works
 
@@ -56,7 +58,7 @@ launcher does *not* return; it blocks on a pipe to the grandchild, waiting for
 that daemon to report in. In the daemon you then:
 
 1. run fallible init -- bind sockets, open files, connect to dependencies;
-2. `drop_privileges()` to drop to an unprivileged user (it first chowns the
+2. `drop_privileges()` to switch to an unprivileged user (it first chowns the
    pidfile/lockfile/log files to that user, while still root);
 3. call `notify_parent()`, which writes one readiness byte down the pipe.
 
@@ -78,7 +80,7 @@ loops only *after* `drop_privileges()` returns. See [Safety](#safety) for why.
 
 ```sh
 cargo install blivet   # the `daemonize` CLI -- verify with `daemonize --version`
-cargo add blivet        # the library
+cargo add blivet       # the library
 ```
 
 The crate is `blivet`; the installed binary is `daemonize`. See
@@ -86,13 +88,12 @@ The crate is `blivet`; the installed binary is `daemonize`. See
 
 ## Library
 
-The minimal example above writes a pidfile and signals readiness; the pidfile
-is also locked, so a second instance fails fast instead of clobbering it. A
-fuller setup adds a separate lock file, log redirection, and a working
-directory. As with
-`daemonize(1)`, the defaults are standard daemon behavior -- stdout/stderr go to
-`/dev/null` and the working directory becomes `/` -- so use absolute paths and
-redirect any output you want to keep:
+The minimal example above writes a locked pidfile and signals readiness, so a
+second instance fails fast instead of clobbering it. A fuller setup adds a
+separate lock file, log redirection, and a working directory. Like
+`daemonize(1)`, the defaults are standard daemon behavior -- stdout/stderr to
+`/dev/null`, working directory `/` -- so use absolute paths and redirect any
+output you want to keep:
 
 ```rust,no_run
 use blivet::{daemonize, DaemonConfig};
@@ -182,18 +183,15 @@ a target without a thread-count source.
 
 ## API reference
 
-Full reference is on [docs.rs](https://docs.rs/blivet); this is the shape of it.
+Full reference is on [docs.rs](https://docs.rs/blivet); the essentials:
 
 **`DaemonConfig`** -- a builder of infallible `&mut self` setters; validation is
-deferred to `validate()`, which `daemonize()` runs for you. Settings: `pidfile`,
-`lockfile`/`no_lockfile`, `stdout`/`stderr` (+ `append`), `chdir`, `umask`,
-`user`/`group`, `foreground`, `close_fds`, `cleanup_on_drop`, `chown_paths`,
-and `env`.
-Defaults worth knowing: working directory `/`, stdout/stderr `/dev/null`,
-`close_fds` and `cleanup_on_drop` both `true`, and a configured pidfile doubles
-as the lockfile -- a second instance fails with `LockConflict` (exit 69) rather
-than silently overwriting the pidfile. Point `lockfile()` at a separate path,
-or call `no_lockfile()` to write the pidfile unlocked.
+deferred to `validate()`, which `daemonize()` runs for you. Defaults worth
+knowing: working directory `/`, stdout/stderr `/dev/null`, `close_fds` and
+`cleanup_on_drop` both `true`, and a configured pidfile doubles as the lockfile
+-- a second instance fails with `LockConflict` (exit 69) rather than silently
+overwriting the pidfile. Point `lockfile()` at a separate path, or call
+`no_lockfile()` to write the pidfile unlocked.
 
 **`DaemonContext`** -- returned by a successful `daemonize()`; owns the lockfile
 and notification pipe. The methods you reach for most: `notify_parent()`,
@@ -364,7 +362,7 @@ them.
 | `-E` | `--env NAME=VAL`    | Set environment variable (repeatable; a bare `NAME` sets the empty string) |
 | `-u` | `--user NAME\|UID`  | Switch to user after daemonizing (requires root) |
 | `-g` | `--group NAME\|GID` | Switch to group after daemonizing (requires root) |
-| `-f` | `--foreground`      | Stay in foreground (no fork/setsid)                            |
+| `-f` | `--foreground`      | Stay in foreground (no fork/setsid) |
 | `-v` | `--verbose`         | Print diagnostic info before daemonizing |
 
 ## Minimum supported Rust version
@@ -374,7 +372,7 @@ them.
 ## Why the name `blivet`?
 
 A [blivet](https://en.wikipedia.org/wiki/Impossible_trident) is the "impossible
-pitchfork" optical illusion, also known as the devil's fork, where the prongs
+fork" optical illusion, also known as the devil's fork, where the prongs
 are mysteriously detached from the base. Daemons are created by forking to
 detach from their parent terminal.
 
