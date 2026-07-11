@@ -259,9 +259,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 If you already run your own signal loop (e.g. for graceful shutdown), you don't
 need the built-in handler: let the loop exit, then call `cleanup()` -- or just
-let `ctx` drop. The [`signal_hook`](https://crates.io/crates/signal-hook) crate
+let `ctx` drop. The [`signal-hook`](https://crates.io/crates/signal-hook) crate
 is one way to drive that loop; `blivet` does not re-export it, so
-`cargo add signal_hook` first:
+`cargo add signal-hook` first:
 
 ```rust,no_run
 use std::sync::atomic::{AtomicBool, Ordering};
