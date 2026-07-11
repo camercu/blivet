@@ -410,7 +410,9 @@ impl DaemonContext {
             return Ok(());
         }
 
-        self.chown_paths()?;
+        if self.config.chown_paths {
+            self.chown_paths()?;
+        }
 
         let identity =
             ResolvedIdentity::resolve(self.config.user.as_deref(), self.config.group.as_deref())?;
@@ -1072,6 +1074,28 @@ mod tests {
         assert!(
             matches!(result, Err(DaemonizeError::ChownError(_))),
             "drop_privileges must chown configured paths before switching, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn drop_privileges_skips_chown_when_disabled() {
+        if nix::unistd::geteuid().is_root() {
+            return; // relies on EPERM from setgid; root would switch groups
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let pidfile = dir.path().join("x.pid");
+        std::fs::write(&pidfile, "123\n").unwrap();
+        let mut config = pidfile_config(&pidfile);
+        config.group(foreign_gid().to_string()).chown_paths(false);
+        let mut ctx = ctx(&config, None, None);
+
+        // With chown disabled the drop proceeds straight to setgid, so the
+        // (still-inevitable, unprivileged) failure is EPERM there — proving
+        // no chown was attempted on the pidfile.
+        let result = ctx.drop_privileges();
+        assert!(
+            matches!(result, Err(DaemonizeError::PermissionDenied(ref m)) if m.contains("setgid")),
+            "chown_paths(false) must skip the chown, got {result:?}"
         );
     }
 
