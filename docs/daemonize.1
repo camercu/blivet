@@ -45,8 +45,8 @@ Closes all inherited file descriptors (except the lock file).
 Transfers ownership of pidfile, lockfile, and output files to the target
 user/group (if configured) via \f[B]chown\f[R](2).
 .IP "10." 4
-Switches user and group (if configured) via \f[B]setuid\f[R](2),
-\f[B]setgid\f[R](2), and \f[B]initgroups\f[R](3).
+Switches user and group (if configured) via \f[B]initgroups\f[R](3),
+\f[B]setgid\f[R](2), and \f[B]setuid\f[R](2), in that order.
 .IP "11." 4
 Restores the default SIGPIPE disposition and exec\(cqs
 \f[I]program\f[R].
@@ -132,9 +132,9 @@ an empty string.
 .TP
 \f[B]\-u\f[R], \f[B]\(enuser\f[R] \f[I]name\f[R]|\f[I]uid\f[R]
 Run the daemon as \f[I]name\f[R] (or numeric \f[I]uid\f[R]).
-Calls \f[B]setuid\f[R](2), \f[B]setgid\f[R](2), and
-\f[B]initgroups\f[R](3), and sets the \f[B]USER\f[R], \f[B]HOME\f[R],
-and \f[B]LOGNAME\f[R] environment variables.
+Calls \f[B]initgroups\f[R](3), \f[B]setgid\f[R](2), and
+\f[B]setuid\f[R](2), and sets the \f[B]USER\f[R], \f[B]HOME\f[R], and
+\f[B]LOGNAME\f[R] environment variables.
 If a numeric string is given, it is treated as a UID.
 When \f[B]\(engroup\f[R] is not specified, the user\(cqs primary group
 is used.

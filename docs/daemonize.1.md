@@ -37,8 +37,8 @@ The daemonization sequence:
 8. Closes all inherited file descriptors (except the lock file).
 9. Transfers ownership of pidfile, lockfile, and output files to the target
    user/group (if configured) via **chown**(2).
-10. Switches user and group (if configured) via **setuid**(2), **setgid**(2),
-    and **initgroups**(3).
+10. Switches user and group (if configured) via **initgroups**(3),
+    **setgid**(2), and **setuid**(2), in that order.
 11. Restores the default SIGPIPE disposition and exec's *program*.
 
 In foreground mode (**-f**), steps 1-3 are skipped: no fork or setsid occurs,
@@ -105,8 +105,8 @@ dropped, so the daemon can continue to write to them after the switch.
     variable is set to an empty string.
 
 **-u**, **--user** *name*|*uid*
-:   Run the daemon as *name* (or numeric *uid*). Calls **setuid**(2),
-    **setgid**(2), and **initgroups**(3), and sets the **USER**, **HOME**,
+:   Run the daemon as *name* (or numeric *uid*). Calls **initgroups**(3),
+    **setgid**(2), and **setuid**(2), and sets the **USER**, **HOME**,
     and **LOGNAME** environment variables. If a numeric string is given, it
     is treated as a UID. When **--group** is not specified, the user's
     primary group is used. Requires root privileges.
