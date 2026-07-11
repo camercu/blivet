@@ -248,6 +248,9 @@ pub(crate) mod util;
 #[cfg(test)]
 mod test_support;
 
+#[cfg(test)]
+mod doc_sync;
+
 /// Compile-checks every `rust` code block in the README as a doctest, so a
 /// stale snippet fails `cargo test` instead of misleading readers. Blocks
 /// that daemonize are marked `no_run`; fragments that cannot stand alone are
