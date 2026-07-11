@@ -410,6 +410,8 @@ impl DaemonContext {
             return Ok(());
         }
 
+        self.chown_paths()?;
+
         let identity =
             ResolvedIdentity::resolve(self.config.user.as_deref(), self.config.group.as_deref())?;
 
@@ -1032,6 +1034,45 @@ mod tests {
         let mut config = DaemonConfig::new();
         config.pidfile(pidfile).cleanup_on_drop(false);
         config
+    }
+
+    /// A gid the current user cannot chown files to: not the effective gid
+    /// and not in the supplementary groups. Non-root chown to such a gid
+    /// fails EPERM, letting tests observe that `drop_privileges` attempted
+    /// the chown — and fail before `setgid`, so the test process's group
+    /// state is never actually changed.
+    fn foreign_gid() -> u32 {
+        // libc, not nix::unistd::getgroups: nix gates it out on apple targets.
+        #[allow(unsafe_code)]
+        let gids: Vec<u32> = unsafe {
+            let n = libc::getgroups(0, std::ptr::null_mut());
+            assert!(n >= 0, "getgroups failed");
+            let mut buf = vec![0 as libc::gid_t; n as usize];
+            let n = libc::getgroups(n, buf.as_mut_ptr());
+            assert!(n >= 0, "getgroups failed");
+            buf[..n as usize].iter().map(|&g| g as u32).collect()
+        };
+        let egid = nix::unistd::getegid().as_raw();
+        (1..).find(|g| !gids.contains(g) && *g != egid).unwrap()
+    }
+
+    #[test]
+    fn drop_privileges_chowns_configured_paths() {
+        if nix::unistd::geteuid().is_root() {
+            return; // relies on chown failing with EPERM; root chown succeeds
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let pidfile = dir.path().join("x.pid");
+        std::fs::write(&pidfile, "123\n").unwrap();
+        let mut config = pidfile_config(&pidfile);
+        config.group(foreign_gid().to_string());
+        let mut ctx = ctx(&config, None, None);
+
+        let result = ctx.drop_privileges();
+        assert!(
+            matches!(result, Err(DaemonizeError::ChownError(_))),
+            "drop_privileges must chown configured paths before switching, got {result:?}"
+        );
     }
 
     #[test]
