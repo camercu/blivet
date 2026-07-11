@@ -135,22 +135,28 @@ ctx.notify_parent()?;
 ### DaemonContext
 
 `daemonize()` returns `Result<DaemonContext, DaemonizeError>`.
-`DaemonContext` is `#[non_exhaustive]` with all private fields. It
-derives `Debug` (Flock formatted as present/absent). Do not derive
-`Clone` or `PartialEq`.
+`DaemonContext` is `#[non_exhaustive]` with all private fields. It has a
+manual `Debug` impl (see below). Do not derive `Clone` or `PartialEq`.
 
-| Field           | Type               | Semantics                                          |
-| --------------- | ------------------ | -------------------------------------------------- |
-| `lockfile`      | `Option<Flock>`    | Owned lock (`nix::fcntl`); drop releases.          |
-| `notify_pipe`   | `Option<OwnedFd>`  | Write end of notification pipe; see below.         |
-| `pidfile`       | `Option<PathBuf>`  | Cloned from config; used by `drop_privileges()` chown phase and `cleanup()`. |
-| `lockfile_path` | `Option<PathBuf>`  | Cloned from config; used by `drop_privileges()` chown phase. |
-| `stdout`        | `Option<PathBuf>`  | Cloned from config; used by `drop_privileges()` chown phase. |
-| `stderr`        | `Option<PathBuf>`  | Cloned from config; used by `drop_privileges()` chown phase. |
-| `user`          | `Option<String>`   | Cloned from config; used by `drop_privileges()`.   |
-| `group`         | `Option<String>`   | Cloned from config; used by `drop_privileges()`.   |
-| `cleanup_on_drop` | `bool`           | From config; controls whether `cleanup()` runs on drop. |
-| `cleaned_up`    | `bool`             | Internal flag; prevents double cleanup.            |
+The context carries the validated `DaemonConfig` whole rather than
+mirroring each post-daemonization setting into a parallel field. So the
+pidfile, lockfile, stdout, stderr, user, group, `cleanup_on_drop`, and
+`chown_paths` values are read from `config`, not stored separately.
+
+| Field                | Type                | Semantics                                          |
+| -------------------- | ------------------- | -------------------------------------------------- |
+| `config`             | `DaemonConfig`      | The validated config, cloned in whole. Single source of truth for pidfile, lockfile, stdout/stderr, user/group, `cleanup_on_drop`, and `chown_paths`. |
+| `lockfile`           | `Option<Flock>`     | Owned lock (`nix::fcntl`); drop releases.          |
+| `notify_pipe`        | `Option<NotifyPipe>`| Write end of notification pipe; see below.         |
+| `cleaned_up`         | `bool`              | Internal flag; prevents double cleanup.            |
+| `privileges_dropped` | `bool`              | Set once `drop_privileges()` completes; gates `notify_parent()` (see R125). |
+
+**Debug output:** the manual `impl` does not print `config` verbatim.
+It renders `lockfile` as `held`/`none` and `notify_pipe` as
+`open`/`none` (never the raw fd), then flattens the relevant config
+values as pseudo-fields for readability: `pidfile`, `lockfile_path`
+(the effective lockfile), `stdout`, `stderr`, `user`, `group`, and
+`cleanup_on_drop`.
 
 **Accessors:**
 
