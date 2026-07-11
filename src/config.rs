@@ -7,7 +7,7 @@ use crate::util::paths_same;
 
 /// How the lockfile is determined. Tri-state so "not set" (derive from the
 /// pidfile) is distinguishable from an explicit opt-out.
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub(crate) enum LockfileSetting {
     /// Default: lock the pidfile itself when one is configured.
     DeriveFromPidfile,
@@ -46,7 +46,7 @@ pub(crate) enum LockfileSetting {
 /// let mut config = DaemonConfig::new();
 /// config.pidfile("/var/run/foo.pid").chdir("/tmp");
 /// ```
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub struct DaemonConfig {
     pub(crate) pidfile: Option<PathBuf>,
     pub(crate) chdir: PathBuf,
@@ -446,6 +446,16 @@ mod tests {
     #[test]
     fn new_equals_default() {
         assert_eq!(DaemonConfig::new(), DaemonConfig::default());
+    }
+
+    // Covers: R1 (C-COMMON-TRAITS: Hash consistent with Eq)
+    #[test]
+    fn equal_configs_hash_equal() {
+        let mut a = DaemonConfig::new();
+        a.pidfile("/tmp/x.pid").umask(0o022).env("K", "V");
+        let b = a.clone();
+        let set: std::collections::HashSet<DaemonConfig> = [a, b].into_iter().collect();
+        assert_eq!(set.len(), 1, "equal configs must collapse in a HashSet");
     }
 
     // Covers: R2, R20, R23

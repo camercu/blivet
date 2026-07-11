@@ -63,6 +63,8 @@ impl core::default::Default for blivet::DaemonConfig
 pub fn blivet::DaemonConfig::default() -> Self
 impl core::fmt::Debug for blivet::DaemonConfig
 pub fn blivet::DaemonConfig::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for blivet::DaemonConfig
+pub fn blivet::DaemonConfig::hash<__H: core::hash::Hasher>(&self, state: &mut __H)
 impl core::marker::StructuralPartialEq for blivet::DaemonConfig
 impl core::marker::Freeze for blivet::DaemonConfig
 impl core::marker::Send for blivet::DaemonConfig
