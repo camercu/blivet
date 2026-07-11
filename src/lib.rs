@@ -105,19 +105,11 @@
 //!
 //! # Output and the working directory
 //!
-//! Two defaults match standard daemon behavior (as in `daemonize(1)`), worth
-//! keeping in mind:
-//!
-//! - **stdout/stderr go to `/dev/null` by default.** A `println!` after
-//!   daemonizing vanishes silently. To capture output, set
-//!   [`stdout`](DaemonConfig::stdout) and/or
-//!   [`stderr`](DaemonConfig::stderr) to log file paths, or use a logging
-//!   crate that writes to a file or syslog.
-//! - **the working directory defaults to `/`.** After daemonizing, every
-//!   relative path (log files, sockets, config) resolves against `/` and
-//!   will usually fail with a confusing "permission denied" or "no such
-//!   file". Use absolute paths for all files, or set
-//!   [`chdir`](DaemonConfig::chdir) to your desired working directory.
+//! Two `daemonize(1)`-standard defaults bite the unwary: stdout/stderr go to
+//! `/dev/null` (a `println!` vanishes), and the working directory becomes `/`
+//! (relative paths resolve against `/` and usually fail). Use absolute paths;
+//! see [`stdout`](DaemonConfig::stdout) / [`stderr`](DaemonConfig::stderr) /
+//! [`chdir`](DaemonConfig::chdir) to change them.
 //!
 //! # Signals
 //!
@@ -131,81 +123,33 @@
 //!
 //! # Pidfile cleanup on signals
 //!
-//! With [`cleanup_on_drop`](DaemonConfig::cleanup_on_drop) (the default),
-//! the pidfile is removed when [`DaemonContext`] is dropped — but `Drop`
-//! **does not run** when the process is killed by a signal such as
-//! `SIGTERM`, which is how daemons are normally stopped. Without a signal
-//! handler the pidfile is left stale on disk. Two supported fixes:
-//!
-//! - [`DaemonContext::cleanup_on_term_signals`] — one call installs
-//!   async-signal-safe handlers that unlink the pidfile and re-raise.
-//!   Simplest, no extra dependency, but the process still dies mid-flight.
-//! - Run your own signal loop for graceful shutdown and let the context
-//!   drop (or call [`DaemonContext::cleanup`]) on the way out — see the
-//!   `examples/echo_server.rs` example.
+//! `Drop` **does not run** when a signal kills the process (how daemons are
+//! normally stopped), so the auto-cleanup from
+//! [`cleanup_on_drop`](DaemonConfig::cleanup_on_drop) leaves a stale pidfile.
+//! Call [`cleanup_on_term_signals`](DaemonContext::cleanup_on_term_signals)
+//! once, or run your own shutdown loop and let the context drop — see
+//! `examples/echo_server.rs`.
 //!
 //! # Exit codes
 //!
-//! [`DaemonizeError::exit_code`] maps each error to a `sysexits.h` code, but
-//! those codes only reach the shell if you use them. The idiomatic
-//! `fn main() -> Result<(), E>` prints the error via `Termination` and exits
-//! **1**, ignoring `exit_code()`. To preserve the codes, call `exit_code()`
-//! yourself:
-//!
-//! ```no_run
-//! use blivet::{daemonize, DaemonConfig, DaemonizeError};
-//!
-//! fn main() {
-//!     if let Err(e) = run() {
-//!         eprintln!("{e}");
-//!         std::process::exit(e.exit_code() as i32);
-//!     }
-//! }
-//!
-//! fn run() -> Result<(), DaemonizeError> {
-//!     let config = DaemonConfig::new();
-//!     let mut ctx = daemonize(&config)?;
-//!     // ... application init ...
-//!     // notify_parent() returns DaemonizeError, so `?` preserves the exit code.
-//!     ctx.notify_parent()?;
-//!     Ok(())
-//! }
-//! ```
-//!
-//! To report a failure from your own init code (e.g. a socket bind) to the
-//! parent with a chosen code, use
-//! [`report_error_msg`](DaemonContext::report_error_msg) or the
+//! [`DaemonizeError::exit_code`] maps each error to a `sysexits.h` code — see
+//! its docs for the full table — but `fn main() -> Result<(), E>` ignores it
+//! and exits **1**. To surface the codes, call `exit_code()` yourself. To
+//! report a failure from your own init code (e.g. a socket bind) with a chosen
+//! code, use [`report_error_msg`](DaemonContext::report_error_msg) or the
 //! [`DaemonizeError::Application`] variant.
 //!
 //! # Split-phase design
 //!
-//! Many daemons need root privileges during startup — binding to a
-//! privileged port, writing a pidfile to `/var/run`, opening log files
-//! owned by root — but should run as an unprivileged user afterward.
-//!
-//! Rather than coupling privilege dropping into the daemonization call
-//! (which would force callers to choose between "drop before init" and
-//! "never drop at all"), `daemonize()` returns a [`DaemonContext`] while
-//! the process is still running as the original user.  The caller
-//! performs any privileged work, then explicitly calls
-//! [`drop_privileges()`](DaemonContext::drop_privileges) when ready.
-//! Finally, [`notify_parent()`](DaemonContext::notify_parent) signals
-//! the original parent that the daemon is up, allowing the parent to
-//! exit with a meaningful status.
-//!
-//! This split gives full control over ordering:
-//!
-//! 1. **Privileged init** — bind sockets, open devices, call
-//!    [`chroot`](nix::unistd::chroot), set
-//!    [resource limits](nix::sys::resource::setrlimit), or acquire any
-//!    other resources that require elevated permissions.
-//! 2. **Privilege drop** — `drop_privileges()` first hands the pidfile,
-//!    lockfile, and log files to the target user/group while still root
-//!    (opt out with [`chown_paths`](DaemonConfig::chown_paths)), then
-//!    calls `initgroups`, `setgid`, and `setuid`.  After this point the
-//!    process runs as the configured unprivileged user.
-//! 3. **Readiness signal** — `notify_parent()` writes a success byte to
-//!    the notification pipe; the parent reads it and exits 0.
+//! Many daemons need root during startup — bind a privileged port, write a
+//! pidfile to `/var/run`, open root-owned logs — but should run unprivileged
+//! afterward. Rather than fold privilege dropping into the daemonize call,
+//! `daemonize()` returns a [`DaemonContext`] still running as root; you do the
+//! privileged work, then call
+//! [`drop_privileges()`](DaemonContext::drop_privileges) (which first chowns
+//! the pidfile/lockfile/logs to the target user — opt out with
+//! [`chown_paths`](DaemonConfig::chown_paths)), then
+//! [`notify_parent()`](DaemonContext::notify_parent). Full ordering control:
 //!
 //! ```no_run
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
