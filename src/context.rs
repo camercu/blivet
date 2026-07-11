@@ -1083,6 +1083,12 @@ mod tests {
             matches!(result, Err(DaemonizeError::ChownError(_))),
             "drop_privileges must chown configured paths before switching, got {result:?}"
         );
+        // A chown failure aborts before setgid/setuid: the caller is still
+        // privileged, so readiness must not be signalable.
+        assert!(
+            ctx.privileges_pending(),
+            "chown failure must leave privileges undropped"
+        );
     }
 
     #[test]
