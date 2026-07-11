@@ -6,6 +6,7 @@ rust-version = "1.85"
 description = "A correct, full-featured Unix daemon library and CLI for Rust"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/camercu/blivet"
+documentation = "https://docs.rs/blivet"
 readme = "README.md"
 keywords = ["daemon", "daemonize", "fork", "unix", "linux"]
 categories = ["os::unix-apis"]
