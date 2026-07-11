@@ -271,6 +271,10 @@ impl DaemonContext {
 
         for path in paths {
             if path.exists() {
+                // chown(2), not lchown: follows symlinks to stay consistent
+                // with how these files were opened (also symlink-following), so
+                // a symlinked log path chowns the real target the daemon writes.
+                // Safe only for paths in trusted dirs — see drop_privileges_unchecked.
                 nix::unistd::chown(path, owner, group)
                     .map_err(|e| DaemonizeError::ChownError(format!("{}: {e}", path.display())))?;
             }
@@ -391,6 +395,12 @@ impl DaemonContext {
     /// [`DaemonConfig::chown_paths`](crate::DaemonConfig::chown_paths). A
     /// chown failure aborts the drop before any `setgid`/`setuid`, so the
     /// caller can remediate while still privileged.
+    ///
+    /// The chown, like the earlier open of these files, follows symlinks: if a
+    /// configured path is a symlink, its target is chowned while privileged.
+    /// Point the pidfile, lockfile, and log paths only at directories not
+    /// writable by untrusted users, so a planted symlink cannot redirect the
+    /// chown onto an arbitrary file.
     ///
     /// After switching to a user, sets `USER`, `HOME`, `LOGNAME` environment
     /// variables.

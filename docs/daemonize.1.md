@@ -227,6 +227,12 @@ removing the PID file on exit. A program that uses the **blivet** library
 directly does not have this limitation, as it can install its own cleanup
 handler before any **exec**(3).
 
+When **-u** or **-g** is given, the ownership transfer (step 9) uses
+**chown**(2), which follows symlinks: a symlinked PID file, lock file, or
+output path has its target chowned while still privileged. Point these paths
+only at directories not writable by untrusted users, so a planted symlink
+cannot redirect the chown onto an arbitrary file.
+
 # SEE ALSO
 
 **daemon**(3), **fork**(2), **setsid**(2), **flock**(2), **sysexits**(3)

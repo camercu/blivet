@@ -271,6 +271,13 @@ removing the PID file on exit.
 A program that uses the \f[B]blivet\f[R] library directly does not have
 this limitation, as it can install its own cleanup handler before any
 \f[B]exec\f[R](3).
+.PP
+When \f[B]\-u\f[R] or \f[B]\-g\f[R] is given, the ownership transfer
+(step 9) uses \f[B]chown\f[R](2), which follows symlinks: a symlinked
+PID file, lock file, or output path has its target chowned while still
+privileged.
+Point these paths only at directories not writable by untrusted users,
+so a planted symlink cannot redirect the chown onto an arbitrary file.
 .SH SEE ALSO
 \f[B]daemon\f[R](3), \f[B]fork\f[R](2), \f[B]setsid\f[R](2),
 \f[B]flock\f[R](2), \f[B]sysexits\f[R](3)
