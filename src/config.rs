@@ -62,6 +62,7 @@ pub struct DaemonConfig {
     pub(crate) foreground: bool,
     pub(crate) close_fds: bool,
     pub(crate) cleanup_on_drop: bool,
+    pub(crate) chown_paths: bool,
     pub(crate) env: Vec<(String, String)>,
 }
 
@@ -80,6 +81,7 @@ impl Default for DaemonConfig {
             foreground: false,
             close_fds: true,
             cleanup_on_drop: true,
+            chown_paths: true,
             env: Vec::new(),
         }
     }
@@ -251,6 +253,18 @@ impl DaemonConfig {
     /// [`DaemonContext::set_cleanup_on_drop`](crate::DaemonContext::set_cleanup_on_drop).
     pub fn cleanup_on_drop(&mut self, cleanup: bool) -> &mut Self {
         self.cleanup_on_drop = cleanup;
+        self
+    }
+
+    /// Sets whether [`drop_privileges`](crate::DaemonContext::drop_privileges)
+    /// chowns the configured path-based resources (pidfile, lockfile, stdout,
+    /// stderr) to the target user/group before switching. Default: `true`.
+    ///
+    /// Disable to keep those files owned by the original (privileged) user —
+    /// e.g. so a compromised daemon cannot rewrite its own pidfile or truncate
+    /// its logs — or to manage ownership yourself with custom users/groups.
+    pub fn chown_paths(&mut self, chown: bool) -> &mut Self {
+        self.chown_paths = chown;
         self
     }
 
@@ -473,7 +487,15 @@ mod tests {
         assert_eq!(config.group, None);
         assert!(!config.foreground);
         assert!(config.close_fds);
+        assert!(config.chown_paths);
         assert!(config.env.is_empty());
+    }
+
+    #[test]
+    fn chown_paths_builder_disables() {
+        let mut config = DaemonConfig::new();
+        config.chown_paths(false);
+        assert!(!config.chown_paths);
     }
 
     // Covers: R131
