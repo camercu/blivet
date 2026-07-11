@@ -76,7 +76,7 @@ reads these sites sees every `unsafe` in the crate.
 ### DaemonConfig
 
 `DaemonConfig` is a plain data struct with `&mut self` builder methods.
-It derives `Default`, `Debug`, `Clone`, `Eq`, and `PartialEq`.
+It derives `Default`, `Debug`, `Clone`, `Eq`, `PartialEq`, and `Hash`.
 `DaemonConfig::new()` returns the same value as `Default::default()`.
 
 All fields are private; callers use builder methods.
@@ -255,6 +255,9 @@ are lowercase with no trailing punctuation.
 | `OutputFileError`  | stdout/stderr file cannot be opened/dup2'd              |
 | `ChownError`       | chown of pidfile/lockfile/output file failed             |
 | `ExecFailed`       | CLI-only: exec of target program failed (other than `ENOENT`/`EACCES`) |
+| `NotifyFailed`     | Writing the readiness byte to the notification pipe failed |
+| `PrivilegesNotDropped` | User/group configured but `drop_privileges()` never called before `notify_parent()` |
+| `Application`      | Caller-reported failure during the privileged init window (via `application()`/`report_error`) |
 
 `ProgramNotFound` and `ExecFailed` are produced only by the CLI, never
 by the library. They are in the shared enum so the CLI can use the
@@ -714,9 +717,9 @@ When `close_fds` is false, this step is skipped entirely.
 
 ## CLI
 
-Binary name: `daemonize`. Version from `Cargo.toml` via
-`crate_version!()`. Description: "Daemonize a program". Clap defaults
-for `--help` and `--version` are acceptable.
+Binary name: `daemonize`. Version from `Cargo.toml` via clap's
+`version` attribute. Description: "Run a program as a Unix daemon".
+Clap defaults for `--help` and `--version` are acceptable.
 
 ### Flags
 
@@ -854,7 +857,9 @@ exit_code()` returns these values.
 | `OutputFileError`        | 73        | `EX_CANTCREAT`        |
 | `ChownError`             | 73        | `EX_CANTCREAT`        |
 | `ExecFailed`             | 71        | `EX_OSERR`            |
+| `NotifyFailed`           | 71        | `EX_OSERR`            |
 | `PrivilegesNotDropped`   | 70        | `EX_SOFTWARE`         |
+| `Application`            | caller's `code`; 0 remapped to 70 | (caller's choice) |
 
 Pre-daemonization errors: CLI prints message to stderr, exits per
 table. Post-daemonization errors: reported to the parent via the
