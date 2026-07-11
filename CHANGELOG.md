@@ -1,3 +1,5 @@
+## [0.12.0](https://github.com/camercu/blivet/compare/v0.11.0...v0.12.0) (2026-07-11)
+
 ## 0.11.0 (2026-07-10)
 
 * docs: add 1.0 release checklist ([9c083fe](https://github.com/camercu/blivet/commit/9c083fe))
