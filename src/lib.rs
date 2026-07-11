@@ -87,7 +87,6 @@
 //! ```text
 //! [single-threaded required]
 //!   daemonize() / daemonize_unchecked() <- forks here
-//!   chown_paths()                        <- still single-threaded
 //!   drop_privileges()                    <- last unsafe step: setenv (USER/HOME/LOGNAME)
 //! [now safe to spawn threads / start tokio / accept connections]
 //!   notify_parent()                      <- thread-safe; writes one byte to the pipe
@@ -189,7 +188,6 @@
 //! "never drop at all"), `daemonize()` returns a [`DaemonContext`] while
 //! the process is still running as the original user.  The caller
 //! performs any privileged work, then explicitly calls
-//! [`chown_paths()`](DaemonContext::chown_paths) and
 //! [`drop_privileges()`](DaemonContext::drop_privileges) when ready.
 //! Finally, [`notify_parent()`](DaemonContext::notify_parent) signals
 //! the original parent that the daemon is up, allowing the parent to
@@ -201,12 +199,12 @@
 //!    [`chroot`](nix::unistd::chroot), set
 //!    [resource limits](nix::sys::resource::setrlimit), or acquire any
 //!    other resources that require elevated permissions.
-//! 2. **Ownership transfer** — `chown_paths()` hands pidfile, lockfile,
-//!    and log files to the target user/group while still root.
-//! 3. **Privilege drop** — `drop_privileges()` calls `initgroups`,
-//!    `setgid`, and `setuid`.  After this point the process runs as the
-//!    configured unprivileged user.
-//! 4. **Readiness signal** — `notify_parent()` writes a success byte to
+//! 2. **Privilege drop** — `drop_privileges()` first hands the pidfile,
+//!    lockfile, and log files to the target user/group while still root
+//!    (opt out with [`chown_paths`](DaemonConfig::chown_paths)), then
+//!    calls `initgroups`, `setgid`, and `setuid`.  After this point the
+//!    process runs as the configured unprivileged user.
+//! 3. **Readiness signal** — `notify_parent()` writes a success byte to
 //!    the notification pipe; the parent reads it and exits 0.
 //!
 //! ```no_run
@@ -222,11 +220,10 @@
 //! //    bind sockets, chroot, set resource limits, etc.
 //! let _listener = std::net::TcpListener::bind("0.0.0.0:80")?;
 //!
-//! // 2–3. Transfer file ownership, then drop to unprivileged user
-//! ctx.chown_paths()?;
+//! // 2. Drop to unprivileged user (chowns pidfile/logs first, while still root)
 //! ctx.drop_privileges()?;
 //!
-//! // 4. Tell the parent we're ready
+//! // 3. Tell the parent we're ready
 //! ctx.notify_parent()?;
 //!
 //! // Daemon continues as "nobody" with the socket still open

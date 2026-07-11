@@ -50,8 +50,7 @@ use crate::notify::NotifyPipe;
 /// # let config = blivet::DaemonConfig::new();
 /// let mut ctx = blivet::daemonize(&config)?;
 /// // ... privileged work (e.g., bind port 80) ...
-/// ctx.chown_paths()?;       // transfer file ownership while still root
-/// ctx.drop_privileges()?;   // setgid + setuid
+/// ctx.drop_privileges()?;   // chown paths, then setgid + setuid
 /// ctx.notify_parent()?;     // signal readiness to parent
 /// # Ok(())
 /// # }
@@ -242,22 +241,16 @@ impl DaemonContext {
         })
     }
 
-    /// Changes ownership of all configured path-based resources to the target
-    /// user/group.
+    /// Changes ownership of all configured path-based resources (pidfile,
+    /// lockfile, stdout, stderr) to the target user/group.
     ///
-    /// Chowns pidfile, lockfile, stdout, and stderr files when they are
-    /// configured. Must be called while still privileged (before
-    /// [`drop_privileges`](DaemonContext::drop_privileges)). No-op if neither
-    /// user nor group is configured.
-    ///
-    /// # Errors
-    ///
-    /// Returns `DaemonizeError::ChownError` if `chown()` fails on any path.
-    /// Returns `DaemonizeError::UserNotFound` or `DaemonizeError::GroupNotFound`
-    /// if the configured user/group cannot be resolved. On error, paths
-    /// already processed remain chowned; the operation is idempotent, so
-    /// retrying after fixing the cause is safe.
-    pub fn chown_paths(&mut self) -> Result<(), DaemonizeError> {
+    /// Called by [`drop_privileges_unchecked`](Self::drop_privileges_unchecked)
+    /// before switching, while still privileged, unless disabled via
+    /// [`DaemonConfig::chown_paths`](crate::DaemonConfig::chown_paths). No-op
+    /// if neither user nor group is configured. On error, paths already
+    /// processed remain chowned; the operation is idempotent, so retrying
+    /// after fixing the cause is safe.
+    fn chown_paths(&mut self) -> Result<(), DaemonizeError> {
         if self.config.user.is_none() && self.config.group.is_none() {
             return Ok(());
         }
@@ -288,6 +281,11 @@ impl DaemonContext {
 
     /// Drops privileges by switching user and/or group, verifying the process
     /// is single-threaded first.
+    ///
+    /// Before switching — while still privileged — chowns the configured
+    /// path-based resources (pidfile, lockfile, stdout, stderr) to the target
+    /// user/group, unless disabled via
+    /// [`DaemonConfig::chown_paths`](crate::DaemonConfig::chown_paths).
     ///
     /// When a user is configured, the switch sets `USER`/`HOME`/`LOGNAME` via
     /// `setenv`, which is not thread-safe. So — like [`daemonize`](crate::daemonize)
@@ -387,6 +385,13 @@ impl DaemonContext {
     /// - User and group: `initgroups` + `setgid(group_gid)` + `setuid(uid)`.
     /// - Group only: `setgid(group_gid)`.
     ///
+    /// Before switching, chowns the configured path-based resources (pidfile,
+    /// lockfile, stdout, stderr) to the target user/group — while the process
+    /// is still privileged — unless disabled via
+    /// [`DaemonConfig::chown_paths`](crate::DaemonConfig::chown_paths). A
+    /// chown failure aborts the drop before any `setgid`/`setuid`, so the
+    /// caller can remediate while still privileged.
+    ///
     /// After switching to a user, sets `USER`, `HOME`, `LOGNAME` environment
     /// variables.
     ///
@@ -399,6 +404,9 @@ impl DaemonContext {
     ///
     /// # Errors
     ///
+    /// Returns `DaemonizeError::ChownError` if chowning a configured path
+    /// fails; paths already processed remain chowned, and the chown is
+    /// idempotent, so retrying after fixing the cause is safe.
     /// Returns `DaemonizeError::UserNotFound` if the user cannot be resolved.
     /// Returns `DaemonizeError::GroupNotFound` if the group cannot be resolved.
     /// Returns `DaemonizeError::PermissionDenied` if `initgroups`, `setgid`,

@@ -95,6 +95,7 @@ All fields are private; callers use builder methods.
 | `foreground` | `bool`                  | `false`              | `.foreground(bool)`  | `bool`                     | Setter      |
 | `close_fds`  | `bool`                  | `true`               | `.close_fds(bool)`   | `bool`                     | Setter      |
 | `cleanup_on_drop` | `bool`             | `true`               | `.cleanup_on_drop(bool)` | `bool`                 | Setter      |
+| `chown_paths` | `bool`                 | `true`               | `.chown_paths(bool)` | `bool`                     | Setter      |
 | `env`        | `Vec<(String, String)>` | `vec![]`             | `.env(key, value)`   | `impl Into<String>` (both) | Accumulator |
 
 All builder methods except `.env()` are setters: each call replaces the
@@ -127,8 +128,7 @@ config.pidfile("/var/run/foo.pid").user("nobody").group("nogroup");
 
 let mut ctx = daemonize(&config)?;
 // privileged work here (e.g., bind port 80)
-ctx.chown_paths()?;                     // chown pidfile/lockfile/logs to target user
-ctx.drop_privileges()?;                 // setgid + setuid
+ctx.drop_privileges()?;                 // chown pidfile/lockfile/logs, then setgid + setuid
 ctx.notify_parent()?;
 ```
 
@@ -143,10 +143,10 @@ derives `Debug` (Flock formatted as present/absent). Do not derive
 | --------------- | ------------------ | -------------------------------------------------- |
 | `lockfile`      | `Option<Flock>`    | Owned lock (`nix::fcntl`); drop releases.          |
 | `notify_pipe`   | `Option<OwnedFd>`  | Write end of notification pipe; see below.         |
-| `pidfile`       | `Option<PathBuf>`  | Cloned from config; used by `chown_paths()` and `cleanup()`. |
-| `lockfile_path` | `Option<PathBuf>`  | Cloned from config; used by `chown_paths()`.       |
-| `stdout`        | `Option<PathBuf>`  | Cloned from config; used by `chown_paths()`.       |
-| `stderr`        | `Option<PathBuf>`  | Cloned from config; used by `chown_paths()`.       |
+| `pidfile`       | `Option<PathBuf>`  | Cloned from config; used by `drop_privileges()` chown phase and `cleanup()`. |
+| `lockfile_path` | `Option<PathBuf>`  | Cloned from config; used by `drop_privileges()` chown phase. |
+| `stdout`        | `Option<PathBuf>`  | Cloned from config; used by `drop_privileges()` chown phase. |
+| `stderr`        | `Option<PathBuf>`  | Cloned from config; used by `drop_privileges()` chown phase. |
 | `user`          | `Option<String>`   | Cloned from config; used by `drop_privileges()`.   |
 | `group`         | `Option<String>`   | Cloned from config; used by `drop_privileges()`.   |
 | `cleanup_on_drop` | `bool`           | From config; controls whether `cleanup()` runs on drop. |
@@ -171,19 +171,23 @@ process is killed by a signal — callers must install a signal handler
 to ensure `cleanup()` runs (either explicitly or by dropping
 `DaemonContext` at main-loop exit).
 
-**Privilege methods:**
+**Privilege method:**
 
-`chown_paths(&mut self) -> Result<(), DaemonizeError>` changes
-ownership of pidfile, lockfile, stdout, and stderr files to the
-resolved target user/group. Skips files that are not configured. Must
-be called while still privileged (before `drop_privileges()`). No-op
-if neither user nor group is configured. User/group resolution uses
-the same string-parsing strategy as `drop_privileges()` (see below).
-On error, paths already processed remain chowned; the operation is
-idempotent, so retrying after fixing the cause is safe.
+`drop_privileges(&mut self) -> Result<(), DaemonizeError>` first chowns
+the configured paths (unless disabled, see below), then performs
+user/group switching.
 
-`drop_privileges(&mut self) -> Result<(), DaemonizeError>` performs
-user/group switching. Resolution: if the string parses as a `u32`,
+The chown phase changes ownership of pidfile, lockfile, stdout, and
+stderr files to the resolved target user/group, while still privileged.
+Skips files that are not configured. No-op if neither user nor group is
+configured. Disabled by `config.chown_paths(false)` — for hardening
+(keep files owned by the original privileged user) or custom ownership.
+On error, paths already processed remain chowned; the chown is
+idempotent, so retrying after fixing the cause is safe. A chown failure
+aborts the drop before any `setgid`/`setuid`, so the caller is still
+privileged and can remediate.
+
+The switch phase resolves each spec — if the string parses as a `u32`,
 treat it as a numeric UID/GID; otherwise resolve via `getpwnam()`/
 `getgrnam()`. Four combinations:
 
@@ -568,8 +572,8 @@ open `/dev/null` or `dup2` to it panics.
 Step 12 opens configured stdout/stderr files and redirects the
 corresponding fds. Since user switching is now the caller's
 responsibility (via `drop_privileges()`), files are created as the
-current user (typically root). Use `chown_paths()` before
-`drop_privileges()` to transfer ownership to the target user.
+current user (typically root); `drop_privileges()` chowns them to the
+target user before switching.
 
 Open with `O_WRONLY | O_CREAT` and `O_TRUNC` or `O_APPEND` per the
 append flag. Mode 0644 (subject to umask from step 4). `dup2` to the
@@ -587,8 +591,8 @@ returns `OutputFileError`.
 > Opening all three fds as `/dev/null` in step 6, then reopening
 > configured files in step 12, ensures output is captured from the
 > start. Since user switching is now the caller's responsibility,
-> output files are created as the current user. Use `chown_paths()`
-> to transfer ownership before `drop_privileges()`.
+> output files are created as the current user; `drop_privileges()`
+> chowns them to the target user before switching.
 
 ### Pidfile mechanics
 
@@ -669,14 +673,16 @@ returns `GroupNotFound`. `initgroups`/`setgid`/`setuid` failure returns
 > `getpwnam()` only returns the primary GID; `initgroups()` consults
 > the group database for supplementary groups.
 
-### Path ownership (DaemonContext::chown_paths)
+### Path ownership (drop_privileges chown phase)
 
-`chown_paths()` changes ownership of all configured path-based
-resources (pidfile, lockfile, stdout, stderr) to the resolved target
-user/group. Must be called while still privileged. Resolves user/group
-using the same string-parsing strategy as `drop_privileges()`.
+Before switching user/group, `drop_privileges()` changes ownership of
+all configured path-based resources (pidfile, lockfile, stdout, stderr)
+to the resolved target user/group, while still privileged. Resolves
+user/group using the same string-parsing strategy as the switch phase.
+Disabled by `config.chown_paths(false)`.
 
-`chown()` failure returns `ChownError`.
+`chown()` failure returns `ChownError` and aborts the drop before any
+`setgid`/`setuid`.
 
 ### Mode and umask interaction
 
@@ -804,8 +810,8 @@ This is a CLI-only convenience; the library requires explicit
 
 The CLI calls `unsafe { daemonize_unchecked(&config) }`, then:
 
-1. If user or group is configured: calls `ctx.chown_paths()` then
-   `ctx.drop_privileges()`.
+1. If user or group is configured: calls `ctx.drop_privileges()`
+   (which chowns the configured paths first).
 2. Clears `CLOEXEC` on the lockfile fd (so the lock survives exec).
 3. Execs via `execvp`. argv[0] is the (possibly canonicalized) program
    path; subsequent elements are trailing arguments in order.
@@ -964,8 +970,8 @@ Spawn CLI binary, inspect /proc and files. Require Linux, /proc:
 - **Group switching (root-only, skip in CI):** assert GID with
   independent group.
 - **Output file ownership (root-only, skip in CI):** with `-u`,
-  assert stdout/stderr files are owned by the target user (via
-  `chown_paths()`).
+  assert stdout/stderr files are owned by the target user (chowned
+  by `drop_privileges()`).
 - **Foreground mode:** with `-f`, assert daemon runs in same
   process group; no fork occurs.
 - **Error exit codes:** one test per exit code table row.
@@ -984,8 +990,8 @@ Spawn CLI binary, inspect /proc and files. Require Linux, /proc:
 
 Module-level doc in `lib.rs` with two usage examples: (1) simple
 builder → `daemonize()` → `notify_parent()` → daemon
-continues; (2) split-phase with `chown_paths()` → `drop_privileges()`
-→ `notify_parent()`. Use `?` (not `unwrap` or `try!`); hidden
+continues; (2) split-phase with `drop_privileges()` →
+`notify_parent()`. Use `?` (not `unwrap` or `try!`); hidden
 `fn main()` wrapper.
 
 ### Public item docs
@@ -998,10 +1004,11 @@ continues; (2) split-phase with `chown_paths()` → `drop_privileges()`
   behavior.
 - `validate()`: `# Errors`.
 - `lockfile_fd()`: CLOEXEC clearing use case, lifetime semantics.
-- `chown_paths()`: must be called while privileged, no-op without
-  user/group.
 - `drop_privileges()`: numeric ID resolution, four user/group
-  combinations, env var side effects. Document recommended call order.
+  combinations, env var side effects, the chown phase and its
+  `chown_paths(false)` opt-out. Document recommended call order.
+- `DaemonConfig::chown_paths()`: default `true`; disable to keep files
+  owned by the original privileged user or manage ownership yourself.
 - `notify_parent()`: parent exit behavior, Drop semantics.
 - `report_error()`: writes error protocol and calls `_exit()`.
 - All builder methods: what the field controls, default value.
@@ -1068,7 +1075,7 @@ verification points.
   In foreground mode, stdout/stderr are inherited when not configured.
 - R9. Configured stdout/stderr files contain expected output.
 - R10. Configured output files are owned by the target user when `-u`
-  is used (via `chown_paths()`).
+  is used (chowned by `drop_privileges()`).
 - R11. Files are truncated when append is off.
 - R12. Files are appended when append is on.
 - R13. Append flag applies uniformly to both stdout and stderr.
@@ -1129,16 +1136,20 @@ verification points.
 - R61. `drop_privileges()` with group only: sets GID, no setuid.
 - R62. `drop_privileges()` with neither: no-op.
 - R63. Numeric string user/group (e.g. "1000") resolved as UID/GID.
-- R64. `chown_paths()` chowns pidfile, lockfile, stdout, stderr to
-  target user/group.
-- R65. `chown_paths()` is a no-op when neither user nor group is set.
+- R64. `drop_privileges()` chowns pidfile, lockfile, stdout, stderr to
+  target user/group before switching.
+- R65. The chown phase is a no-op when neither user nor group is set.
+- R65a. `config.chown_paths(false)` disables the chown phase; the
+  switch still happens.
+- R65b. A chown failure aborts `drop_privileges()` before any
+  `setgid`/`setuid` (caller stays privileged).
 - R66. Foreground mode: daemon runs in current process (no fork).
 - R67. Foreground mode: `notify_parent()` is a no-op.
 - R68. Foreground mode: all non-fork steps still execute.
 - R69. `close_fds` false: inherited fds are not closed.
 - R70. Group switching sets GID independently from user's primary GID.
-- R71. CLI calls `chown_paths()` then `drop_privileges()` when user
-  or group is configured.
+- R71. CLI calls `drop_privileges()` (which chowns configured paths
+  first) when user or group is configured.
 - R72. `cleanup()` removes pidfile from disk.
 - R73. `cleanup()` is idempotent (second call is no-op).
 - R74. `cleanup()` ignores errors (best-effort).
@@ -1209,10 +1220,10 @@ verification points.
 - R121. Foreground mode skips steps 1–3 (pipe, forks, setsid) and
   leaves stdout/stderr inherited in step 6.
 - R122. `close_fds` false skips step 13 (fd closing).
-- R123. `chown_paths()` resolves user/group using same string-parsing
-  strategy as `drop_privileges()`.
-- R124. CLI calls `chown_paths()` then `drop_privileges()` when
-  user or group is configured, between `daemonize()` and exec.
+- R123. The `drop_privileges()` chown phase resolves user/group using
+  the same string-parsing strategy as the switch phase.
+- R124. CLI calls `drop_privileges()` (chowning configured paths first)
+  when user or group is configured, between `daemonize()` and exec.
 - R125. When a user/group is configured but `drop_privileges()` was
   never called, `notify_parent()` returns `PrivilegesNotDropped`
   (exit 70) instead of signaling readiness — so a daemon can never

@@ -208,11 +208,8 @@ fn main() -> ExitCode {
         }
     };
 
-    // Drop privileges if user or group is configured
+    // Drop privileges (chowns configured paths first) if user or group is set
     if args.user.is_some() || args.group.is_some() {
-        if let Err(e) = ctx.chown_paths() {
-            ctx.report_error(&e);
-        }
         // SAFETY: single-threaded here (no threads spawned before exec); use
         // the unchecked form so the CLI stays portable across all Unix targets.
         #[allow(unsafe_code)]

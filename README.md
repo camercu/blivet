@@ -56,7 +56,8 @@ launcher does *not* return; it blocks on a pipe to the grandchild, waiting for
 that daemon to report in. In the daemon you then:
 
 1. run fallible init -- bind sockets, open files, connect to dependencies;
-2. `chown_paths()`, then `drop_privileges()`, to drop to an unprivileged user;
+2. `drop_privileges()` to drop to an unprivileged user (it first chowns the
+   pidfile/lockfile/log files to that user, while still root);
 3. call `notify_parent()`, which writes one readiness byte down the pipe.
 
 ```text
@@ -127,8 +128,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Still root here -- bind a privileged port, chroot, set rlimits…
     // let listener = TcpListener::bind("0.0.0.0:80")?;
 
-    ctx.chown_paths()?;     // transfer file ownership to the target user
-    ctx.drop_privileges()?; // then switch user/group
+    ctx.drop_privileges()?; // chown pidfile/logs to target user, then switch
     ctx.notify_parent()?;
     // now running as www-data…
     Ok(())
@@ -187,7 +187,8 @@ Full reference is on [docs.rs](https://docs.rs/blivet); this is the shape of it.
 **`DaemonConfig`** -- a builder of infallible `&mut self` setters; validation is
 deferred to `validate()`, which `daemonize()` runs for you. Settings: `pidfile`,
 `lockfile`/`no_lockfile`, `stdout`/`stderr` (+ `append`), `chdir`, `umask`,
-`user`/`group`, `foreground`, `close_fds`, `cleanup_on_drop`, and `env`.
+`user`/`group`, `foreground`, `close_fds`, `cleanup_on_drop`, `chown_paths`,
+and `env`.
 Defaults worth knowing: working directory `/`, stdout/stderr `/dev/null`,
 `close_fds` and `cleanup_on_drop` both `true`, and a configured pidfile doubles
 as the lockfile -- a second instance fails with `LockConflict` (exit 69) rather
@@ -196,9 +197,8 @@ or call `no_lockfile()` to write the pidfile unlocked.
 
 **`DaemonContext`** -- returned by a successful `daemonize()`; owns the lockfile
 and notification pipe. The methods you reach for most: `notify_parent()`,
-`chown_paths()` / `drop_privileges()`, `cleanup()` /
-`cleanup_on_term_signals()`, and `report_error()` / `report_error_msg()` /
-`notify_parent_or_report()`.
+`drop_privileges()`, `cleanup()` / `cleanup_on_term_signals()`, and
+`report_error()` / `report_error_msg()` / `notify_parent_or_report()`.
 
 ### Errors & exit codes
 

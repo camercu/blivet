@@ -40,6 +40,7 @@ pub struct blivet::DaemonConfig
 impl blivet::DaemonConfig
 pub fn blivet::DaemonConfig::append(&mut self, append: bool) -> &mut Self
 pub fn blivet::DaemonConfig::chdir(&mut self, path: impl core::convert::Into<std::path::PathBuf>) -> &mut Self
+pub fn blivet::DaemonConfig::chown_paths(&mut self, chown: bool) -> &mut Self
 pub fn blivet::DaemonConfig::cleanup_on_drop(&mut self, cleanup: bool) -> &mut Self
 pub fn blivet::DaemonConfig::close_fds(&mut self, close_fds: bool) -> &mut Self
 pub fn blivet::DaemonConfig::env(&mut self, key: impl core::convert::Into<alloc::string::String>, value: impl core::convert::Into<alloc::string::String>) -> &mut Self
@@ -75,7 +76,6 @@ impl core::panic::unwind_safe::RefUnwindSafe for blivet::DaemonConfig
 impl core::panic::unwind_safe::UnwindSafe for blivet::DaemonConfig
 #[non_exhaustive] pub struct blivet::DaemonContext
 impl blivet::DaemonContext
-pub fn blivet::DaemonContext::chown_paths(&mut self) -> core::result::Result<(), blivet::DaemonizeError>
 pub fn blivet::DaemonContext::cleanup(&mut self)
 pub fn blivet::DaemonContext::cleanup_on_signals(&self, signals: &[i32]) -> core::result::Result<(), blivet::DaemonizeError>
 pub fn blivet::DaemonContext::cleanup_on_term_signals(&self) -> core::result::Result<(), blivet::DaemonizeError>

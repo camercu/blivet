@@ -3,7 +3,7 @@
 //!
 //! A spec is the raw `String` a caller configures via
 //! [`DaemonConfig::user`](crate::DaemonConfig::user) /
-//! [`group`](crate::DaemonConfig::group). Both `chown_paths` and
+//! [`group`](crate::DaemonConfig::group). Both the chown and switch phases of
 //! `drop_privileges` need it resolved, so the parsing and `getpwnam`/`getgrnam`
 //! lookups live here once rather than at each call site.
 
