@@ -1070,7 +1070,7 @@ mod tests {
             let mut buf = vec![0 as libc::gid_t; n as usize];
             let n = libc::getgroups(n, buf.as_mut_ptr());
             assert!(n >= 0, "getgroups failed");
-            buf[..n as usize].iter().map(|&g| g as u32).collect()
+            buf[..n as usize].to_vec()
         };
         let egid = nix::unistd::getegid().as_raw();
         (1..).find(|g| !gids.contains(g) && *g != egid).unwrap()
