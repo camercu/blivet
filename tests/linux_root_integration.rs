@@ -531,6 +531,105 @@ fn user_and_group_switch_sets_independent_gid() {
     kill_process(pid);
 }
 
+// Covers: R60, R101
+//
+// The user+group case must seed the supplementary group set from the *user's*
+// primary GID via `initgroups(user, primary_gid)`, independently of the explicit
+// `-g` group that becomes the effective GID.
+// `user_and_group_switch_sets_independent_gid` only checks the effective GID, so
+// a bug seeding `initgroups` with the explicit group's GID instead of the user's
+// primary GID would pass unnoticed. This asserts the daemon's group set still
+// contains testuser's primary GID even when the effective GID is testgroup.
+#[test]
+#[ignore]
+fn user_and_group_switch_seeds_supplementary_from_user() {
+    if !is_root_on_linux() {
+        eprintln!("skipping: requires root on Linux");
+        return;
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    let pidfile = dir.path().join("test.pid");
+    let groups_file = dir.path().join("groups.txt");
+
+    // The switched-to user must be able to write the groups file.
+    std::fs::set_permissions(
+        dir.path(),
+        std::os::unix::fs::PermissionsExt::from_mode(0o777),
+    )
+    .unwrap();
+
+    // testuser's primary GID must survive as a supplementary group even though
+    // the effective GID is overridden to testgroup.
+    let primary_gid = String::from_utf8_lossy(
+        &Command::new("id")
+            .args(["-g", "testuser"])
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .trim()
+    .to_string();
+
+    // testgroup's GID becomes the effective GID; poll on it since it is always
+    // present in `id -G` once the daemon has switched.
+    let testgroup_line = Command::new("getent")
+        .args(["group", "testgroup"])
+        .output()
+        .unwrap();
+    let testgroup_gid = String::from_utf8_lossy(&testgroup_line.stdout)
+        .trim()
+        .split(':')
+        .nth(2)
+        .unwrap()
+        .to_string();
+
+    // Guard: the test is only discriminating if the two GIDs differ. If the
+    // container ever gives testuser a primary group equal to testgroup, this
+    // assertion would be vacuous — fail loudly instead.
+    assert_ne!(
+        primary_gid, testgroup_gid,
+        "test setup invalid: testuser's primary GID must differ from testgroup's"
+    );
+
+    let output = daemonize_cmd()
+        .args([
+            "-p",
+            pidfile.to_str().unwrap(),
+            "-u",
+            "testuser",
+            "-g",
+            "testgroup",
+            "-o",
+            groups_file.to_str().unwrap(),
+            "--",
+            "sh",
+            "-c",
+            "id -G; sleep 5",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "user+group switch should succeed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let pid = wait_for_pidfile(&pidfile).expect("pidfile should appear");
+    let content = wait_for_file_content(&groups_file, &testgroup_gid);
+    let groups: Vec<&str> = content.split_whitespace().collect();
+
+    assert!(
+        groups.contains(&primary_gid.as_str()),
+        "daemon supplementary groups must include testuser's primary GID \
+         {primary_gid} (initgroups must seed from the user's primary GID, not \
+         the explicit -g group {testgroup_gid}); got: {content}"
+    );
+
+    kill_process(pid);
+}
+
 // Covers: R51
 #[test]
 #[ignore]
