@@ -217,6 +217,11 @@ impl DaemonContext {
     ///
     /// No-op if no pidfile is configured or `signals` is empty.
     ///
+    /// Call this once. Each call leaks a small, bounded copy of the pidfile
+    /// path — kept live forever so the async-signal-safe handler can read it
+    /// without touching freed memory — so repeated calls (e.g. in a loop) leak
+    /// the prior copy each time.
+    ///
     /// # Errors
     ///
     /// Returns [`DaemonizeError::ValidationError`] if the pidfile path contains
