@@ -511,6 +511,12 @@ impl DaemonContext {
     /// Note: a failed readiness write has already consumed the notification
     /// pipe (and usually means the parent is gone), so the failure is surfaced
     /// via the exit status and pidfile cleanup, not a message to the parent.
+    ///
+    /// Like [`notify_parent`](Self::notify_parent), this also refuses to signal
+    /// readiness while still privileged: if a user/group is configured but
+    /// [`drop_privileges`](Self::drop_privileges) was never called, it reports
+    /// [`PrivilegesNotDropped`](DaemonizeError::PrivilegesNotDropped) and
+    /// `_exit`s with code 70 rather than returning.
     pub fn notify_parent_or_report(&mut self) {
         if self.privileges_pending() {
             self.report_error(&DaemonizeError::PrivilegesNotDropped);
