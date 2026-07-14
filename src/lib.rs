@@ -644,6 +644,55 @@ mod tests {
         assert!(result.is_err()); // exit panics in NullForker
     }
 
+    // Covers: R137
+    #[test]
+    fn first_fork_parent_closes_pipe_silently() {
+        // The parent's write-end copy must be *closed*, not dropped: NotifyPipe's
+        // Drop safety net writes failure bytes, and a parent that drops would
+        // read its own bytes and report a failure for a healthy start. With the
+        // write end closed silently, the reader sees EOF -> success -> exit(0).
+        let config = DaemonConfig::new();
+        let mut forker = NullForker::first_parent().with_pipe();
+        let result = catch_unwind(std::panic::AssertUnwindSafe(|| {
+            run_inner(&config, &mut forker)
+        }));
+        let panic_msg = result
+            .expect_err("parent exits after reading the pipe")
+            .downcast_ref::<String>()
+            .cloned()
+            .unwrap();
+        assert!(
+            panic_msg.contains("NullForker::exit(0)"),
+            "parent must read EOF = success from its own silently-closed write \
+             end, got: {panic_msg}"
+        );
+    }
+
+    // Covers: R137
+    #[test]
+    fn second_fork_intermediate_closes_pipe_silently() {
+        // The intermediate child's write-end copy must also close without
+        // writing: the grandchild daemon is the sole writer on the pipe.
+        let config = DaemonConfig::new();
+        let mut forker = NullForker::second_parent().with_pipe();
+        let result = catch_unwind(std::panic::AssertUnwindSafe(|| {
+            run_inner(&config, &mut forker)
+        }));
+        assert!(result.is_err(), "intermediate child exits");
+
+        let rd = forker
+            .take_pipe_reader()
+            .expect("with_pipe stores a reader for the test");
+        let mut buf = Vec::new();
+        std::fs::File::from(rd).read_to_end(&mut buf).unwrap();
+        assert_eq!(
+            buf,
+            Vec::<u8>::new(),
+            "intermediate child must close the pipe without writing; the \
+             daemon is the sole writer"
+        );
+    }
+
     #[test]
     fn second_fork_parent_exits() {
         let config = DaemonConfig::new();

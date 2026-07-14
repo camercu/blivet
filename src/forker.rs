@@ -74,6 +74,8 @@ pub(crate) mod null_forker {
     pub(crate) struct NullForker {
         fork_results: VecDeque<Result<ForkResult, DaemonizeError>>,
         setsid_result: Option<Result<(), DaemonizeError>>,
+        use_pipe: bool,
+        pipe_reader: Option<OwnedFd>,
     }
 
     impl NullForker {
@@ -84,7 +86,25 @@ pub(crate) mod null_forker {
             Self {
                 fork_results: fork_results.into(),
                 setsid_result: Some(setsid_result),
+                use_pipe: false,
+                pipe_reader: None,
             }
+        }
+
+        /// Make [`create_notification_pipe`](Forker::create_notification_pipe)
+        /// return a real pipe instead of `None`, so a test can observe what
+        /// the fork sequence writes — or must not write — on the wire.
+        pub(crate) fn with_pipe(mut self) -> Self {
+            self.use_pipe = true;
+            self
+        }
+
+        /// Take the test-side duplicate of the pipe's read end (created by
+        /// [`with_pipe`](Self::with_pipe)). `daemonize_inner` drops its own
+        /// read-end copy in the child branch; this duplicate lets the test
+        /// read what reached the pipe afterwards.
+        pub(crate) fn take_pipe_reader(&mut self) -> Option<OwnedFd> {
+            self.pipe_reader.take()
         }
 
         /// Both forks return Child.
@@ -146,8 +166,13 @@ pub(crate) mod null_forker {
     #[allow(unsafe_code)]
     impl Forker for NullForker {
         fn create_notification_pipe(&mut self) -> Option<(OwnedFd, OwnedFd)> {
-            // NullForker skips the pipe; parent exits immediately
-            None
+            if !self.use_pipe {
+                // Default: skip the pipe; the parent branch exits immediately.
+                return None;
+            }
+            let (rd, wr) = nix::unistd::pipe().expect("failed to create test pipe");
+            self.pipe_reader = Some(rd.try_clone().expect("failed to dup test read end"));
+            Some((rd, wr))
         }
 
         unsafe fn fork(&mut self) -> Result<ForkResult, DaemonizeError> {
