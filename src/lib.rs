@@ -694,6 +694,37 @@ mod tests {
         );
     }
 
+    // A post-fork step failing in daemon mode must funnel through the
+    // notify-parent-and-exit arm (lib.rs), not return the error to the caller —
+    // the child has no caller to return to. Distinct from a fork failure, which
+    // returns before run_post_fork. Kills the mutant that swaps the foreground
+    // and daemon match arms: with the arms swapped, this would return Err
+    // instead of exiting.
+    #[test]
+    #[serial_test::serial]
+    fn daemon_post_fork_failure_exits_not_returns() {
+        let old_umask = nix::sys::stat::umask(nix::sys::stat::Mode::empty());
+        // Daemon mode (foreground stays false); chdir to a nonexistent path
+        // fails at step 5, before any stdio redirection touches this process.
+        let mut config = DaemonConfig::new();
+        config.chdir("/nonexistent_daemonize_postfork_failure");
+        let mut forker = NullForker::both_child();
+        let result = catch_unwind(std::panic::AssertUnwindSafe(|| {
+            run_inner(&config, &mut forker)
+        }));
+        nix::sys::stat::umask(old_umask);
+
+        let panic_msg = result
+            .expect_err("daemon-mode post-fork failure must exit (panic), not return")
+            .downcast_ref::<String>()
+            .cloned()
+            .unwrap();
+        assert!(
+            panic_msg.contains("NullForker::exit(71)"),
+            "must exit with ChdirFailed's EX_OSERR code 71, got: {panic_msg}"
+        );
+    }
+
     #[test]
     fn signal_error_to_parent_noop_with_none() {
         signal_error_to_parent(&mut None, &DaemonizeError::ForkFailed("test".into()));
