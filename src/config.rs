@@ -289,6 +289,8 @@ impl DaemonConfig {
     /// # Errors
     ///
     /// Returns `DaemonizeError::ValidationError` if:
+    /// - Any configured path (pidfile, stdout, stderr, lockfile, chdir) contains
+    ///   a NUL byte
     /// - Any configured path (pidfile, stdout, stderr, lockfile) is not absolute
     /// - The chdir path is not absolute, does not exist, or is not a directory
     /// - The pidfile path is a directory
@@ -302,7 +304,7 @@ impl DaemonConfig {
     #[must_use = "validate() returns a Result that must be checked"]
     pub fn validate(&self) -> Result<(), DaemonizeError> {
         // Check chdir is absolute, exists, and is a directory
-        validate_absolute(&self.chdir, "chdir")?;
+        validate_path(&self.chdir, "chdir")?;
         if !self.chdir.exists() {
             return Err(DaemonizeError::ValidationError(format!(
                 "chdir path does not exist: {}",
@@ -318,7 +320,7 @@ impl DaemonConfig {
 
         // Check pidfile
         if let Some(ref p) = self.pidfile {
-            validate_absolute(p, "pidfile")?;
+            validate_path(p, "pidfile")?;
             if p.is_dir() {
                 return Err(DaemonizeError::ValidationError(format!(
                     "pidfile path is a directory: {}",
@@ -330,20 +332,20 @@ impl DaemonConfig {
 
         // Check stdout
         if let Some(ref p) = self.stdout {
-            validate_absolute(p, "stdout")?;
+            validate_path(p, "stdout")?;
             validate_parent_writable(p, "stdout")?;
         }
 
         // Check stderr
         if let Some(ref p) = self.stderr {
-            validate_absolute(p, "stderr")?;
+            validate_path(p, "stderr")?;
             validate_parent_writable(p, "stderr")?;
         }
 
         // Check lockfile (the derived case re-checks the pidfile; harmless)
         let lockfile = self.effective_lockfile();
         if let Some(p) = lockfile {
-            validate_absolute(p, "lockfile")?;
+            validate_path(p, "lockfile")?;
             validate_parent_writable(p, "lockfile")?;
         }
 
@@ -410,7 +412,17 @@ impl DaemonConfig {
     }
 }
 
-fn validate_absolute(path: &std::path::Path, name: &str) -> Result<(), DaemonizeError> {
+/// Rejects a configured path that is malformed (contains a NUL byte, which no
+/// syscall can accept) or not absolute, so both surface at `validate()` rather
+/// than as a late `EINVAL` when the path is first passed to the OS.
+fn validate_path(path: &std::path::Path, name: &str) -> Result<(), DaemonizeError> {
+    use std::os::unix::ffi::OsStrExt;
+    if path.as_os_str().as_bytes().contains(&0) {
+        return Err(DaemonizeError::ValidationError(format!(
+            "{name} path must not contain a NUL byte: {}",
+            path.display()
+        )));
+    }
     if !path.is_absolute() {
         return Err(DaemonizeError::ValidationError(format!(
             "{name} path must be absolute: {}",
@@ -672,6 +684,21 @@ mod tests {
     fn validate_pidfile_must_be_absolute() {
         let mut config = DaemonConfig::new();
         config.pidfile("relative.pid");
+        assert!(matches!(
+            config.validate(),
+            Err(DaemonizeError::ValidationError(_))
+        ));
+    }
+
+    // Covers: R136
+    #[test]
+    fn validate_rejects_nul_byte_in_path() {
+        // A NUL byte makes a path unusable by any syscall (CString::new fails),
+        // so validate() must reject it up front rather than letting it surface
+        // as a late EINVAL at daemonize time. The parent dir (/tmp) exists, so
+        // this isolates the NUL rejection from the parent-writable check.
+        let mut config = DaemonConfig::new();
+        config.pidfile("/tmp/pid\0file");
         assert!(matches!(
             config.validate(),
             Err(DaemonizeError::ValidationError(_))

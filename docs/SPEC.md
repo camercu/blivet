@@ -389,10 +389,15 @@ filesystem using the **current effective UID** at the time of the call.
 
 ### Path rules
 
-Pidfile, stdout, stderr, and lockfile paths must be absolute when
-configured. Chdir path must be absolute, must exist, and must be a
-directory. Pidfile path must not be a directory. Parent directories of
-all configured paths must be writable (checked against current euid).
+No configured path (pidfile, stdout, stderr, lockfile, chdir) may
+contain a NUL byte — such a path is rejected up front rather than
+surfacing as a late `EINVAL` when first passed to a syscall. Pidfile,
+stdout, stderr, and lockfile paths must be absolute when configured.
+Chdir path must be absolute, must exist, and must be a directory.
+Pidfile path must not be a directory. Parent directories of the
+configured *file* paths (pidfile, stdout, stderr, lockfile) must be
+writable (checked against current euid). Chdir is exempt: it must
+already exist as a directory, so its parent is never created.
 
 ### Path comparison
 
@@ -1271,3 +1276,4 @@ verification points.
   platform fd directory where reliable (Linux `/proc/self/fd`, macOS
   `/dev/fd`); enumeration failure degrades to the brute-force
   3..rlim_cur fallback, never to skipping the step.
+- R136. Validation rejects any configured path containing a NUL byte.
