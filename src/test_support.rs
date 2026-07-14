@@ -1,14 +1,42 @@
-//! Shared helpers for tests that must run in an isolated subprocess.
+//! Shared helpers for tests with process-wide side effects.
 //!
-//! Some tests have process-wide side effects — redirecting std fds, closing
-//! inherited fds, forking — that corrupt the shared test harness or clobber
-//! file descriptors held by tests running in parallel. Such a test is marked
-//! `#[ignore]` (so it never runs in the normal pass) and paired with a wrapper
-//! that re-invokes the test binary for just that one test via
-//! [`run_in_subprocess`]. The body guards on [`is_subprocess`] so it executes
-//! only when spawned this way.
+//! Some tests touch process-global state — redirecting std fds, closing
+//! inherited fds, forking, changing the umask — that corrupts the shared test
+//! harness or clobbers state used by tests running in parallel. Two tools
+//! contain the damage:
+//!
+//! - A test whose effects cannot be undone in-process (fd closing, forking) is
+//!   marked `#[ignore]` and paired with a wrapper that re-invokes the test
+//!   binary for just that one test via [`run_in_subprocess`]. The body guards
+//!   on [`is_subprocess`] so it executes only when spawned this way.
+//! - Reversible global state (the umask) gets an RAII guard ([`UmaskGuard`])
+//!   so a panicking assertion cannot leak the altered state.
 
 use std::process::Command;
+
+/// RAII guard: sets the process umask and restores the previous one on drop.
+///
+/// Restoring in a `Drop` (rather than a trailing statement) means a panicking
+/// assertion between set and restore cannot leak the altered umask into tests
+/// running in parallel. Pair with `#[serial]` on the test so concurrent umask
+/// users are excluded too.
+pub(crate) struct UmaskGuard {
+    old: nix::sys::stat::Mode,
+}
+
+impl UmaskGuard {
+    pub(crate) fn set(mode: nix::sys::stat::Mode) -> Self {
+        Self {
+            old: nix::sys::stat::umask(mode),
+        }
+    }
+}
+
+impl Drop for UmaskGuard {
+    fn drop(&mut self) {
+        nix::sys::stat::umask(self.old);
+    }
+}
 
 /// Environment variable set in the spawned subprocess so the `#[ignore]` test
 /// body knows it is running in isolation (see [`is_subprocess`]).

@@ -574,12 +574,11 @@ mod tests {
 
         // umask 0 so the on-disk mode reflects the open()/create mode exactly,
         // not umask masking. std::fs::write creates 0666; R98 mandates 0644.
-        let old = nix::sys::stat::umask(Mode::empty());
+        let _umask = crate::test_support::UmaskGuard::set(Mode::empty());
         let dir = tempfile::tempdir().unwrap();
         let pidfile = dir.path().join("mode.pid");
         write_pidfile(&pidfile, None).unwrap();
         let mode = std::fs::metadata(&pidfile).unwrap().permissions().mode() & 0o777;
-        nix::sys::stat::umask(old);
         assert_eq!(
             mode, 0o644,
             "standalone pidfile must be created 0644, got {mode:o}"
