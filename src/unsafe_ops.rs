@@ -223,7 +223,9 @@ pub(crate) fn thread_count() -> std::io::Result<usize> {
     let mut info: libc::proc_taskinfo = unsafe { std::mem::zeroed() };
     let size = std::mem::size_of::<libc::proc_taskinfo>() as libc::c_int;
     // SAFETY: writes up to `size` bytes into the zeroed, correctly sized
-    // proc_taskinfo; the return value is the byte count actually written.
+    // proc_taskinfo; the return value is the byte count actually written, or
+    // `<= 0` on error. The `written < size` check below rejects both a short
+    // write and the negative error sentinel in one comparison.
     let written = unsafe {
         libc::proc_pidinfo(
             libc::getpid(),
@@ -340,6 +342,16 @@ pub(crate) fn thread_count() -> std::io::Result<usize> {
     // Fetch call into a real buffer. `mib[5]` is the number of records the
     // buffer can hold; after a successful call `size` is the bytes *actually*
     // written, so `size / elem` is the exact thread count (no padding).
+    //
+    // Known limitation: if a thread is *created* in the window between the
+    // sizing call above and this fetch, the kernel truncates to the buffer
+    // capacity and reports the stale (smaller) count, so this can under-count.
+    // That is the unsafe direction for the single-thread guard, but it only
+    // occurs if the caller races thread creation against `daemonize`/
+    // `drop_privileges` — which already violates their documented "no threads"
+    // contract. Closing it fully would need a bounded sizing/fetch retry loop;
+    // OpenBSD is a tier-3 target without CI coverage of that path, so it is
+    // documented rather than hardened here.
     let mut buf = vec![0u8; size];
     mib[5] = (size / elem) as libc::c_int;
     // SAFETY: `buf`/`size` are a matching pointer and length.
