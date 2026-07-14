@@ -775,6 +775,23 @@ mod tests {
         ));
     }
 
+    // Covers: R33
+    #[test]
+    fn validate_no_lockfile_pidfile_stdout_overlap_still_rejected() {
+        // no_lockfile() removes the lockfile fd, so the lockfile overlap pairs
+        // go inert — but the pidfile is still written, so a pidfile == stdout
+        // overlap must still be rejected via the pidfile pair.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("shared");
+        let path_str = path.to_str().unwrap();
+        let mut config = DaemonConfig::new();
+        config.pidfile(path_str).stdout(path_str).no_lockfile();
+        assert!(matches!(
+            config.validate(),
+            Err(DaemonizeError::ValidationError(_))
+        ));
+    }
+
     #[test]
     fn validate_pidfile_stderr_overlap_rejected() {
         let dir = tempfile::tempdir().unwrap();
