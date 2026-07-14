@@ -4,3 +4,4 @@
 .claude/
 .direnv/
 node_modules/
+/.harden/
