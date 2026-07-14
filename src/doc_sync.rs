@@ -88,6 +88,7 @@ fn readme_exit_codes_match_error_impl() {
         ("ForkFailed", DaemonizeError::ForkFailed("x".into())),
         ("SetsidFailed", DaemonizeError::SetsidFailed("x".into())),
         ("ChdirFailed", DaemonizeError::ChdirFailed("x".into())),
+        ("SystemError", DaemonizeError::SystemError("x".into())),
         (
             "PermissionDenied",
             DaemonizeError::PermissionDenied("x".into()),
@@ -148,6 +149,7 @@ fn variant_is_covered(err: &DaemonizeError) {
         | DaemonizeError::ForkFailed(_)
         | DaemonizeError::SetsidFailed(_)
         | DaemonizeError::ChdirFailed(_)
+        | DaemonizeError::SystemError(_)
         | DaemonizeError::PermissionDenied(_)
         | DaemonizeError::ExecFailed(_)
         | DaemonizeError::NotifyFailed(_)

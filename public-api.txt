@@ -18,6 +18,7 @@ pub blivet::DaemonizeError::PidfileError(alloc::string::String)
 pub blivet::DaemonizeError::PrivilegesNotDropped
 pub blivet::DaemonizeError::ProgramNotFound(alloc::string::String)
 pub blivet::DaemonizeError::SetsidFailed(alloc::string::String)
+pub blivet::DaemonizeError::SystemError(alloc::string::String)
 pub blivet::DaemonizeError::UserNotFound(alloc::string::String)
 pub blivet::DaemonizeError::ValidationError(alloc::string::String)
 impl blivet::DaemonizeError

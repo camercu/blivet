@@ -529,19 +529,23 @@ chdir, stdin redirect, and env changes may already have happened).
 
 ### Post-fork error policy
 
-Post-fork errors in steps 2–13 that have a named `DaemonizeError`
-variant are written to the notification pipe per the error protocol
-and the process calls `_exit()` with the mapped exit code. In
-foreground mode there is no pipe and no `_exit()`; failures return
-`Err` (see Foreground mode). Unspecified syscall failures (e.g.,
-`sigprocmask`, `setenv`) panic with a descriptive message. Individual
-`close()` errors in step 13 are silently ignored.
+Post-fork errors in steps 2–13 are written to the notification pipe
+per the error protocol and the process calls `_exit()` with the mapped
+exit code. In foreground mode there is no pipe and no `_exit()`;
+failures return `Err` (see Foreground mode). Every fallible step maps
+its failure to a named `DaemonizeError` variant: system-call failures
+without a more specific variant — opening `/dev/null`, `sigprocmask`,
+`getrlimit` — map to `SystemError` (exit 71). Individual `close()`
+errors in step 13 are silently ignored.
 
-> Panics for unspecified failures indicate a broken OS environment
-> where no reasonable recovery is possible, consistent with the
-> `/dev/null` panic rationale. The `_exit()` code is not observable
-> (the parent reads its exit code from the pipe), but uses the mapped
-> code for consistency in process accounting.
+> The `_exit()` code is not observable (the parent reads its exit code
+> from the pipe), but uses the mapped code for consistency in process
+> accounting. As a backstop, the notification-pipe write end reports a
+> failure if it is dropped without any message being sent — e.g. a
+> panic unwinding past the signalling seam. This stops the closed pipe
+> from being read as EOF = success, which would report a crashed daemon
+> as a clean start; `panic = "abort"` must therefore stay off (R93) so
+> the unwind reaches the `Drop`. See R137.
 
 ### Notification pipe protocol
 
@@ -577,10 +581,13 @@ terminal or supervisor.
 
 Open `/dev/null` with `O_RDWR`, `dup2` to the target fd(s). If the
 source fd already equals the target, skip `dup2` and close. Failure to
-open `/dev/null` or `dup2` to it panics.
+open `/dev/null` or `dup2` to it reports `SystemError` via the
+notification pipe.
 
-> A system without `/dev/null` is fundamentally broken. No recovery is
-> possible.
+> A system without `/dev/null` (e.g. a minimal container that never
+> mounted `/dev`) is unusual, but the failure is surfaced to the parent
+> so the operator sees why startup failed rather than the process
+> crashing with a false success reaching the parent.
 
 ### Output file redirect
 
@@ -716,7 +723,8 @@ no reliable listing exists (the BSDs' `/dev/fd` covers only 0-2
 without fdescfs) or reading it fails (e.g. minimal containers without
 `/proc`), fall back to brute-force iteration of
 3..`rlimit(RLIMIT_NOFILE).rlim_cur`. If `getrlimit` fails in the
-fallback, panic. Individual `close()` errors are silently ignored.
+fallback, report `SystemError`. Individual `close()` errors are
+silently ignored.
 
 When `close_fds` is false, this step is skipped entirely.
 
@@ -1197,7 +1205,8 @@ verification points.
 - R92. `NullForker` exists only under `#[cfg(test)]`.
 - R93. `Cargo.toml`: no `panic = "abort"` in dev/test profiles.
 - R94. Steps execute in specified order; ordering is load-bearing.
-- R95. `/dev/null` open or `dup2` failure panics.
+- R95. `/dev/null` open or `dup2` failure reports `SystemError` via
+  the notification pipe.
 - R96. Lockfile opened with `O_WRONLY | O_CREAT | O_CLOEXEC`, 0644.
 - R97. Shared lockfile/pidfile: lock first, then seek/truncate/write.
 - R98. File-creating opens use mode 0644, subject to process umask.
@@ -1210,7 +1219,7 @@ verification points.
   privilege drop).
 - R103. Fd closing: brute-force 3..rlim_cur, not `/proc/self/fd`.
 - R104. Fd closing skips lockfile fd and notification pipe fd.
-- R105. `getrlimit` failure panics.
+- R105. `getrlimit` failure (fd-close fallback) reports `SystemError`.
 - R106. Individual `close()` errors silently ignored.
 - R107. Notification pipe both ends created with `O_CLOEXEC`.
 - R108. CLI does not call `notify_parent()`; relies on CLOEXEC + exec.
@@ -1277,3 +1286,7 @@ verification points.
   `/dev/fd`); enumeration failure degrades to the brute-force
   3..rlim_cur fallback, never to skipping the step.
 - R136. Validation rejects any configured path containing a NUL byte.
+- R137. A daemon process that exits without signaling readiness —
+  including a panic that unwinds past the signalling seam — reports a
+  failure to the parent via the notification pipe, never a closed pipe
+  the parent reads as EOF = success.

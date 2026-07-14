@@ -496,7 +496,7 @@ fn run_post_fork(
     // Step 6: Redirect stdin to /dev/null (always); redirect stdout/stderr
     // to /dev/null only when not in foreground mode (foreground leaves them
     // inherited so output reaches the terminal or supervisor).
-    steps::redirect_to_devnull(!config.foreground);
+    steps::redirect_to_devnull(!config.foreground)?;
 
     // Step 7: Open and lock lockfile (explicit path, or the pidfile itself
     // unless derivation was opted out)
@@ -515,7 +515,7 @@ fn run_post_fork(
     unsafe_ops::reset_signal_dispositions();
 
     // Step 10: Clear signal mask
-    steps::clear_signal_mask();
+    steps::clear_signal_mask()?;
 
     // Step 11: Set environment variables
     steps::set_env_vars(&config.env);
@@ -538,7 +538,7 @@ fn run_post_fork(
         if let Some(ref wr) = pipe_wr {
             skip_fds.push(wr.as_fd().as_raw_fd());
         }
-        steps::close_inherited_fds(&skip_fds);
+        steps::close_inherited_fds(&skip_fds)?;
     }
 
     // Step 14: Return DaemonContext (clones the config-derived fields it needs)

@@ -207,6 +207,7 @@ mod tests {
         );
     }
 
+    // Covers: R137
     #[test]
     fn drop_without_signal_reports_unnotified_failure() {
         // Safety net: a NotifyPipe that is dropped without any signal_* call

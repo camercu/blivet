@@ -59,6 +59,12 @@ pub enum DaemonizeError {
     #[error("chdir failed: {0}")]
     ChdirFailed(String),
 
+    /// A required system call in the post-fork sequence failed: opening
+    /// `/dev/null`, `sigprocmask` (clearing the signal mask), or `getrlimit`
+    /// (querying the fd limit before closing inherited descriptors).
+    #[error("system error: {0}")]
+    SystemError(String),
+
     /// Non-root caller with user switch, or setuid/setgid failure.
     #[error("permission denied: {0}")]
     PermissionDenied(String),
@@ -165,6 +171,7 @@ impl DaemonizeError {
             DaemonizeError::ForkFailed(_) => 71,        // EX_OSERR
             DaemonizeError::SetsidFailed(_) => 71,      // EX_OSERR
             DaemonizeError::ChdirFailed(_) => 71,       // EX_OSERR
+            DaemonizeError::SystemError(_) => 71,       // EX_OSERR
             DaemonizeError::PermissionDenied(_) => 77,  // EX_NOPERM
             DaemonizeError::PidfileError(_) => 73,      // EX_CANTCREAT
             DaemonizeError::OutputFileError(_) => 73,   // EX_CANTCREAT

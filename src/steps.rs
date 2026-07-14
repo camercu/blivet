@@ -60,21 +60,25 @@ pub(crate) fn change_dir(path: &Path) -> Result<(), DaemonizeError> {
 /// stdout and stderr. In foreground mode, stdout/stderr are left
 /// inherited so output reaches the parent terminal or supervisor.
 ///
-/// # Panics
-///
-/// Panics if /dev/null cannot be opened or dup2 fails.
-pub(crate) fn redirect_to_devnull(stdout_stderr: bool) {
-    let devnull =
-        open(c"/dev/null", OFlag::O_RDWR, Mode::empty()).expect("failed to open /dev/null");
-    unistd::dup2_stdin(&devnull).expect("failed to dup2 /dev/null to stdin");
+/// Returns [`SystemError`](DaemonizeError::SystemError) if `/dev/null` cannot
+/// be opened or a `dup2` fails (e.g. a minimal container with no `/dev/null`),
+/// so the caller can report the failure to the parent rather than crashing.
+pub(crate) fn redirect_to_devnull(stdout_stderr: bool) -> Result<(), DaemonizeError> {
+    let devnull = open(c"/dev/null", OFlag::O_RDWR, Mode::empty())
+        .map_err(|e| DaemonizeError::SystemError(format!("open /dev/null: {e}")))?;
+    unistd::dup2_stdin(&devnull)
+        .map_err(|e| DaemonizeError::SystemError(format!("dup2 /dev/null -> stdin: {e}")))?;
     if stdout_stderr {
-        unistd::dup2_stdout(&devnull).expect("failed to dup2 /dev/null to stdout");
-        unistd::dup2_stderr(&devnull).expect("failed to dup2 /dev/null to stderr");
+        unistd::dup2_stdout(&devnull)
+            .map_err(|e| DaemonizeError::SystemError(format!("dup2 /dev/null -> stdout: {e}")))?;
+        unistd::dup2_stderr(&devnull)
+            .map_err(|e| DaemonizeError::SystemError(format!("dup2 /dev/null -> stderr: {e}")))?;
     }
     if devnull.as_raw_fd() <= 2 {
         // devnull IS one of the stdio fds — don't close it on drop.
         std::mem::forget(devnull);
     }
+    Ok(())
 }
 
 /// Step 7: Open and exclusively lock a lockfile.
@@ -143,13 +147,12 @@ pub(crate) fn write_pidfile(
 
 /// Step 10: Clear the signal mask.
 ///
-/// # Panics
-///
-/// Panics if sigprocmask fails.
-pub(crate) fn clear_signal_mask() {
+/// Returns [`SystemError`](DaemonizeError::SystemError) if `sigprocmask` fails
+/// (e.g. blocked by a seccomp filter) so the caller can report it.
+pub(crate) fn clear_signal_mask() -> Result<(), DaemonizeError> {
     use nix::sys::signal::{SigSet, SigmaskHow};
     nix::sys::signal::sigprocmask(SigmaskHow::SIG_SETMASK, Some(&SigSet::empty()), None)
-        .expect("sigprocmask failed");
+        .map_err(|e| DaemonizeError::SystemError(format!("sigprocmask: {e}")))
 }
 
 /// Step 11: Set environment variables in insertion order.
@@ -316,13 +319,12 @@ pub(crate) fn clamp_max_fd(rlim_cur: libc::rlim_t) -> i32 {
 
 /// Query the process fd limit via getrlimit.
 ///
-/// # Panics
-///
-/// Panics if getrlimit fails.
-pub(crate) fn get_max_fd() -> i32 {
+/// Returns [`SystemError`](DaemonizeError::SystemError) if `getrlimit` fails
+/// (e.g. blocked by a seccomp filter) so the caller can report it.
+pub(crate) fn get_max_fd() -> Result<i32, DaemonizeError> {
     let limit = nix::sys::resource::getrlimit(nix::sys::resource::Resource::RLIMIT_NOFILE)
-        .expect("getrlimit(RLIMIT_NOFILE) failed");
-    clamp_max_fd(limit.0)
+        .map_err(|e| DaemonizeError::SystemError(format!("getrlimit(RLIMIT_NOFILE): {e}")))?;
+    Ok(clamp_max_fd(limit.0))
 }
 
 /// Return an iterator of fd numbers to close, filtering out skip_fds.
@@ -371,22 +373,22 @@ pub(crate) fn list_open_fds() -> Option<Vec<i32>> {
 /// to `i32::MAX`, turning the brute-force loop into billions of `close`
 /// calls that stall daemon startup.
 ///
-/// # Panics
-///
-/// Panics if getrlimit fails (fallback path only).
-pub(crate) fn close_inherited_fds(skip_fds: &[i32]) {
+/// Returns [`SystemError`](DaemonizeError::SystemError) if the fallback path's
+/// `getrlimit` fails; the fd-listing path is infallible.
+pub(crate) fn close_inherited_fds(skip_fds: &[i32]) -> Result<(), DaemonizeError> {
     if let Some(open_fds) = list_open_fds() {
         for fd in open_fds {
             if fd >= 3 && !skip_fds.contains(&fd) {
                 unsafe_ops::raw_close(fd);
             }
         }
-        return;
+        return Ok(());
     }
-    let max_fd = get_max_fd();
+    let max_fd = get_max_fd()?;
     for fd in fds_to_close(max_fd, skip_fds) {
         unsafe_ops::raw_close(fd);
     }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -485,7 +487,7 @@ mod tests {
     #[serial]
     fn redirect_to_devnull_succeeds() {
         let _restore = SavedFds::new(&[0, 1, 2]);
-        redirect_to_devnull(true);
+        redirect_to_devnull(true).unwrap();
     }
 
     // Covers: R7
@@ -497,7 +499,7 @@ mod tests {
         let _restore = SavedFds::new(&[0, 1, 2]);
         let stdout_before = fstat(std::io::stdout()).unwrap();
         let stderr_before = fstat(std::io::stderr()).unwrap();
-        redirect_to_devnull(false);
+        redirect_to_devnull(false).unwrap();
 
         // stdin should be /dev/null
         let devnull = fstat(open(c"/dev/null", OFlag::O_RDONLY, Mode::empty()).unwrap()).unwrap();
@@ -703,7 +705,7 @@ mod tests {
         set.add(Signal::SIGUSR1);
         nix::sys::signal::sigprocmask(SigmaskHow::SIG_BLOCK, Some(&set), None).unwrap();
 
-        clear_signal_mask();
+        clear_signal_mask().unwrap();
 
         let mut current = SigSet::empty();
         nix::sys::signal::sigprocmask(SigmaskHow::SIG_SETMASK, None, Some(&mut current)).unwrap();
@@ -957,7 +959,7 @@ mod tests {
     fn get_max_fd_reflects_a_real_limit() {
         // 0-2 always exist, so any true fd limit is at least 3. Guards the
         // fallback close range against collapsing (0/1) or inverting (-1).
-        assert!(get_max_fd() >= 3);
+        assert!(get_max_fd().unwrap() >= 3);
     }
 
     // Covers: R135
@@ -1018,7 +1020,7 @@ mod tests {
         let mut skip = vec![rd.as_raw_fd(), wr.as_raw_fd()];
         // Also skip the SavedFds backup copies so they survive for restoration.
         skip.extend(restore.saved_fds());
-        close_inherited_fds(&skip);
+        close_inherited_fds(&skip).unwrap();
         // Our pipe fds should still be open
         assert!(nix::unistd::write(&wr, b"ok").is_ok());
         // The non-skipped fd must be gone.

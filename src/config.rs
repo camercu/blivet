@@ -921,6 +921,7 @@ mod tests {
             DaemonizeError::ForkFailed("detail".into()),
             DaemonizeError::SetsidFailed("detail".into()),
             DaemonizeError::ChdirFailed("detail".into()),
+            DaemonizeError::SystemError("detail".into()),
             DaemonizeError::PermissionDenied("detail".into()),
             DaemonizeError::PidfileError("detail".into()),
             DaemonizeError::OutputFileError("detail".into()),
@@ -944,6 +945,7 @@ mod tests {
                 | DaemonizeError::ForkFailed(_)
                 | DaemonizeError::SetsidFailed(_)
                 | DaemonizeError::ChdirFailed(_)
+                | DaemonizeError::SystemError(_)
                 | DaemonizeError::PermissionDenied(_)
                 | DaemonizeError::PidfileError(_)
                 | DaemonizeError::OutputFileError(_)
