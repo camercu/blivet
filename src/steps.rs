@@ -15,6 +15,28 @@ use crate::error::DaemonizeError;
 use crate::unsafe_ops;
 use crate::util::paths_same;
 
+/// Test-only failure injection for post-fork syscalls that cannot be made to
+/// fail from inside a test process (that would need a missing `/dev/null` or a
+/// seccomp filter). A set flag makes its step take the error return so tests
+/// can pin that the failure *propagates* out of the sequence rather than being
+/// swallowed. Flags are process-global: a test that sets one must run in an
+/// isolated subprocess (`test_support::run_in_subprocess`).
+#[cfg(test)]
+pub(crate) mod failpoints {
+    use std::sync::atomic::AtomicBool;
+
+    pub(crate) static DEVNULL_OPEN_FAILS: AtomicBool = AtomicBool::new(false);
+    pub(crate) static SIGPROCMASK_FAILS: AtomicBool = AtomicBool::new(false);
+    pub(crate) static GETRLIMIT_FAILS: AtomicBool = AtomicBool::new(false);
+    pub(crate) static FD_LISTING_UNAVAILABLE: AtomicBool = AtomicBool::new(false);
+
+    /// True when `flag` is set — reads with `Relaxed`: flags are set before the
+    /// sequence runs and never concurrently.
+    pub(crate) fn injected(flag: &AtomicBool) -> bool {
+        flag.load(std::sync::atomic::Ordering::Relaxed)
+    }
+}
+
 // ---- Plan/Execute types for redirect_output ----
 
 /// Describes what to do with a single output stream (stdout or stderr).
@@ -64,6 +86,12 @@ pub(crate) fn change_dir(path: &Path) -> Result<(), DaemonizeError> {
 /// be opened or a `dup2` fails (e.g. a minimal container with no `/dev/null`),
 /// so the caller can report the failure to the parent rather than crashing.
 pub(crate) fn redirect_to_devnull(stdout_stderr: bool) -> Result<(), DaemonizeError> {
+    #[cfg(test)]
+    if failpoints::injected(&failpoints::DEVNULL_OPEN_FAILS) {
+        return Err(DaemonizeError::SystemError(
+            "open /dev/null: injected failure".into(),
+        ));
+    }
     let devnull = open(c"/dev/null", OFlag::O_RDWR, Mode::empty())
         .map_err(|e| DaemonizeError::SystemError(format!("open /dev/null: {e}")))?;
     unistd::dup2_stdin(&devnull)
@@ -151,6 +179,12 @@ pub(crate) fn write_pidfile(
 /// (e.g. blocked by a seccomp filter) so the caller can report it.
 pub(crate) fn clear_signal_mask() -> Result<(), DaemonizeError> {
     use nix::sys::signal::{SigSet, SigmaskHow};
+    #[cfg(test)]
+    if failpoints::injected(&failpoints::SIGPROCMASK_FAILS) {
+        return Err(DaemonizeError::SystemError(
+            "sigprocmask: injected failure".into(),
+        ));
+    }
     nix::sys::signal::sigprocmask(SigmaskHow::SIG_SETMASK, Some(&SigSet::empty()), None)
         .map_err(|e| DaemonizeError::SystemError(format!("sigprocmask: {e}")))
 }
@@ -322,6 +356,12 @@ pub(crate) fn clamp_max_fd(rlim_cur: libc::rlim_t) -> i32 {
 /// Returns [`SystemError`](DaemonizeError::SystemError) if `getrlimit` fails
 /// (e.g. blocked by a seccomp filter) so the caller can report it.
 pub(crate) fn get_max_fd() -> Result<i32, DaemonizeError> {
+    #[cfg(test)]
+    if failpoints::injected(&failpoints::GETRLIMIT_FAILS) {
+        return Err(DaemonizeError::SystemError(
+            "getrlimit(RLIMIT_NOFILE): injected failure".into(),
+        ));
+    }
     let limit = nix::sys::resource::getrlimit(nix::sys::resource::Resource::RLIMIT_NOFILE)
         .map_err(|e| DaemonizeError::SystemError(format!("getrlimit(RLIMIT_NOFILE): {e}")))?;
     Ok(clamp_max_fd(limit.0))
@@ -351,6 +391,10 @@ pub(crate) fn list_open_fds() -> Option<Vec<i32>> {
     #[cfg(target_os = "macos")]
     const FD_LIST_DIR: &str = "/dev/fd";
 
+    #[cfg(test)]
+    if failpoints::injected(&failpoints::FD_LISTING_UNAVAILABLE) {
+        return None;
+    }
     let entries = std::fs::read_dir(FD_LIST_DIR).ok()?;
     Some(
         entries

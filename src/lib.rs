@@ -827,6 +827,98 @@ mod tests {
         assert!(ctx.lockfile_fd().is_none());
     }
 
+    // The three SystemError-producing steps cannot be made to fail from inside
+    // a test process (that needs a missing /dev/null or a seccomp filter), so
+    // each propagation test flips a steps::failpoints flag and asserts the
+    // error surfaces from daemonize_inner instead of being swallowed — killing
+    // mutants like `let _ = steps::clear_signal_mask();` in run_post_fork.
+    // Subprocess-isolated: the flags are process-global, and run_post_fork
+    // mutates umask/cwd/stdin for real on the way to the failing step.
+
+    // Covers: R95
+    #[test]
+    fn devnull_failure_propagates() {
+        run_in_subprocess("tests::devnull_failure_propagates_subprocess");
+    }
+
+    #[test]
+    #[ignore]
+    fn devnull_failure_propagates_subprocess() {
+        if !is_subprocess() {
+            return;
+        }
+        steps::failpoints::DEVNULL_OPEN_FAILS.store(true, std::sync::atomic::Ordering::Relaxed);
+        let mut config = DaemonConfig::new();
+        config.foreground(true).close_fds(false);
+        let mut forker = NullForker::new(vec![], Ok(()));
+        match run_inner(&config, &mut forker) {
+            Err(DaemonizeError::SystemError(msg)) => {
+                assert!(
+                    msg.contains("/dev/null"),
+                    "message names the syscall: {msg}"
+                );
+            }
+            other => panic!("expected SystemError to propagate, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn sigprocmask_failure_propagates() {
+        run_in_subprocess("tests::sigprocmask_failure_propagates_subprocess");
+    }
+
+    #[test]
+    #[ignore]
+    fn sigprocmask_failure_propagates_subprocess() {
+        if !is_subprocess() {
+            return;
+        }
+        steps::failpoints::SIGPROCMASK_FAILS.store(true, std::sync::atomic::Ordering::Relaxed);
+        let mut config = DaemonConfig::new();
+        config.foreground(true).close_fds(false);
+        let mut forker = NullForker::new(vec![], Ok(()));
+        match run_inner(&config, &mut forker) {
+            Err(DaemonizeError::SystemError(msg)) => {
+                assert!(
+                    msg.contains("sigprocmask"),
+                    "message names the syscall: {msg}"
+                );
+            }
+            other => panic!("expected SystemError to propagate, got {other:?}"),
+        }
+    }
+
+    // Covers: R105
+    #[test]
+    fn getrlimit_failure_propagates() {
+        run_in_subprocess("tests::getrlimit_failure_propagates_subprocess");
+    }
+
+    #[test]
+    #[ignore]
+    fn getrlimit_failure_propagates_subprocess() {
+        if !is_subprocess() {
+            return;
+        }
+        // Force the brute-force fallback (the fd listing normally short-circuits
+        // it on Linux/macOS), then fail its getrlimit. get_max_fd errors before
+        // any fd is closed, so the subprocess's descriptors survive.
+        steps::failpoints::FD_LISTING_UNAVAILABLE.store(true, std::sync::atomic::Ordering::Relaxed);
+        steps::failpoints::GETRLIMIT_FAILS.store(true, std::sync::atomic::Ordering::Relaxed);
+        let mut config = DaemonConfig::new();
+        config.foreground(true).close_fds(true);
+        let mut forker = NullForker::new(vec![], Ok(()));
+        match run_inner(&config, &mut forker) {
+            Err(DaemonizeError::SystemError(msg)) => {
+                assert!(
+                    msg.contains("getrlimit"),
+                    "message names the syscall: {msg}"
+                );
+            }
+            other => panic!("expected SystemError to propagate, got {other:?}"),
+        }
+    }
+
     // Covers: R131
     #[test]
     fn pidfile_only_holds_derived_lock() {
