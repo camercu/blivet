@@ -60,8 +60,9 @@ pub enum DaemonizeError {
     ChdirFailed(String),
 
     /// A required system call in the post-fork sequence failed: opening
-    /// `/dev/null`, `sigprocmask` (clearing the signal mask), or `getrlimit`
-    /// (querying the fd limit before closing inherited descriptors).
+    /// `/dev/null`, `sigaction` (resetting signal dispositions),
+    /// `sigprocmask` (clearing the signal mask), or `getrlimit` (querying
+    /// the fd limit before closing inherited descriptors).
     #[error("system error: {0}")]
     SystemError(String),
 

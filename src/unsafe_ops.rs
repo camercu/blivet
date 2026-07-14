@@ -37,7 +37,19 @@
 /// `notify_parent` write, whose documented `NotifyFailed` error could then
 /// never be observed. The CLI restores SIG_DFL just before `exec` (R128), so
 /// exec'd programs still start with the conventional disposition.
-pub(crate) fn reset_signal_dispositions() {
+///
+/// Returns [`SystemError`](crate::error::DaemonizeError::SystemError) on a
+/// non-`EINVAL` `sigaction` failure (POSIX documents only `EINVAL` for these
+/// arguments, so this is a should-not-happen guard) so the caller reports it
+/// to the parent rather than panicking. `EINVAL` — an uncatchable or invalid
+/// signal number — is skipped silently.
+pub(crate) fn reset_signal_dispositions() -> Result<(), crate::error::DaemonizeError> {
+    #[cfg(test)]
+    if crate::steps::failpoints::injected(&crate::steps::failpoints::SIGACTION_FAILS) {
+        return Err(crate::error::DaemonizeError::SystemError(
+            "sigaction(1): injected failure".into(),
+        ));
+    }
     let signals = signal_range();
     for sig in signals {
         if sig == libc::SIGKILL || sig == libc::SIGSTOP || sig == libc::SIGPIPE {
@@ -53,11 +65,14 @@ pub(crate) fn reset_signal_dispositions() {
         if ret != 0 {
             let err = std::io::Error::last_os_error();
             if err.raw_os_error() != Some(libc::EINVAL) {
-                panic!("sigaction({sig}) failed: {err}");
+                return Err(crate::error::DaemonizeError::SystemError(format!(
+                    "sigaction({sig}): {err}"
+                )));
             }
             // EINVAL: signal cannot be caught, skip
         }
     }
+    Ok(())
 }
 
 /// Returns the range of signal numbers to reset.

@@ -186,9 +186,9 @@ Lock file held by another process.
 .TP
 \f[B]71\f[R] (EX_OSERR)
 OS error: fork, setsid, or chdir failed; a required post\-fork system
-call failed (opening \f[I]/dev/null\f[R], \f[B]sigprocmask\f[R](2), or
-\f[B]getrlimit\f[R](2)); or exec failed for a reason other than a
-missing or non\-executable program.
+call failed (opening \f[I]/dev/null\f[R], \f[B]sigaction\f[R](2),
+\f[B]sigprocmask\f[R](2), or \f[B]getrlimit\f[R](2)); or exec failed for
+a reason other than a missing or non\-executable program.
 .TP
 \f[B]73\f[R] (EX_CANTCREAT)
 Cannot create lock file, PID file, or output file; or \f[B]chown\f[R](2)

@@ -448,13 +448,16 @@ configured. It does not call `getpwnam()` or `getgrnam()`.
 > concern handled by `drop_privileges()`. Consumers who want early
 > validation should call `getpwnam()`/`getgrnam()` themselves.
 
-### Environment key validation
+### Environment entry validation
 
-Keys must be non-empty and contain no `=`. Values are unrestricted.
+Keys must be non-empty and contain no `=` and no NUL byte. Values must
+contain no NUL byte but are otherwise unrestricted.
 
 > This check is in `validate()`, not `.env()`, because all builder
 > methods are infallible. Centralizing validation keeps the API
-> consistent.
+> consistent. The rejected characters are exactly what would make
+> `setenv` fail at application time (step 11): rejecting them up front
+> turns a post-fork panic in the daemon child into a `ValidationError`.
 
 ---
 
@@ -534,9 +537,9 @@ per the error protocol and the process calls `_exit()` with the mapped
 exit code. In foreground mode there is no pipe and no `_exit()`;
 failures return `Err` (see Foreground mode). Every fallible step maps
 its failure to a named `DaemonizeError` variant: system-call failures
-without a more specific variant — opening `/dev/null`, `sigprocmask`,
-`getrlimit` — map to `SystemError` (exit 71). Individual `close()`
-errors in step 13 are silently ignored.
+without a more specific variant — opening `/dev/null`, `sigaction`,
+`sigprocmask`, `getrlimit` — map to `SystemError` (exit 71).
+Individual `close()` errors in step 13 are silently ignored.
 
 > The `_exit()` code is not observable (the parent reads its exit code
 > from the pipe), but uses the mapped code for consistency in process
@@ -634,7 +637,9 @@ is `true` (the default); see `DaemonContext::cleanup()`.
 Iterate from 1 through `libc::SIGRTMAX()`, skipping `SIGKILL`,
 `SIGSTOP`, and `SIGPIPE`. Reset each to `SIG_DFL` via
 `libc::sigaction()`. If `sigaction` returns `EINVAL` (e.g.,
-NPTL-reserved signals 32–33), skip silently. Use `libc::sigaction()`
+NPTL-reserved signals 32–33), skip silently; any other failure reports
+`SystemError` (a should-not-happen guard — POSIX documents only
+`EINVAL` for these arguments). Use `libc::sigaction()`
 directly — nix's `sigaction` only accepts the `Signal` enum which
 cannot represent real-time signal numbers. `libc::SIGRTMAX()` is a
 function; if a future `libc` version removes it, 64 is an acceptable
@@ -1286,7 +1291,12 @@ verification points.
   `/dev/fd`); enumeration failure degrades to the brute-force
   3..rlim_cur fallback, never to skipping the step.
 - R136. Validation rejects any configured path containing a NUL byte.
-- R137. A daemon process that exits without signaling readiness —
-  including a panic that unwinds past the signalling seam — reports a
-  failure to the parent via the notification pipe, never a closed pipe
-  the parent reads as EOF = success.
+- R137. A panic that unwinds past the signalling seam in the daemon
+  process reports a failure to the parent via the notification pipe,
+  never a closed pipe the parent reads as EOF = success. (Abrupt death
+  that runs no destructors — SIGKILL, OOM kill, a consumer binary
+  built with `panic = "abort"` — is out of scope: it closes the pipe
+  unwritten and decodes as EOF, an inherent limitation shared with the
+  exec-success path.)
+- R138. Validation rejects an environment key or value containing a
+  NUL byte.

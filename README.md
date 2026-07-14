@@ -219,7 +219,7 @@ so failures reach the shell with a meaningful status:
 | `ForkFailed`       | 71          | `fork()` error                           |
 | `SetsidFailed`     | 71          | `setsid()` error                         |
 | `ChdirFailed`      | 71          | `chdir()` error                          |
-| `SystemError`      | 71          | Post-fork syscall failed (`/dev/null`, `sigprocmask`, `getrlimit`) |
+| `SystemError`      | 71          | Post-fork syscall failed (`/dev/null`, `sigaction`, `sigprocmask`, `getrlimit`) |
 | `PermissionDenied` | 77          | Not root, or setuid/setgid failed        |
 | `ExecFailed`       | 71          | CLI: `exec` failed (other than `ENOENT`/`EACCES`) |
 | `NotifyFailed`     | 71          | Can't write readiness byte to launcher   |

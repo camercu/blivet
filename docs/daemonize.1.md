@@ -156,9 +156,9 @@ Exit codes follow the **sysexits.h** conventions:
 
 **71** (EX_OSERR)
 :   OS error: fork, setsid, or chdir failed; a required post-fork
-    system call failed (opening */dev/null*, **sigprocmask**(2), or
-    **getrlimit**(2)); or exec failed for a reason other than a missing
-    or non-executable program.
+    system call failed (opening */dev/null*, **sigaction**(2),
+    **sigprocmask**(2), or **getrlimit**(2)); or exec failed for a
+    reason other than a missing or non-executable program.
 
 **73** (EX_CANTCREAT)
 :   Cannot create lock file, PID file, or output file; or **chown**(2)

@@ -26,6 +26,7 @@ pub(crate) mod failpoints {
     use std::sync::atomic::AtomicBool;
 
     pub(crate) static DEVNULL_OPEN_FAILS: AtomicBool = AtomicBool::new(false);
+    pub(crate) static SIGACTION_FAILS: AtomicBool = AtomicBool::new(false);
     pub(crate) static SIGPROCMASK_FAILS: AtomicBool = AtomicBool::new(false);
     pub(crate) static GETRLIMIT_FAILS: AtomicBool = AtomicBool::new(false);
     pub(crate) static FD_LISTING_UNAVAILABLE: AtomicBool = AtomicBool::new(false);
@@ -197,6 +198,10 @@ pub(crate) fn clear_signal_mask() -> Result<(), DaemonizeError> {
 /// ([`daemonize`](crate::daemonize) /
 /// [`daemonize_unchecked`](crate::daemonize_unchecked)) requires
 /// single-threadedness. No other thread can touch `environ`.
+///
+/// Infallible for a validated config: `set_var` panics only on an empty key,
+/// `=` or NUL in the key, or NUL in the value — all rejected by
+/// [`DaemonConfig::validate`](crate::DaemonConfig::validate) (R36, R138).
 #[allow(unsafe_code)]
 pub(crate) fn set_env_vars(env: &[(String, String)]) {
     for (key, value) in env {
@@ -706,7 +711,7 @@ mod tests {
         );
 
         // Reset all dispositions
-        crate::unsafe_ops::reset_signal_dispositions();
+        crate::unsafe_ops::reset_signal_dispositions().unwrap();
 
         // Read back SIGUSR1 disposition — should be SIG_DFL now
         let after_reset = unsafe { sigaction(Signal::SIGUSR1, &old) }.unwrap();
@@ -737,7 +742,7 @@ mod tests {
         // silent process death instead of an EPIPE error.
         let ign = SigAction::new(SigHandler::SigIgn, SaFlags::empty(), SigSet::empty());
         unsafe { sigaction(Signal::SIGPIPE, &ign) }.unwrap();
-        crate::unsafe_ops::reset_signal_dispositions();
+        crate::unsafe_ops::reset_signal_dispositions().unwrap();
         let after = unsafe { sigaction(Signal::SIGPIPE, &ign) }.unwrap();
         assert!(
             matches!(after.handler(), SigHandler::SigIgn),
@@ -748,7 +753,7 @@ mod tests {
         // not force SIG_IGN: an explicit SIG_DFL stays SIG_DFL.
         let dfl = SigAction::new(SigHandler::SigDfl, SaFlags::empty(), SigSet::empty());
         unsafe { sigaction(Signal::SIGPIPE, &dfl) }.unwrap();
-        crate::unsafe_ops::reset_signal_dispositions();
+        crate::unsafe_ops::reset_signal_dispositions().unwrap();
         let after = unsafe { sigaction(Signal::SIGPIPE, &dfl) }.unwrap();
         assert!(
             matches!(after.handler(), SigHandler::SigDfl),

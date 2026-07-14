@@ -387,8 +387,11 @@ impl DaemonConfig {
             )));
         }
 
-        // Environment key validation
-        for (key, _) in &self.env {
+        // Environment validation: reject exactly what would make
+        // `std::env::set_var` panic in the daemon child at step 11 (empty key,
+        // '=' or NUL in the key, NUL in the value), so misconfiguration
+        // surfaces here as a ValidationError instead of a post-fork panic.
+        for (key, value) in &self.env {
             if key.is_empty() {
                 return Err(DaemonizeError::ValidationError(
                     "environment key must not be empty".into(),
@@ -397,6 +400,11 @@ impl DaemonConfig {
             if key.contains('=') {
                 return Err(DaemonizeError::ValidationError(format!(
                     "environment key must not contain '=': {key}"
+                )));
+            }
+            if key.contains('\0') || value.contains('\0') {
+                return Err(DaemonizeError::ValidationError(format!(
+                    "environment entry must not contain a NUL byte: key {key:?}"
                 )));
             }
         }
@@ -841,6 +849,30 @@ mod tests {
         assert!(matches!(
             config.validate(),
             Err(DaemonizeError::ValidationError(_))
+        ));
+    }
+
+    // Covers: R138
+    #[test]
+    fn validate_env_key_with_nul_rejected() {
+        // std::env::set_var panics on a NUL byte; validate() must reject it up
+        // front as a ValidationError, not let the daemon child panic at step 11.
+        let mut config = DaemonConfig::new();
+        config.env("KEY\0BAD", "value");
+        assert!(matches!(
+            config.validate(),
+            Err(DaemonizeError::ValidationError(msg)) if msg.contains("NUL")
+        ));
+    }
+
+    // Covers: R138
+    #[test]
+    fn validate_env_value_with_nul_rejected() {
+        let mut config = DaemonConfig::new();
+        config.env("KEY", "val\0ue");
+        assert!(matches!(
+            config.validate(),
+            Err(DaemonizeError::ValidationError(msg)) if msg.contains("NUL")
         ));
     }
 

@@ -411,7 +411,21 @@ pub(crate) unsafe fn daemonize_inner(
         // ensure the process is single-threaded. The checked daemonize()
         // verifies this via the kernel thread count before calling
         // daemonize_inner().
-        match (unsafe { forker.fork() })? {
+        let first_fork = unsafe { forker.fork() };
+        let first_fork = match first_fork {
+            Ok(result) => result,
+            Err(e) => {
+                // No child exists yet; the error returns to the caller
+                // directly, so close the write end silently rather than let
+                // the NotifyPipe Drop safety net write into a pipe whose only
+                // reader is this same process.
+                if let Some(pipe) = pipe_wr {
+                    pipe.close();
+                }
+                return Err(e);
+            }
+        };
+        match first_fork {
             ForkResult::Parent { .. } => {
                 // Parent: close the write end *silently* (it only reads) then
                 // read and exit. A plain drop would trip the NotifyPipe Drop
@@ -512,7 +526,7 @@ fn run_post_fork(
     }
 
     // Step 9: Reset signal dispositions
-    unsafe_ops::reset_signal_dispositions();
+    unsafe_ops::reset_signal_dispositions()?;
 
     // Step 10: Clear signal mask
     steps::clear_signal_mask()?;
@@ -713,6 +727,28 @@ mod tests {
     }
 
     #[test]
+    fn first_fork_failure_closes_pipe_silently() {
+        // The error goes back to the caller directly — nothing should reach
+        // the pipe, whose only reader is this same process. A plain drop would
+        // fire the NotifyPipe Drop safety net into it.
+        let config = DaemonConfig::new();
+        let mut forker = NullForker::first_fork_fails().with_pipe();
+        let result = run_inner(&config, &mut forker);
+        assert!(matches!(result, Err(DaemonizeError::ForkFailed(_))));
+
+        let rd = forker
+            .take_pipe_reader()
+            .expect("with_pipe stores a reader");
+        let mut buf = Vec::new();
+        std::fs::File::from(rd).read_to_end(&mut buf).unwrap();
+        assert_eq!(
+            buf,
+            Vec::<u8>::new(),
+            "a pre-fork failure must leave the pipe unwritten"
+        );
+    }
+
+    #[test]
     fn setsid_fails_exits() {
         let config = DaemonConfig::new();
         let mut forker = NullForker::setsid_fails();
@@ -862,6 +898,34 @@ mod tests {
         }
     }
 
+    // Covers: R134
+    #[test]
+    fn sigaction_failure_propagates() {
+        run_in_subprocess("tests::sigaction_failure_propagates_subprocess");
+    }
+
+    #[test]
+    #[ignore]
+    fn sigaction_failure_propagates_subprocess() {
+        if !is_subprocess() {
+            return;
+        }
+        steps::failpoints::SIGACTION_FAILS.store(true, std::sync::atomic::Ordering::Relaxed);
+        let mut config = DaemonConfig::new();
+        config.foreground(true).close_fds(false);
+        let mut forker = NullForker::new(vec![], Ok(()));
+        match run_inner(&config, &mut forker) {
+            Err(DaemonizeError::SystemError(msg)) => {
+                assert!(
+                    msg.contains("sigaction"),
+                    "message names the syscall: {msg}"
+                );
+            }
+            other => panic!("expected SystemError to propagate, got {other:?}"),
+        }
+    }
+
+    // Covers: R134
     #[test]
     fn sigprocmask_failure_propagates() {
         run_in_subprocess("tests::sigprocmask_failure_propagates_subprocess");
