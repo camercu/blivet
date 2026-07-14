@@ -234,6 +234,16 @@ mod tests {
     }
 
     #[test]
+    fn drop_with_closed_reader_does_not_panic() {
+        // The Drop safety net runs during unwinds; a failing pipe write there
+        // (reader already gone -> EPIPE) must stay silent, or the safety net
+        // would turn one panic into an abort.
+        let (rd, wr) = make_pipe();
+        drop(rd);
+        drop(NotifyPipe::new(wr));
+    }
+
+    #[test]
     fn drop_after_signal_does_not_double_write() {
         let (rd, wr) = make_pipe();
         NotifyPipe::new(wr).signal_ready().unwrap();

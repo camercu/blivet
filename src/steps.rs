@@ -630,6 +630,27 @@ mod tests {
     }
 
     #[test]
+    fn write_pidfile_standalone_truncates_stale_content() {
+        // A stale pidfile longer than the new PID must not keep a garbage
+        // tail (O_TRUNC): "999999999999\n" overwritten by pid 42 must read
+        // "42\n", not "42\n9999999999\n".
+        let dir = tempfile::tempdir().unwrap();
+        let pidfile = dir.path().join("stale.pid");
+        std::fs::write(&pidfile, "999999999999999999\n").unwrap();
+        write_pidfile(&pidfile, None).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&pidfile).unwrap(),
+            format!("{}\n", std::process::id())
+        );
+    }
+
+    #[test]
+    fn write_pidfile_standalone_open_error() {
+        let result = write_pidfile(Path::new("/nonexistent_blivet_dir/x.pid"), None);
+        assert!(matches!(result, Err(DaemonizeError::PidfileError(msg)) if msg.contains("open")));
+    }
+
+    #[test]
     fn write_pidfile_shared_with_lockfile() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("shared.pid");
