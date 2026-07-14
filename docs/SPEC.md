@@ -191,7 +191,11 @@ configured. Disabled by `config.chown_paths(false)` — for hardening
 On error, paths already processed remain chowned; the chown is
 idempotent, so retrying after fixing the cause is safe. A chown failure
 aborts the drop before any `setgid`/`setuid`, so the caller is still
-privileged and can remediate.
+privileged and can remediate. The chown follows symlinks (`chown(2)`,
+not `lchown`), matching how these files are opened, so configured paths
+must live in directories not writable by untrusted users — otherwise a
+planted symlink could redirect the privileged chown onto an arbitrary
+file.
 
 The switch phase resolves each spec — if the string parses as a `u32`,
 treat it as a numeric UID/GID; otherwise resolve via `getpwnam()`/
