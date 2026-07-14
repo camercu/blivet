@@ -28,8 +28,8 @@ pub(crate) enum StreamAction {
         flags: OFlag,
         target_fd: i32,
     },
-    /// Dup an already-open fd to the target fd.
-    DupFrom { source_fd: i32, target_fd: i32 },
+    /// Dup the already-redirected stdout onto stderr (same-path case).
+    DupStdoutToStderr,
 }
 
 /// Plan for redirecting stdout and stderr.
@@ -200,10 +200,7 @@ pub(crate) fn plan_output_redirect(
     };
 
     let stderr_action = if same_path {
-        StreamAction::DupFrom {
-            source_fd: 1,
-            target_fd: 2,
-        }
+        StreamAction::DupStdoutToStderr
     } else {
         match stderr {
             Some(path) => StreamAction::OpenAndRedirect {
@@ -255,19 +252,9 @@ fn execute_stream_action(action: &StreamAction) -> Result<(), DaemonizeError> {
             }
             Ok(())
         }
-        StreamAction::DupFrom {
-            source_fd,
-            target_fd,
-        } => {
-            // source_fd is always a stdio fd set up by a prior action.
-            match source_fd {
-                0 => dup2_stdio(std::io::stdin(), *target_fd),
-                1 => dup2_stdio(std::io::stdout(), *target_fd),
-                2 => dup2_stdio(std::io::stderr(), *target_fd),
-                _ => unreachable!("DupFrom with non-stdio source: {source_fd}"),
-            }
-            .map_err(|e| {
-                DaemonizeError::OutputFileError(format!("dup2 fd {source_fd} -> {target_fd}: {e}"))
+        StreamAction::DupStdoutToStderr => {
+            dup2_stdio(std::io::stdout(), 2).map_err(|e| {
+                DaemonizeError::OutputFileError(format!("dup2 stdout -> stderr: {e}"))
             })?;
             Ok(())
         }
@@ -812,13 +799,7 @@ mod tests {
             plan.stdout,
             StreamAction::OpenAndRedirect { target_fd: 1, .. }
         ));
-        assert_eq!(
-            plan.stderr,
-            StreamAction::DupFrom {
-                source_fd: 1,
-                target_fd: 2,
-            }
-        );
+        assert_eq!(plan.stderr, StreamAction::DupStdoutToStderr);
     }
 
     #[test]
@@ -896,7 +877,7 @@ mod tests {
 
     #[test]
     #[serial]
-    fn execute_redirect_dup_from() {
+    fn execute_redirect_dup_stdout_to_stderr() {
         let _restore = SavedFds::new(&[1, 2]);
         let dir = tempfile::tempdir().unwrap();
         let combined = dir.path().join("combined.log");
