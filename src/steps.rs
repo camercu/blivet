@@ -123,8 +123,17 @@ pub(crate) fn write_pidfile(
         write_all_fd(flock.as_fd(), content.as_bytes())
             .map_err(|e| DaemonizeError::PidfileError(format!("write: {e}")))?;
     } else {
-        // Open, write, close
-        std::fs::write(pidfile_path, content.as_bytes()).map_err(|e| {
+        // Open explicitly with mode 0644 (R98); std::fs::write would create the
+        // file 0666 & ~umask, violating the mandated pidfile permissions.
+        let fd = open(
+            pidfile_path,
+            OFlag::O_WRONLY | OFlag::O_CREAT | OFlag::O_TRUNC | OFlag::O_CLOEXEC,
+            Mode::from_bits_truncate(0o644),
+        )
+        .map_err(|e| {
+            DaemonizeError::PidfileError(format!("open {}: {e}", pidfile_path.display()))
+        })?;
+        write_all_fd(&fd, content.as_bytes()).map_err(|e| {
             DaemonizeError::PidfileError(format!("write {}: {e}", pidfile_path.display()))
         })?;
     }
@@ -566,6 +575,26 @@ mod tests {
         let contents = std::fs::read_to_string(&pidfile).unwrap();
         let pid: u32 = contents.trim().parse().unwrap();
         assert_eq!(pid, std::process::id());
+    }
+
+    // Covers: R98
+    #[test]
+    #[serial]
+    fn write_pidfile_standalone_mode_is_0644() {
+        use std::os::unix::fs::PermissionsExt;
+
+        // umask 0 so the on-disk mode reflects the open()/create mode exactly,
+        // not umask masking. std::fs::write creates 0666; R98 mandates 0644.
+        let old = nix::sys::stat::umask(Mode::empty());
+        let dir = tempfile::tempdir().unwrap();
+        let pidfile = dir.path().join("mode.pid");
+        write_pidfile(&pidfile, None).unwrap();
+        let mode = std::fs::metadata(&pidfile).unwrap().permissions().mode() & 0o777;
+        nix::sys::stat::umask(old);
+        assert_eq!(
+            mode, 0o644,
+            "standalone pidfile must be created 0644, got {mode:o}"
+        );
     }
 
     #[test]
