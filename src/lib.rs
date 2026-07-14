@@ -413,8 +413,12 @@ pub(crate) unsafe fn daemonize_inner(
         // daemonize_inner().
         match (unsafe { forker.fork() })? {
             ForkResult::Parent { .. } => {
-                // Parent: close write end, read from pipe, exit
-                drop(pipe_wr);
+                // Parent: close the write end *silently* (it only reads) then
+                // read and exit. A plain drop would trip the NotifyPipe Drop
+                // safety net and make the parent read its own failure bytes.
+                if let Some(pipe) = pipe_wr {
+                    pipe.close();
+                }
                 if let Some(rd) = pipe_rd {
                     parent_pipe_reader(rd, forker);
                 }
@@ -437,8 +441,12 @@ pub(crate) unsafe fn daemonize_inner(
         // SAFETY: same as above — single-threaded post-fork child.
         match unsafe { forker.fork() } {
             Ok(ForkResult::Parent { .. }) => {
-                // Intermediate child exits
-                drop(pipe_wr);
+                // Intermediate child exits silently: the grandchild daemon is
+                // the sole writer, so close the write-end copy without tripping
+                // the NotifyPipe Drop safety net.
+                if let Some(pipe) = pipe_wr {
+                    pipe.close();
+                }
                 forker.exit(0);
             }
             Ok(ForkResult::Child) => {

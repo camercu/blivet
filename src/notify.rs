@@ -31,18 +31,35 @@ use crate::error::DaemonizeError;
 /// drop, whether to report an unnotified exit.
 ///
 /// [`DaemonContext`]: crate::DaemonContext
-pub(crate) struct NotifyPipe(OwnedFd);
+/// The fd is held in an `Option` so the type can distinguish "already spoke on
+/// the wire" (`None`) from "never spoke" (`Some`). Every consuming method takes
+/// the fd out before writing; [`Drop`] uses the leftover `Some` as the signal
+/// to fire the unnotified-failure safety net.
+pub(crate) struct NotifyPipe(Option<OwnedFd>);
 
 impl NotifyPipe {
     /// Wrap the write end of a notification pipe.
     pub(crate) fn new(fd: OwnedFd) -> Self {
-        NotifyPipe(fd)
+        NotifyPipe(Some(fd))
     }
 
     /// Borrow the underlying fd, e.g. to exempt it from
     /// [`close_inherited_fds`](crate::steps::close_inherited_fds).
     pub(crate) fn as_fd(&self) -> BorrowedFd<'_> {
-        self.0.as_fd()
+        self.0
+            .as_ref()
+            .expect("notify pipe fd borrowed after it was consumed")
+            .as_fd()
+    }
+
+    /// Close the write end without writing any message.
+    ///
+    /// The intermediate fork processes (the original parent and the first
+    /// child) each inherit a copy of the write end but must stay silent — the
+    /// grandchild daemon is the sole writer. Closing here takes the fd out so
+    /// the [`Drop`] safety net does not fire a spurious failure.
+    pub(crate) fn close(mut self) {
+        drop(self.0.take());
     }
 
     /// Signal readiness: write the success byte and close the pipe.
@@ -51,28 +68,46 @@ impl NotifyPipe {
     ///
     /// Returns `io::Error` if writing to the pipe fails.
     #[must_use = "the parent process blocks until notified; ignoring this Result may leave it waiting"]
-    pub(crate) fn signal_ready(self) -> io::Result<()> {
+    pub(crate) fn signal_ready(mut self) -> io::Result<()> {
         self.write_all(&SUCCESS)
     }
 
     /// Signal a daemonization failure: write the error's exit-code byte and
     /// message, then close the pipe. Best-effort — write errors are ignored
     /// because the process is aborting regardless.
-    pub(crate) fn signal_error(self, err: &DaemonizeError) {
+    pub(crate) fn signal_error(mut self, err: &DaemonizeError) {
         let _ = self.write_all(&error_bytes(err));
     }
 
     /// Signal that the daemon exited without ever calling
     /// [`notify_parent`](crate::DaemonContext::notify_parent). Best-effort.
-    pub(crate) fn signal_unnotified(self) {
+    pub(crate) fn signal_unnotified(mut self) {
         let _ = self.write_all(&unnotified_bytes());
     }
 
-    /// Write all bytes to the pipe and flush, consuming and closing it.
-    fn write_all(self, bytes: &[u8]) -> io::Result<()> {
-        let mut file = io::BufWriter::new(std::fs::File::from(self.0));
+    /// Take the fd (if still present) and write `bytes` through it, closing it.
+    /// A no-op once the fd has been taken, so it is safe to call again from
+    /// [`Drop`] after a `signal_*`/`close` has already consumed the pipe.
+    fn write_all(&mut self, bytes: &[u8]) -> io::Result<()> {
+        let Some(fd) = self.0.take() else {
+            return Ok(());
+        };
+        let mut file = io::BufWriter::new(std::fs::File::from(fd));
         file.write_all(bytes)?;
         file.flush()
+    }
+}
+
+impl Drop for NotifyPipe {
+    /// Safety net: a `NotifyPipe` still holding its fd at drop means the daemon
+    /// process is going away without having reported an outcome — e.g. a panic
+    /// unwound past the signalling seam. Report a failure so the closed pipe is
+    /// not decoded as EOF = success, which would tell the parent that a crashed
+    /// daemon started cleanly. The intended exits (`signal_*`, `close`) take the
+    /// fd first, leaving this a no-op. Never panics, so it is safe during an
+    /// unwind.
+    fn drop(&mut self) {
+        let _ = self.write_all(&unnotified_bytes());
     }
 }
 
@@ -170,6 +205,38 @@ mod tests {
                 message: "daemon exited without signaling readiness".into(),
             }
         );
+    }
+
+    #[test]
+    fn drop_without_signal_reports_unnotified_failure() {
+        // Safety net: a NotifyPipe that is dropped without any signal_* call
+        // (e.g. a panic unwinding past the signalling seam) must report a
+        // failure, not let the closed pipe decode as EOF = success.
+        let (rd, wr) = make_pipe();
+        drop(NotifyPipe::new(wr));
+        assert_eq!(
+            decode(&read_pipe(rd)),
+            Outcome::Failure {
+                code: UNNOTIFIED_CODE as i32,
+                message: "daemon exited without signaling readiness".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn close_writes_nothing() {
+        // The intermediate fork processes close their write-end copy silently;
+        // the pipe must hit EOF (decoded as success), not the Drop safety net.
+        let (rd, wr) = make_pipe();
+        NotifyPipe::new(wr).close();
+        assert_eq!(read_pipe(rd), Vec::<u8>::new());
+    }
+
+    #[test]
+    fn drop_after_signal_does_not_double_write() {
+        let (rd, wr) = make_pipe();
+        NotifyPipe::new(wr).signal_ready().unwrap();
+        assert_eq!(read_pipe(rd), SUCCESS);
     }
 
     #[test]
