@@ -1,3 +1,5 @@
+## [0.13.0](https://github.com/camercu/blivet/compare/v0.12.0...v0.13.0) (2026-07-15)
+
 ## [0.12.0](https://github.com/camercu/blivet/compare/v0.11.0...v0.12.0) (2026-07-11)
 
 ## 0.11.0 (2026-07-10)
