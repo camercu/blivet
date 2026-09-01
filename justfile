@@ -32,15 +32,18 @@ lint-deny:
 doc:
     RUSTDOCFLAGS="-D warnings" cargo doc {{locked}} --no-deps
 
-# Cross-check the non-host Unix targets CI smoke-tests, catching platform
-# type differences (e.g. rlim_t is i64 on FreeBSD, u64 elsewhere) before
-# push. `cargo check` needs only the target's std (rustup-installable);
-# OpenBSD is tier-3 without one, so CI's OpenBSD smoke remains the backstop.
+# Type-check the non-host Unix targets, catching platform type differences
+# (rlim_t is i64 on FreeBSD, u64 elsewhere) and libc constants a platform
+# lacks (bionic has no AT_EACCESS) before push. `cargo check` needs only the
+# target's std (rustup-installable); OpenBSD is tier-3 without one, so CI's
+# OpenBSD smoke remains the backstop there.
 check-cross:
-    rustup target add x86_64-unknown-linux-gnu x86_64-unknown-freebsd x86_64-unknown-netbsd
+    rustup target add x86_64-unknown-linux-gnu x86_64-unknown-freebsd x86_64-unknown-netbsd aarch64-linux-android x86_64-linux-android
     {{cargo}} check {{locked}} --target x86_64-unknown-linux-gnu
     {{cargo}} check {{locked}} --target x86_64-unknown-freebsd
     {{cargo}} check {{locked}} --target x86_64-unknown-netbsd
+    {{cargo}} check {{locked}} --target aarch64-linux-android
+    {{cargo}} check {{locked}} --target x86_64-linux-android
 
 # Lowest rustc that must be able to *resolve* the dev-dependency graph: the
 # rust OpenBSD ships via `pkg_add rust` (Tier 3, no rustup), which the openbsd
