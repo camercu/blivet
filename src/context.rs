@@ -1267,8 +1267,8 @@ mod tests {
 
     #[test]
     fn error_display_chown_error() {
-        let err = crate::DaemonizeError::ChownError("/tmp/foo: permission denied".into());
-        assert_eq!(err.to_string(), "chown error: /tmp/foo: permission denied");
+        let err = crate::DaemonizeError::ChownError("/a/foo: permission denied".into());
+        assert_eq!(err.to_string(), "chown error: /a/foo: permission denied");
     }
 
     // --- cleanup ---

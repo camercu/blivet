@@ -33,7 +33,7 @@ pub(crate) enum LockfileSetting {
 ///
 /// fn make_config(pid: &str) -> DaemonConfig {
 ///     let mut config = DaemonConfig::new();
-///     config.pidfile(pid).chdir("/tmp");
+///     config.pidfile(pid).chdir("/var/lib/foo");
 ///     config
 /// }
 /// ```
@@ -44,7 +44,7 @@ pub(crate) enum LockfileSetting {
 /// use blivet::DaemonConfig;
 ///
 /// let mut config = DaemonConfig::new();
-/// config.pidfile("/var/run/foo.pid").chdir("/tmp");
+/// config.pidfile("/var/run/foo.pid").chdir("/var/lib/foo");
 /// ```
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub struct DaemonConfig {
@@ -504,7 +504,7 @@ mod tests {
     #[test]
     fn equal_configs_hash_equal() {
         let mut a = DaemonConfig::new();
-        a.pidfile("/tmp/x.pid").umask(0o022).env("K", "V");
+        a.pidfile("/a/x.pid").umask(0o022).env("K", "V");
         let b = a.clone();
         let set: std::collections::HashSet<DaemonConfig> = [a, b].into_iter().collect();
         assert_eq!(set.len(), 1, "equal configs must collapse in a HashSet");
@@ -540,10 +540,10 @@ mod tests {
     #[test]
     fn lockfile_derives_from_pidfile_by_default() {
         let mut config = DaemonConfig::new();
-        config.pidfile("/tmp/x.pid");
+        config.pidfile("/a/x.pid");
         assert_eq!(
             config.effective_lockfile(),
-            Some(&PathBuf::from("/tmp/x.pid"))
+            Some(&PathBuf::from("/a/x.pid"))
         );
     }
 
@@ -557,10 +557,10 @@ mod tests {
     #[test]
     fn explicit_lockfile_overrides_derivation() {
         let mut config = DaemonConfig::new();
-        config.pidfile("/tmp/x.pid").lockfile("/tmp/x.lock");
+        config.pidfile("/a/x.pid").lockfile("/a/x.lock");
         assert_eq!(
             config.effective_lockfile(),
-            Some(&PathBuf::from("/tmp/x.lock"))
+            Some(&PathBuf::from("/a/x.lock"))
         );
     }
 
@@ -568,7 +568,7 @@ mod tests {
     #[test]
     fn no_lockfile_disables_locking() {
         let mut config = DaemonConfig::new();
-        config.pidfile("/tmp/x.pid").no_lockfile();
+        config.pidfile("/a/x.pid").no_lockfile();
         assert_eq!(config.effective_lockfile(), None);
     }
 
@@ -576,10 +576,10 @@ mod tests {
     #[test]
     fn lockfile_after_no_lockfile_wins() {
         let mut config = DaemonConfig::new();
-        config.no_lockfile().lockfile("/tmp/x.lock");
+        config.no_lockfile().lockfile("/a/x.lock");
         assert_eq!(
             config.effective_lockfile(),
-            Some(&PathBuf::from("/tmp/x.lock"))
+            Some(&PathBuf::from("/a/x.lock"))
         );
     }
 
@@ -587,7 +587,7 @@ mod tests {
     #[test]
     fn no_lockfile_after_lockfile_wins() {
         let mut config = DaemonConfig::new();
-        config.lockfile("/tmp/x.lock").no_lockfile();
+        config.lockfile("/a/x.lock").no_lockfile();
         assert_eq!(config.effective_lockfile(), None);
     }
 
@@ -623,6 +623,14 @@ mod tests {
             other => panic!("expected ValidationError, got {other:?}"),
         };
 
+        // The two cases below reach the filesystem: one needs an existing
+        // directory to be a pidfile, the other needs a writable parent for the
+        // overlap check to be the failure that fires.
+        let tmp = crate::test_support::tmp_dir();
+        let tmp_name = tmp.display().to_string();
+        let overlap = tmp.join("same.pid");
+        let overlap_name = overlap.display().to_string();
+
         type Setup<'a> = &'a dyn Fn(&mut DaemonConfig);
         let cases: [(&str, Setup, &str); 7] = [
             (
@@ -656,9 +664,9 @@ mod tests {
             (
                 "pidfile is dir",
                 &|c| {
-                    c.pidfile("/tmp");
+                    c.pidfile(&tmp);
                 },
-                "/tmp",
+                &tmp_name,
             ),
             (
                 "stdout parent missing",
@@ -670,9 +678,9 @@ mod tests {
             (
                 "pidfile/stdout overlap",
                 &|c| {
-                    c.pidfile("/tmp/same.pid").stdout("/tmp/same.pid");
+                    c.pidfile(&overlap).stdout(&overlap);
                 },
-                "/tmp/same.pid",
+                &overlap_name,
             ),
         ];
         for (name, setup, expected_path) in cases {
@@ -721,10 +729,10 @@ mod tests {
     fn validate_rejects_nul_byte_in_path() {
         // A NUL byte makes a path unusable by any syscall (CString::new fails),
         // so validate() must reject it up front rather than letting it surface
-        // as a late EINVAL at daemonize time. The parent dir (/tmp) exists, so
-        // this isolates the NUL rejection from the parent-writable check.
+        // as a late EINVAL at daemonize time. The parent dir exists, so this
+        // isolates the NUL rejection from the parent-writable check.
         let mut config = DaemonConfig::new();
-        config.pidfile("/tmp/pid\0file");
+        config.pidfile(crate::test_support::tmp_dir().join("pid\0file"));
         assert!(matches!(
             config.validate(),
             Err(DaemonizeError::ValidationError(_))
@@ -735,7 +743,7 @@ mod tests {
     #[test]
     fn validate_pidfile_not_directory() {
         let mut config = DaemonConfig::new();
-        config.pidfile("/tmp");
+        config.pidfile(crate::test_support::tmp_dir());
         assert!(matches!(
             config.validate(),
             Err(DaemonizeError::ValidationError(_))
