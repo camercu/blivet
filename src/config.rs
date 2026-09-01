@@ -283,8 +283,14 @@ impl DaemonConfig {
     /// while still attached to a terminal).
     ///
     /// Performs minimal I/O: checks path existence, directory writability
-    /// (via `faccessat(AT_EACCESS)`), and queries the effective UID when a
-    /// user switch is configured. No files are created or modified.
+    /// (via `faccessat`), and queries the effective UID when a user switch is
+    /// configured. No files are created or modified.
+    ///
+    /// The writability probe passes `AT_EACCESS`, so it answers for the
+    /// effective UID/GID — the identity a setuid binary writes as. On Android
+    /// bionic rejects that flag, so there the probe answers for the **real**
+    /// UID/GID instead. The check is advisory either way: it is inherently racy,
+    /// and a writable answer is not a promise the later write succeeds.
     ///
     /// # Errors
     ///
@@ -440,8 +446,20 @@ fn validate_path(path: &std::path::Path, name: &str) -> Result<(), DaemonizeErro
     Ok(())
 }
 
+/// Flags for the parent-directory writability probe.
+///
+/// `AT_EACCESS` asks `faccessat` to answer for the effective UID/GID, which is
+/// what a setuid binary needs to know. Bionic rejects the flag, so `nix` does
+/// not define the constant on Android and the probe answers for the real UID
+/// there instead; see [`DaemonConfig::validate`] for what that means for
+/// callers.
+#[cfg(not(target_os = "android"))]
+const EFFECTIVE_ACCESS: nix::fcntl::AtFlags = nix::fcntl::AtFlags::AT_EACCESS;
+/// Bionic's `faccessat` rejects `AT_EACCESS`, so the probe tests the real UID.
+#[cfg(target_os = "android")]
+const EFFECTIVE_ACCESS: nix::fcntl::AtFlags = nix::fcntl::AtFlags::empty();
+
 fn validate_parent_writable(path: &std::path::Path, name: &str) -> Result<(), DaemonizeError> {
-    use nix::fcntl::AtFlags;
     use nix::unistd::AccessFlags;
 
     let parent = path.parent().ok_or_else(|| {
@@ -456,13 +474,13 @@ fn validate_parent_writable(path: &std::path::Path, name: &str) -> Result<(), Da
             parent.display()
         )));
     }
-    // Check writability using faccessat(AT_EACCESS) which tests against the
-    // effective UID/GID rather than the real UID (important for setuid binaries).
+    // Writability is probed with faccessat, against the effective UID/GID where
+    // the platform supports it (see EFFECTIVE_ACCESS).
     match nix::unistd::faccessat(
         crate::unsafe_ops::at_fdcwd(),
         parent,
         AccessFlags::W_OK,
-        AtFlags::AT_EACCESS,
+        EFFECTIVE_ACCESS,
     ) {
         Ok(()) => Ok(()),
         Err(_) => Err(DaemonizeError::ValidationError(format!(
