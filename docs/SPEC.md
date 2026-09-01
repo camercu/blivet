@@ -380,7 +380,8 @@ DaemonizeError>`. Calling before `daemonize()` is optional;
 ## Validation
 
 Checks paths, permissions, and config values against the real
-filesystem using the **current effective UID** at the time of the call.
+filesystem using the **current effective UID** at the time of the call
+(on Android, the **real** UID — see path rules below).
 
 > When a user switch is configured, validation runs as root but the
 > daemon operates as the target user. Post-user-switch permission
@@ -396,8 +397,11 @@ stdout, stderr, and lockfile paths must be absolute when configured.
 Chdir path must be absolute, must exist, and must be a directory.
 Pidfile path must not be a directory. Parent directories of the
 configured *file* paths (pidfile, stdout, stderr, lockfile) must be
-writable (checked against current euid). Chdir is exempt: it must
-already exist as a directory, so its parent is never created.
+writable. The check is `faccessat` with `AT_EACCESS`, so it answers for
+the current euid — the identity a setuid binary writes as. Android is
+the exception: bionic rejects `AT_EACCESS`, so there the check answers
+for the real UID. Chdir is exempt: it must already exist as a
+directory, so its parent is never created.
 
 ### Path comparison
 
