@@ -39,10 +39,14 @@ fn readme_msrv_matches_cargo_toml() {
     );
 }
 
-/// The README and the crate front page must name the same supported platforms.
+/// The README and the crate front page must name every supported platform.
+///
+/// The list comes from the capability table in `build.rs`, the same table the
+/// `cfg` aliases come from, so adding a platform there is what makes this test
+/// demand the docs mention it.
 #[test]
 fn platform_list_consistent() {
-    let platforms = ["Linux", "macOS", "FreeBSD", "NetBSD", "OpenBSD"];
+    let platforms = env!("BLIVET_PLATFORMS").split(',');
     let readme = read("README.md");
     let front_page = read("src/lib.rs");
     for p in platforms {
@@ -50,6 +54,22 @@ fn platform_list_consistent() {
         assert!(
             front_page.contains(p),
             "crate front page (lib.rs) omits supported platform {p}"
+        );
+    }
+}
+
+/// The front page shows consumers how to gate the `daemonize` call for an
+/// exotic target. Consumers cannot see this crate's capability aliases, so that
+/// example spells out `target_os` — a copy of the table that would otherwise
+/// go stale the next time a platform is added.
+#[test]
+fn front_page_cfg_example_lists_every_target_os() {
+    let front_page = read("src/lib.rs");
+    for os in env!("BLIVET_TARGET_OS").split(',') {
+        let clause = format!("target_os = \"{os}\"");
+        assert!(
+            front_page.contains(&clause),
+            "the front page `cfg` example omits {clause}"
         );
     }
 }

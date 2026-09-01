@@ -381,20 +381,17 @@ pub(crate) fn fds_to_close(max_fd: i32, skip_fds: &[i32]) -> impl Iterator<Item 
 
 /// List this process's open fds from the fd directory, or `None` where no
 /// reliable listing exists: the BSDs' `/dev/fd` exposes only 0-2 unless
-/// fdescfs is mounted, and Linux may lack `/proc` in minimal containers
-/// (read failure also returns `None`).
+/// fdescfs is mounted, and a minimal container may lack `/proc` even where the
+/// platform normally has it (read failure also returns `None`).
 ///
 /// The listing includes the fd `read_dir` itself uses; it is already closed
 /// when the caller acts on the list, and re-closing is a harmless `EBADF`.
 ///
 /// Safe post-fork: `daemonize` requires a single-threaded caller, so the
 /// child's allocator lock cannot be held mid-operation by another thread.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(blivet_fd_dir)]
 pub(crate) fn list_open_fds() -> Option<Vec<i32>> {
-    #[cfg(target_os = "linux")]
-    const FD_LIST_DIR: &str = "/proc/self/fd";
-    #[cfg(target_os = "macos")]
-    const FD_LIST_DIR: &str = "/dev/fd";
+    const FD_LIST_DIR: &str = env!("BLIVET_FD_DIR");
 
     #[cfg(test)]
     if failpoints::injected(&failpoints::FD_LISTING_UNAVAILABLE) {
@@ -408,7 +405,7 @@ pub(crate) fn list_open_fds() -> Option<Vec<i32>> {
     )
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+#[cfg(not(blivet_fd_dir))]
 pub(crate) fn list_open_fds() -> Option<Vec<i32>> {
     None
 }
@@ -1033,7 +1030,7 @@ mod tests {
 
     // Covers: R135
     #[test]
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[cfg(blivet_fd_dir)]
     fn list_open_fds_sees_an_open_fd() {
         use std::os::fd::AsRawFd;
         let file = tempfile::tempfile().unwrap();

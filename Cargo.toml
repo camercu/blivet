@@ -10,12 +10,15 @@ documentation = "https://docs.rs/blivet"
 readme = "README.md"
 keywords = ["daemon", "daemonize", "fork", "unix", "linux"]
 categories = ["os::unix-apis"]
-# Allowlist what ships to crates.io (default-deny): only the library, the
-# `daemonize` binary, the runnable example, and the legal/readme/changelog
-# files. README.md is required — src/main.rs embeds it via include_str!.
-# Cargo.toml and Cargo.lock are always packaged automatically.
+# Allowlist what ships to crates.io (default-deny): the library, the
+# `daemonize` binary, the build script, the runnable example, and the
+# legal/readme/changelog files. README.md is required — src/main.rs embeds it
+# via include_str!. build.rs is required — it resolves the capability `cfg`
+# aliases every platform branch gates on, so without it every branch takes the
+# unknown-Unix fallback. Cargo.toml and Cargo.lock are packaged automatically.
 include = [
     "/src/**/*.rs",
+    "/build.rs",
     "/examples/**/*.rs",
     "/README.md",
     "/CHANGELOG.md",

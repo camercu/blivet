@@ -453,10 +453,10 @@ fn validate_path(path: &std::path::Path, name: &str) -> Result<(), DaemonizeErro
 /// not define the constant on Android and the probe answers for the real UID
 /// there instead; see [`DaemonConfig::validate`] for what that means for
 /// callers.
-#[cfg(not(target_os = "android"))]
+#[cfg(blivet_faccessat_eaccess)]
 const EFFECTIVE_ACCESS: nix::fcntl::AtFlags = nix::fcntl::AtFlags::AT_EACCESS;
-/// Bionic's `faccessat` rejects `AT_EACCESS`, so the probe tests the real UID.
-#[cfg(target_os = "android")]
+/// Without `AT_EACCESS` the probe has only the real UID to answer for.
+#[cfg(not(blivet_faccessat_eaccess))]
 const EFFECTIVE_ACCESS: nix::fcntl::AtFlags = nix::fcntl::AtFlags::empty();
 
 fn validate_parent_writable(path: &std::path::Path, name: &str) -> Result<(), DaemonizeError> {

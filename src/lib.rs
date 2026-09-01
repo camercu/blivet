@@ -265,13 +265,7 @@ pub unsafe fn daemonize_unchecked(config: &DaemonConfig) -> Result<DaemonContext
 /// thread-count query. Failing closed keeps the safety guard from
 /// green-lighting on a count it cannot trust. `caller` names the operation in
 /// the panic message.
-#[cfg(any(
-    target_os = "linux",
-    target_os = "macos",
-    target_os = "freebsd",
-    target_os = "netbsd",
-    target_os = "openbsd"
-))]
+#[cfg(blivet_thread_count)]
 pub(crate) fn single_threaded_violation(caller: &str, count: usize) -> Option<String> {
     (count != 1).then(|| {
         format!(
@@ -290,13 +284,7 @@ pub(crate) fn single_threaded_violation(caller: &str, count: usize) -> Option<St
 /// the fork) and
 /// [`DaemonContext::drop_privileges`](crate::DaemonContext::drop_privileges)
 /// (before its `setenv`).
-#[cfg(any(
-    target_os = "linux",
-    target_os = "macos",
-    target_os = "freebsd",
-    target_os = "netbsd",
-    target_os = "openbsd"
-))]
+#[cfg(blivet_thread_count)]
 pub(crate) fn assert_single_threaded(caller: &str) {
     let count = thread_count::count().unwrap_or_else(|_| {
         panic!("{caller}: cannot determine thread count to verify single-threadedness")
@@ -332,13 +320,7 @@ pub(crate) fn assert_single_threaded(caller: &str) {
 ///
 /// Panics if the thread count is anything other than exactly 1, or if the
 /// thread count cannot be determined.
-#[cfg(any(
-    target_os = "linux",
-    target_os = "macos",
-    target_os = "freebsd",
-    target_os = "netbsd",
-    target_os = "openbsd"
-))]
+#[cfg(blivet_thread_count)]
 pub fn daemonize(config: &DaemonConfig) -> Result<DaemonContext, DaemonizeError> {
     assert_single_threaded("daemonize");
     #[allow(unsafe_code)]
@@ -362,13 +344,7 @@ pub fn daemonize(config: &DaemonConfig) -> Result<DaemonContext, DaemonizeError>
 /// # Panics
 ///
 /// Always panics: the operation is unsupported on this target.
-#[cfg(not(any(
-    target_os = "linux",
-    target_os = "macos",
-    target_os = "freebsd",
-    target_os = "netbsd",
-    target_os = "openbsd"
-)))]
+#[cfg(not(blivet_thread_count))]
 #[deprecated(note = "daemonize cannot verify the thread count on this target. \
             Call `unsafe { daemonize_unchecked(&config) }` and ensure the process \
             is single-threaded yourself.")]
@@ -596,13 +572,7 @@ mod tests {
     }
 
     // Covers: R45
-    #[cfg(any(
-        target_os = "linux",
-        target_os = "macos",
-        target_os = "freebsd",
-        target_os = "netbsd",
-        target_os = "openbsd"
-    ))]
+    #[cfg(blivet_thread_count)]
     #[test]
     fn single_threaded_violation_accepts_only_exactly_one() {
         assert!(

@@ -323,13 +323,7 @@ impl DaemonContext {
     /// # Errors
     ///
     /// As [`drop_privileges_unchecked`](Self::drop_privileges_unchecked).
-    #[cfg(any(
-        target_os = "linux",
-        target_os = "macos",
-        target_os = "freebsd",
-        target_os = "netbsd",
-        target_os = "openbsd"
-    ))]
+    #[cfg(blivet_thread_count)]
     pub fn drop_privileges(&mut self) -> Result<(), DaemonizeError> {
         // Only a user switch calls `setenv` (USER/HOME/LOGNAME), which is not
         // thread-safe; guard exactly that case.
@@ -355,13 +349,7 @@ impl DaemonContext {
     /// # Panics
     ///
     /// Always panics: unsupported on this target.
-    #[cfg(not(any(
-        target_os = "linux",
-        target_os = "macos",
-        target_os = "freebsd",
-        target_os = "netbsd",
-        target_os = "openbsd"
-    )))]
+    #[cfg(not(blivet_thread_count))]
     #[deprecated(
         note = "drop_privileges cannot verify the thread count on this target. \
                 Call `unsafe { drop_privileges_unchecked() }` and ensure the \
@@ -1163,13 +1151,7 @@ mod tests {
     // its `setenv` of USER/HOME/LOGNAME never races. Spawning a parked thread
     // makes the count > 1 deterministically; the panic fires on the check, so
     // no root is needed.
-    #[cfg(any(
-        target_os = "linux",
-        target_os = "macos",
-        target_os = "freebsd",
-        target_os = "netbsd",
-        target_os = "openbsd"
-    ))]
+    #[cfg(blivet_thread_count)]
     #[test]
     fn drop_privileges_panics_when_not_single_threaded() {
         use std::sync::atomic::{AtomicBool, Ordering};
@@ -1218,13 +1200,7 @@ mod tests {
     // group-only would fail here. A numeric gid avoids any NSS lookup; the
     // inner `setgid` fails without root, but the point is that it does not
     // panic on the thread-count guard despite >1 thread running.
-    #[cfg(any(
-        target_os = "linux",
-        target_os = "macos",
-        target_os = "freebsd",
-        target_os = "netbsd",
-        target_os = "openbsd"
-    ))]
+    #[cfg(blivet_thread_count)]
     #[test]
     fn drop_privileges_group_only_does_not_check_threads() {
         use std::sync::atomic::{AtomicBool, Ordering};
