@@ -462,7 +462,13 @@ fn validate_parent_writable(path: &std::path::Path, name: &str) -> Result<(), Da
         crate::unsafe_ops::at_fdcwd(),
         parent,
         AccessFlags::W_OK,
-        AtFlags::AT_EACCESS,
+        {
+            #[cfg(not(target_os = "android"))]
+            { AtFlags::AT_EACCESS }
+    
+            #[cfg(target_os = "android")]
+            { AtFlags::empty() }
+        },
     ) {
         Ok(()) => Ok(()),
         Err(_) => Err(DaemonizeError::ValidationError(format!(
