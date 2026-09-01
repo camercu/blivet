@@ -1,0 +1,45 @@
+# Unit tests on bionic, Android's libc, as Termux ships it.
+#
+# This is real bionic and the real dynamic linker on a host Linux kernel, so it
+# proves the libc-level divergences — faccessat flag handling, the reserved
+# real-time signal range, getpwnam resolving a built-in AID table rather than
+# /etc/passwd. It proves nothing about the Android kernel or SELinux; the
+# emulator job is what covers those.
+#
+# Termux is also how the CLI is actually deployed on a phone, so the
+# environment is the deployment target, not only a libc stand-in.
+FROM termux/termux-docker:x86_64
+
+# `docker build` runs each step as root, which Termux's `pkg` refuses outright,
+# and the image's entrypoint re-execs through `env -i` when it starts as root,
+# dropping any variable `docker run -e` passed in. Both go away by being uid
+# 1000 (`system`) from here on, which is the uid the image expects anyway.
+USER 1000:1000
+
+# Termux's package index ships empty in the image. `rust` pulls in the NDK
+# sysroot and clang, which the build needs as a linker. Versions are whatever
+# the rolling Termux repo holds — it has no pinning mechanism, so a toolchain
+# regression surfaces here as a red job rather than a silent skip.
+RUN pkg update -y && pkg install -y rust
+
+WORKDIR /data/data/com.termux/files/home/src
+COPY --chown=1000:1000 Cargo.toml Cargo.lock ./
+
+# Warm the dependency layer before the source lands, so editing a source file
+# does not recompile the graph — worth more here than on a native builder,
+# since a non-x86_64 developer machine runs this image under emulation.
+#
+# The stub crate's own fingerprint goes with the stub. Cargo decides a path
+# crate is fresh by comparing mtimes, and COPY preserves the build context's,
+# which are older than this layer — so leaving the fingerprint behind makes the
+# real source look stale and the suite runs zero tests while reporting ok.
+RUN mkdir src && echo '' > src/lib.rs && echo 'fn main() {}' > src/main.rs \
+    && cargo build --locked --tests 2>/dev/null || true \
+    && rm -rf src target/debug/.fingerprint/blivet-*
+
+COPY --chown=1000:1000 . .
+
+# Library tests only. The integration tests spawn the CLI and probe the
+# resulting process through /proc, which is the Android kernel's business and
+# belongs to the emulator tier.
+CMD ["cargo", "test", "--locked", "--lib"]
