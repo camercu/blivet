@@ -1,19 +1,19 @@
 //! Current-process thread count for the single-threaded check in
 //! [`daemonize`](crate::daemonize).
 //!
-//! [`count`] returns the number of threads in this process. Linux reads
-//! `/proc/self/status`; macOS and the BSDs query the kernel via
-//! [`crate::unsafe_ops::thread_count`] — the syscalls live there because the
-//! crate confines raw FFI `unsafe` to that module. This module is the single
-//! conceptual owner of "how many threads are running"; callers see only
-//! [`count`] and never the per-OS mechanism.
+//! [`count`] returns the number of threads in this process. Where `/proc` has
+//! it, the count is read from `/proc/self/status`; elsewhere the kernel is
+//! queried via [`crate::unsafe_ops::thread_count`] — the syscalls live there
+//! because the crate confines raw FFI `unsafe` to that module. This module is
+//! the single conceptual owner of "how many threads are running"; callers see
+//! only [`count`] and never the mechanism behind it.
 //!
-//! Defined only on the targets [`daemonize`](crate::daemonize)
-//! supports; elsewhere that function is a deprecated stub that never calls in
+//! Defined only where the count is available at all; elsewhere
+//! [`daemonize`](crate::daemonize) is a deprecated stub that never calls in
 //! here.
 
 /// Number of threads in the current process, via `/proc/self/status`.
-#[cfg(target_os = "linux")]
+#[cfg(blivet_thread_count_procfs)]
 pub(crate) fn count() -> std::io::Result<usize> {
     let status = std::fs::read_to_string("/proc/self/status")?;
     let line = status
@@ -28,29 +28,12 @@ pub(crate) fn count() -> std::io::Result<usize> {
         })
 }
 
-/// On macOS and the BSDs the count comes from the kernel via the unsafe FFI
-/// confined to `unsafe_ops`.
-#[cfg(all(
-    not(target_os = "linux"),
-    any(
-        target_os = "macos",
-        target_os = "freebsd",
-        target_os = "netbsd",
-        target_os = "openbsd"
-    )
-))]
+/// Without `/proc/self/status`, the count comes from the kernel via the unsafe
+/// FFI confined to `unsafe_ops`.
+#[cfg(all(blivet_thread_count, not(blivet_thread_count_procfs)))]
 pub(crate) use crate::unsafe_ops::thread_count as count;
 
-#[cfg(all(
-    test,
-    any(
-        target_os = "linux",
-        target_os = "macos",
-        target_os = "freebsd",
-        target_os = "netbsd",
-        target_os = "openbsd"
-    )
-))]
+#[cfg(all(test, blivet_thread_count))]
 mod tests {
     use super::count;
     use crate::test_support::{is_subprocess, run_in_subprocess};

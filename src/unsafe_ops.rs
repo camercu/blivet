@@ -77,22 +77,22 @@ pub(crate) fn reset_signal_dispositions() -> Result<(), crate::error::DaemonizeE
 
 /// Returns the range of signal numbers to reset.
 ///
-/// On Linux, returns standard signals (1..32) chained with real-time signals
-/// (SIGRTMIN..=SIGRTMAX), deliberately skipping the NPTL-reserved range
-/// (typically 32-33) that sits between standard and real-time signals.
+/// Where libc reserves real-time signals, returns the standard signals (1..32)
+/// chained with `SIGRTMIN..=SIGRTMAX`, so the reserved range between the two
+/// (the NPTL pair at 32-33 on glibc) is skipped rather than reset.
 ///
-/// On other platforms, returns 1..=64 (EINVAL skips invalid ones).
+/// Elsewhere, returns 1..=64 (EINVAL skips invalid ones).
 fn signal_range() -> Vec<i32> {
-    #[cfg(target_os = "linux")]
+    #[cfg(blivet_rt_signals_reserved)]
     {
         let rtmin = libc::SIGRTMIN();
         let rtmax = libc::SIGRTMAX();
         (1..32).chain(rtmin..=rtmax).collect()
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(blivet_rt_signals_reserved))]
     {
-        // macOS and other BSDs don't have real-time signals; 31 standard signals
-        // but we iterate up to 64 to be safe (EINVAL will skip invalid ones)
+        // No real-time signals to preserve; 31 standard signals, but iterate up
+        // to 64 to be safe (EINVAL will skip invalid ones).
         (1..=64).collect()
     }
 }
