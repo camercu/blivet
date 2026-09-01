@@ -110,7 +110,7 @@ input validation is centralized in `validate()`.
 
 ```rust
 let mut config = DaemonConfig::new();
-config.pidfile("/var/run/foo.pid").chdir("/tmp");
+config.pidfile("/var/run/foo.pid").chdir("/var/lib/foo");
 
 config.validate()?;                     // optional early check
 

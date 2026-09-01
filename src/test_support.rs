@@ -66,3 +66,17 @@ pub(crate) fn run_in_subprocess(test_name: &str) {
         .unwrap();
     assert!(status.success(), "subprocess test failed: {status}");
 }
+
+/// Directory for test paths that reach the filesystem, honouring `TMPDIR`.
+///
+/// `/tmp` is not universal — Android and Termux ship without it — so no test
+/// names that path directly; `tests/location_independence.rs` enforces that.
+/// `std::env::temp_dir()` reads `TMPDIR` and falls back to `/tmp` only where
+/// the platform says so, which means a platform without `/tmp` must set
+/// `TMPDIR` (the Android CI jobs point it at `/data/local/tmp`).
+///
+/// Tests whose paths never reach the filesystem do not need this; they name a
+/// plainly fictional absolute path such as `/a/x.pid` instead.
+pub(crate) fn tmp_dir() -> std::path::PathBuf {
+    std::env::temp_dir()
+}

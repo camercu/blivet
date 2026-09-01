@@ -819,7 +819,7 @@ mod tests {
 
     #[test]
     fn plan_stdout_only_truncate() {
-        let path = PathBuf::from("/tmp/out.log");
+        let path = PathBuf::from("/a/out.log");
         let plan = plan_output_redirect(Some(&path), None, false);
         assert_eq!(
             plan.stdout,
@@ -834,7 +834,7 @@ mod tests {
 
     #[test]
     fn plan_stderr_only() {
-        let path = PathBuf::from("/tmp/err.log");
+        let path = PathBuf::from("/a/err.log");
         let plan = plan_output_redirect(None, Some(&path), false);
         assert_eq!(plan.stdout, StreamAction::None);
         assert_eq!(
@@ -849,8 +849,8 @@ mod tests {
 
     #[test]
     fn plan_both_different_paths() {
-        let out = PathBuf::from("/tmp/out.log");
-        let err = PathBuf::from("/tmp/err.log");
+        let out = PathBuf::from("/a/out.log");
+        let err = PathBuf::from("/a/err.log");
         let plan = plan_output_redirect(Some(&out), Some(&err), false);
         assert!(matches!(
             plan.stdout,
@@ -864,7 +864,7 @@ mod tests {
 
     #[test]
     fn plan_both_same_path() {
-        let path = PathBuf::from("/tmp/combined.log");
+        let path = PathBuf::from("/a/combined.log");
         let plan = plan_output_redirect(Some(&path), Some(&path), false);
         assert!(matches!(
             plan.stdout,
@@ -875,7 +875,7 @@ mod tests {
 
     #[test]
     fn plan_append_flag() {
-        let path = PathBuf::from("/tmp/out.log");
+        let path = PathBuf::from("/a/out.log");
         let plan = plan_output_redirect(Some(&path), None, true);
         if let StreamAction::OpenAndRedirect { flags, .. } = plan.stdout {
             assert!(flags.contains(OFlag::O_APPEND));
@@ -887,7 +887,7 @@ mod tests {
 
     #[test]
     fn plan_truncate_flag() {
-        let path = PathBuf::from("/tmp/out.log");
+        let path = PathBuf::from("/a/out.log");
         let plan = plan_output_redirect(Some(&path), None, false);
         if let StreamAction::OpenAndRedirect { flags, .. } = plan.stdout {
             assert!(flags.contains(OFlag::O_TRUNC));

@@ -428,14 +428,14 @@ mod tests {
 
         // Establish a prior successful install so pointer rollback is
         // distinguishable from "still null".
-        install_pidfile_cleanup_signals(c"/tmp/rollback-prior.pid", &[libc::SIGUSR2])
+        install_pidfile_cleanup_signals(c"/a/rollback-prior.pid", &[libc::SIGUSR2])
             .expect("SIGUSR2 install should succeed");
         let prior_ptr = CLEANUP_PIDFILE.load(Ordering::Acquire);
         let prior_usr1 = current_disposition(libc::SIGUSR1);
 
         // SIGUSR1 installs, then SIGKILL fails with EINVAL.
         let err = install_pidfile_cleanup_signals(
-            c"/tmp/rollback-new.pid",
+            c"/a/rollback-new.pid",
             &[libc::SIGUSR1, libc::SIGKILL],
         )
         .expect_err("SIGKILL cannot be caught");

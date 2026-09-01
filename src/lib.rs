@@ -20,7 +20,7 @@
 //! use blivet::{DaemonConfig, daemonize};
 //!
 //! let mut config = DaemonConfig::new();
-//! config.pidfile("/var/run/foo.pid").chdir("/tmp");
+//! config.pidfile("/var/run/foo.pid").chdir("/var/lib/foo");
 //!
 //! let mut ctx = daemonize(&config)?;
 //! // ... application initialization ...
