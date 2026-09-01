@@ -105,6 +105,13 @@ docker-test:
     docker build -t blivet-test .
     docker run --rm --init --privileged blivet-test
 
+# Run the library tests against bionic, Android's libc, in a Termux container.
+# The platform is pinned to linux/amd64 so a developer on any architecture runs
+# what CI runs; off an x86_64 host that means emulation, and it is slow.
+termux-test:
+    docker build --platform linux/amd64 -f Dockerfile.termux -t blivet-termux .
+    docker run --rm --platform linux/amd64 --init blivet-termux
+
 # Regenerate manpage from markdown source (requires pandoc).
 # The @VERSION@ placeholder is filled from Cargo.toml's package version, so the
 # man-page version is never hand-maintained.
