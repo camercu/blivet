@@ -10,7 +10,7 @@
 //! ```text
 //! cargo run --example echo_server
 //! echo hello | nc 127.0.0.1 7878      # -> hello
-//! kill "$(cat /tmp/echo_server.pid)"  # pidfile is removed on exit
+//! kill "$(cat "${TMPDIR:-/tmp}/echo_server.pid")"  # pidfile removed on exit
 //! ```
 //!
 //! Run in the foreground (handy for development; Ctrl-C to stop):
@@ -28,20 +28,30 @@ use std::time::Duration;
 use blivet::{daemonize, DaemonConfig};
 
 const ADDR: &str = "127.0.0.1:7878";
-const PIDFILE: &str = "/tmp/echo_server.pid";
-const LOGFILE: &str = "/tmp/echo_server.log";
+
+/// Absolute path to `name` in the system temp directory.
+///
+/// Taken from `TMPDIR` rather than written out, because the daemon chdirs to
+/// `/` (so the path must be absolute) and because a supported platform need
+/// not have `/tmp` — Termux, where this CLI is a normal thing to run, does not.
+fn temp_path(name: &str) -> std::path::PathBuf {
+    std::env::temp_dir().join(name)
+}
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let foreground = std::env::args().any(|a| a == "--foreground");
+
+    let pidfile = temp_path("echo_server.pid");
+    let logfile = temp_path("echo_server.log");
 
     let mut config = DaemonConfig::new();
     // Absolute paths: the daemon chdirs to `/`, so relative paths would break.
     // stdout/stderr default to /dev/null; redirect them to a log file so our
     // println!/eprintln! are visible.
     config
-        .pidfile(PIDFILE)
-        .stdout(LOGFILE)
-        .stderr(LOGFILE)
+        .pidfile(&pidfile)
+        .stdout(&logfile)
+        .stderr(&logfile)
         .foreground(foreground);
 
     // Daemonize first, while still single-threaded. `daemonize` is the safe
