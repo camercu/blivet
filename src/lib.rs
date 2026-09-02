@@ -36,9 +36,10 @@
 //!
 //! - [`daemonize`] is the safe default: it verifies the process is
 //!   single-threaded for you, so no `unsafe` is needed. It is available on
-//!   **Linux, macOS, FreeBSD, NetBSD, and OpenBSD**, each using the kernel's
-//!   own thread count (`/proc/self/status` on Linux, `proc_pidinfo` on macOS,
-//!   `sysctl` on the BSDs). On any other target it is a `#[deprecated]` stub
+//!   **Linux, Android, macOS, FreeBSD, NetBSD, and OpenBSD**, each using the
+//!   kernel's own thread count (`/proc/self/status` on Linux and Android,
+//!   `proc_pidinfo` on macOS, `sysctl` on the BSDs). On any other target it is
+//!   a `#[deprecated]` stub
 //!   that never daemonizes — a hard compile error under `-D warnings` /
 //!   `#![deny(deprecated)]`; use [`daemonize_unchecked`] there.
 //! - [`daemonize_unchecked`] is `unsafe` and available on all Unix platforms:
@@ -62,11 +63,11 @@
 //! ```no_run
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! # let config = blivet::DaemonConfig::new();
-//! #[cfg(any(target_os = "linux", target_os = "macos", target_os = "freebsd",
-//!           target_os = "netbsd", target_os = "openbsd"))]
+//! #[cfg(any(target_os = "linux", target_os = "android", target_os = "macos",
+//!           target_os = "freebsd", target_os = "netbsd", target_os = "openbsd"))]
 //! let mut ctx = blivet::daemonize(&config)?;
-//! #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "freebsd",
-//!               target_os = "netbsd", target_os = "openbsd")))]
+//! #[cfg(not(any(target_os = "linux", target_os = "android", target_os = "macos",
+//!               target_os = "freebsd", target_os = "netbsd", target_os = "openbsd")))]
 //! // SAFETY: no threads spawned before this point.
 //! let mut ctx = unsafe { blivet::daemonize_unchecked(&config)? };
 //! # ctx.notify_parent()?;
@@ -193,6 +194,9 @@ pub(crate) mod util;
 mod test_support;
 
 #[cfg(test)]
+mod capability_probes;
+
+#[cfg(test)]
 mod doc_sync;
 
 /// Compile-checks every `rust` code block in the README as a doctest, so a
@@ -251,10 +255,9 @@ pub unsafe fn daemonize_unchecked(config: &DaemonConfig) -> Result<DaemonContext
     unsafe { daemonize_inner(config, &mut RealForker) }
 }
 
-// The OSes where `daemonize` can verify the thread count natively are
-// listed explicitly in each `cfg` below (function-like macros do not expand
-// inside `cfg` attributes): linux, macos, freebsd, netbsd, openbsd. The count
-// itself lives in the `thread_count` module.
+// The `cfg`s below gate on `blivet_thread_count`, the capability alias
+// `build.rs` sets for targets where the live thread count can be read. The
+// count itself lives in the `thread_count` module.
 
 /// Returns the panic message if `count` is not exactly one thread, else `None`.
 ///
@@ -303,9 +306,10 @@ pub(crate) fn assert_single_threaded(caller: &str) {
 ///
 /// # Platform support
 ///
-/// Available on **Linux, macOS, FreeBSD, NetBSD, and OpenBSD**, each using the
-/// kernel's own thread count (`/proc/self/status` on Linux, `proc_pidinfo` on
-/// macOS, `sysctl` on the BSDs). On any other target it is a `#[deprecated]`
+/// Available on **Linux, Android, macOS, FreeBSD, NetBSD, and OpenBSD**, each
+/// using the kernel's own thread count (`/proc/self/status` on Linux and
+/// Android, `proc_pidinfo` on macOS, `sysctl` on the BSDs). On any other target
+/// it is a `#[deprecated]`
 /// stub that never daemonizes — calling it warns with guidance (and is a hard
 /// compile error under `-D warnings` / `#![deny(deprecated)]`), and panics if
 /// invoked anyway; call [`daemonize_unchecked`] yourself there inside an

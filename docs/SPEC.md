@@ -311,6 +311,7 @@ forking on an untrusted count. The thread count source is per-OS:
 | OS      | Source                                                      |
 | ------- | ----------------------------------------------------------- |
 | Linux   | `/proc/self/status` `Threads:` line                         |
+| Android | `/proc/self/status` `Threads:` line                         |
 | macOS   | `proc_pidinfo(PROC_PIDTASKINFO)` → `pti_threadnum`          |
 | FreeBSD | `sysctl(KERN_PROC_PID)` → `kinfo_proc.ki_numthreads`        |
 | NetBSD  | `sysctl(KERN_PROC2/KERN_PROC_PID)` → `kinfo_proc2.p_nlwps`  |
@@ -727,7 +728,8 @@ When `close_fds` is true (the default), close every open fd except
 0-2, the lockfile fd (from step 7, identified via
 `AsRawFd::as_raw_fd()` on the `Flock`), and the notification pipe
 write fd. Open fds are enumerated via the platform fd directory —
-`/proc/self/fd` on Linux, `/dev/fd` on macOS — when available; where
+`/proc/self/fd` on Linux and Android, `/dev/fd` on macOS — when
+available; where
 no reliable listing exists (the BSDs' `/dev/fd` covers only 0-2
 without fdescfs) or reading it fails (e.g. minimal containers without
 `/proc`), fall back to brute-force iteration of
@@ -1291,8 +1293,9 @@ verification points.
 - R134. In foreground mode, setup errors (steps 4–14) return `Err` to
   the caller; the library never exits the caller's process.
 - R135. With `close_fds` true, open fds are enumerated via the
-  platform fd directory where reliable (Linux `/proc/self/fd`, macOS
-  `/dev/fd`); enumeration failure degrades to the brute-force
+  platform fd directory where reliable (Linux and Android
+  `/proc/self/fd`, macOS `/dev/fd`); enumeration failure degrades to
+  the brute-force
   3..rlim_cur fallback, never to skipping the step.
 - R136. Validation rejects any configured path containing a NUL byte.
 - R137. A panic that unwinds past the signalling seam in the daemon
@@ -1304,3 +1307,12 @@ verification points.
   exec-success path.)
 - R138. Validation rejects an environment key or value containing a
   NUL byte.
+- R139. Platform differences are resolved from one capability table
+  rather than from `target_os` at each site: whether the thread count
+  is readable and from where, whether a trustworthy open-fd directory
+  exists, whether a reserved real-time signal range must be skipped,
+  and whether `faccessat` accepts `AT_EACCESS`.
+- R140. Every capability the table claims is checked against the
+  running system by a probe test, in both directions — a claimed
+  capability the platform lacks and an unclaimed one it has are both
+  failures.
