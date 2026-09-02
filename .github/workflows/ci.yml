@@ -299,12 +299,15 @@ jobs:
             kill "$PID"
             echo "PASS: smoke test on netbsd"
 
-            # Run the cross-built library test harness to prove the NetBSD
-            # daemonize_checked thread-count path (sysctl KERN_PROC2) at runtime.
+            # Run the whole cross-built library suite, which is what the
+            # README's Supported tier claims of every platform in it — a single
+            # filtered test would prove only the sysctl KERN_PROC2 thread-count
+            # path. Routed through the vacuous-run guard so a harness that
+            # matched nothing cannot report the claim as proven.
             TESTBIN=$(cat testbin-path.txt)
             test -x "$TESTBIN" || { echo "FAIL: test binary not found"; exit 1; }
-            "$TESTBIN" current_thread_count_tracks_live_threads --nocapture
-            echo "PASS: library thread-count test on netbsd"
+            sh scripts/assert-tests-ran.sh "$TESTBIN"
+            echo "PASS: library tests on netbsd"
 
   omnios-smoke:
     runs-on: ubuntu-latest
