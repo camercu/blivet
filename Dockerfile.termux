@@ -22,6 +22,12 @@ USER 1000:1000
 # regression surfaces here as a red job rather than a silent skip.
 RUN pkg update -y && pkg install -y rust
 
+# The suite takes every temp path from TMPDIR, because Termux has no /tmp
+# (see src/test_support.rs). The base image happens to export this value, but a
+# tier whose tests would all fail for an unrelated reason if it stopped is a
+# tier that states the value itself.
+ENV TMPDIR=/data/data/com.termux/files/usr/tmp
+
 WORKDIR /data/data/com.termux/files/home/src
 COPY --chown=1000:1000 Cargo.toml Cargo.lock ./
 
