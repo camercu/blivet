@@ -188,16 +188,29 @@ compile_error!(concat!(
     " is not Unix."
 ));
 
+// Every item below is Unix-only, so a non-Unix build stops at the
+// `compile_error!` above instead of adding the wall of type errors from inside
+// `nix` that it exists to replace. `check-cross` holds that property.
+#[cfg(unix)]
 mod config;
+#[cfg(unix)]
 mod context;
+#[cfg(unix)]
 mod error;
+#[cfg(unix)]
 pub(crate) mod forker;
+#[cfg(unix)]
 mod identity;
+#[cfg(unix)]
 pub(crate) mod unsafe_ops;
 
+#[cfg(unix)]
 mod notify;
+#[cfg(unix)]
 mod steps;
+#[cfg(unix)]
 mod thread_count;
+#[cfg(unix)]
 pub(crate) mod util;
 
 #[cfg(test)]
@@ -217,16 +230,24 @@ mod doc_sync;
 #[doc = include_str!("../README.md")]
 mod readme_doctests {}
 
+#[cfg(unix)]
 pub use config::DaemonConfig;
+#[cfg(unix)]
 pub use context::DaemonContext;
+#[cfg(unix)]
 pub use error::DaemonizeError;
 
+#[cfg(unix)]
 use std::io::Read;
+#[cfg(unix)]
 use std::os::fd::{AsRawFd, OwnedFd};
 
+#[cfg(unix)]
 use nix::unistd::ForkResult;
 
+#[cfg(unix)]
 use forker::{Forker, RealForker};
+#[cfg(unix)]
 use notify::NotifyPipe;
 
 /// Daemonize the current process without verifying the thread count.
@@ -258,6 +279,7 @@ use notify::NotifyPipe;
 /// Panics if `/dev/null` cannot be opened, `dup2` to a standard fd fails,
 /// `sigprocmask` fails, `getrlimit` fails, or other OS-level invariants
 /// are violated (indicating a fundamentally broken environment).
+#[cfg(unix)]
 #[allow(unsafe_code)]
 pub unsafe fn daemonize_unchecked(config: &DaemonConfig) -> Result<DaemonContext, DaemonizeError> {
     config.validate()?;
@@ -278,6 +300,7 @@ pub unsafe fn daemonize_unchecked(config: &DaemonConfig) -> Result<DaemonContext
 /// thread-count query. Failing closed keeps the safety guard from
 /// green-lighting on a count it cannot trust. `caller` names the operation in
 /// the panic message.
+#[cfg(unix)]
 #[cfg(blivet_thread_count)]
 pub(crate) fn single_threaded_violation(caller: &str, count: usize) -> Option<String> {
     (count != 1).then(|| {
@@ -297,6 +320,7 @@ pub(crate) fn single_threaded_violation(caller: &str, count: usize) -> Option<St
 /// the fork) and
 /// [`DaemonContext::drop_privileges`](crate::DaemonContext::drop_privileges)
 /// (before its `setenv`).
+#[cfg(unix)]
 #[cfg(blivet_thread_count)]
 pub(crate) fn assert_single_threaded(caller: &str) {
     let count = thread_count::count().unwrap_or_else(|_| {
@@ -334,6 +358,7 @@ pub(crate) fn assert_single_threaded(caller: &str) {
 ///
 /// Panics if the thread count is anything other than exactly 1, or if the
 /// thread count cannot be determined.
+#[cfg(unix)]
 #[cfg(blivet_thread_count)]
 pub fn daemonize(config: &DaemonConfig) -> Result<DaemonContext, DaemonizeError> {
     assert_single_threaded("daemonize");
@@ -358,6 +383,7 @@ pub fn daemonize(config: &DaemonConfig) -> Result<DaemonContext, DaemonizeError>
 /// # Panics
 ///
 /// Always panics: the operation is unsupported on this target.
+#[cfg(unix)]
 #[cfg(not(blivet_thread_count))]
 #[deprecated(note = "daemonize cannot verify the thread count on this target. \
             Call `unsafe { daemonize_unchecked(&config) }` and ensure the process \
@@ -379,6 +405,7 @@ pub fn daemonize(_config: &DaemonConfig) -> Result<DaemonContext, DaemonizeError
 /// undefined behavior. The checked [`daemonize`] establishes this, and the
 /// public [`daemonize_unchecked`] forwards the contract to its caller. (The
 /// test `NullForker` does not fork, so test calls are sound.)
+#[cfg(unix)]
 #[allow(unsafe_code)]
 pub(crate) unsafe fn daemonize_inner(
     config: &DaemonConfig,
@@ -487,6 +514,7 @@ pub(crate) unsafe fn daemonize_inner(
 /// the notification pipe, leaving the single error-to-parent seam in
 /// [`daemonize_inner`]. On success the notification pipe write end is moved into
 /// the returned [`DaemonContext`]; `pipe_wr` is left `None`.
+#[cfg(unix)]
 fn run_post_fork(
     config: &DaemonConfig,
     pipe_wr: &mut Option<NotifyPipe>,
@@ -550,6 +578,7 @@ fn run_post_fork(
 }
 
 /// Parent-side pipe reader. Reads from the pipe and exits accordingly.
+#[cfg(unix)]
 fn parent_pipe_reader(rd: OwnedFd, forker: &impl Forker) -> ! {
     let mut file = std::fs::File::from(rd);
     let mut buf = Vec::new();
@@ -567,6 +596,7 @@ fn parent_pipe_reader(rd: OwnedFd, forker: &impl Forker) -> ! {
 /// Report a daemonization error to the parent via the notification pipe
 /// (best-effort), consuming the write end if present. Used by the fork-sequence
 /// and post-fork error paths that abort with `forker.exit` immediately after.
+#[cfg(unix)]
 fn signal_error_to_parent(pipe_wr: &mut Option<NotifyPipe>, err: &DaemonizeError) {
     if let Some(pipe) = pipe_wr.take() {
         pipe.signal_error(err);
