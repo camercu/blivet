@@ -1,4 +1,4 @@
-//! Guard: the test suite names no fixed filesystem location.
+//! Guard: no shipped Rust source names a fixed filesystem location.
 //!
 //! `/tmp` is not universal. Android and Termux have no `/tmp` at all, and a
 //! sandbox can point `TMPDIR` anywhere. A test that hardcodes the path fails
@@ -40,6 +40,9 @@ fn no_source_file_hardcodes_tmp() {
     let mut files = Vec::new();
     rust_files(&root.join("src"), &mut files);
     rust_files(&root.join("tests"), &mut files);
+    // Examples are the code a new user copies, so they must run where the
+    // crate claims support — Termux included.
+    rust_files(&root.join("examples"), &mut files);
     files.sort();
 
     let mut offenders = Vec::new();
