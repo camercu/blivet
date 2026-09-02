@@ -171,6 +171,9 @@ fn main() {
     );
 
     // The target actually being built, so the non-Unix `compile_error!` can
-    // name it. `CARGO_CFG_TARGET_OS` reaches build scripts only.
-    println!("cargo::rustc-env=BLIVET_TARGET_OS={target_os}");
+    // name it. The full triple rather than `target_os`, which is "unknown" for
+    // targets such as `wasm32-unknown-unknown` and so names nothing. Neither
+    // `TARGET` nor `CARGO_CFG_TARGET_OS` reaches anywhere but a build script.
+    let target = std::env::var("TARGET").expect("cargo sets TARGET");
+    println!("cargo::rustc-env=BLIVET_TARGET={target}");
 }
