@@ -59,6 +59,18 @@ jobs:
       - name: Docker test
         run: just docker-test
 
+  # Tier 2 of the Android support ladder (docs/adr/0002): the library tests on
+  # real bionic and the real dynamic linker, on a host Linux kernel. Tier 1 is
+  # the Android type-check inside `just check-cross`; tier 3 is the emulator
+  # smoke, which is what covers the Android kernel and SELinux.
+  termux-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: taiki-e/install-action@just
+      - name: Bionic (Termux) library tests
+        run: just termux-test
+
   coverage:
     runs-on: ubuntu-latest
     continue-on-error: true
