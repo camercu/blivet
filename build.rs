@@ -54,16 +54,17 @@ const PLATFORMS: &[Platform] = &[
         faccessat_eaccess: true,
     },
     Platform {
-        // Android is Linux-like in libc but a distinct `target_os`, and the
-        // capabilities differ: it has `/proc`, and bionic reserves the first
-        // real-time signals for POSIX timers, debuggerd, and the profiler, but
-        // its `faccessat` rejects `AT_EACCESS`.
+        // Android is Linux-like in libc but a distinct `target_os`, and it
+        // does not answer every question the way Linux does: it has `/proc`,
+        // and bionic reserves real-time signals (32-35, for POSIX timers,
+        // debuggerd, and the profiler) as glibc reserves 32-33 — but its
+        // `faccessat` rejects `AT_EACCESS`.
         target_os: "android",
         name: "Android",
         thread_count: true,
         thread_count_procfs: true,
         fd_dir: Some("/proc/self/fd"),
-        rt_signals_reserved: false,
+        rt_signals_reserved: true,
         faccessat_eaccess: false,
     },
     Platform {

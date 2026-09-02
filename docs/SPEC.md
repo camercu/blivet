@@ -641,8 +641,11 @@ is `true` (the default); see `DaemonContext::cleanup()`.
 
 Iterate from 1 through `libc::SIGRTMAX()`, skipping `SIGKILL`,
 `SIGSTOP`, and `SIGPIPE`. Reset each to `SIG_DFL` via
-`libc::sigaction()`. If `sigaction` returns `EINVAL` (e.g.,
-NPTL-reserved signals 32–33), skip silently; any other failure reports
+`libc::sigaction()`. Where libc reserves a range between the standard
+signals and the real-time ones — 32–33 on glibc, 32–35 on bionic — the
+iteration skips it by construction, running 1–31 and then
+`SIGRTMIN()`–`SIGRTMAX()`. If `sigaction` returns `EINVAL` anyway,
+skip silently; any other failure reports
 `SystemError` (a should-not-happen guard — POSIX documents only
 `EINVAL` for these arguments). Use `libc::sigaction()`
 directly — nix's `sigaction` only accepts the `Signal` enum which
