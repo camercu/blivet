@@ -198,6 +198,48 @@ jobs:
             cargo test --locked --lib
             echo "PASS: library tests on ${{ matrix.os.name }}"
 
+  # Tier 3 of the Android support ladder (docs/adr/0002), and the only tier with
+  # a real Android kernel and SELinux: the daemonize sequence itself — fork,
+  # setsid, pidfile, signal — proven on a booted emulator. Slowest job in the
+  # matrix and the likeliest to flake, hence the slow tier; if it proves too
+  # flaky, `cross test --target aarch64-linux-android` trades the real kernel
+  # for far less plumbing.
+  android-smoke:
+    runs-on: ubuntu-latest
+    name: smoke (android)
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-linux-android
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-ndk
+      # Hardware acceleration is available on standard hosted runners, but the
+      # kvm device is not world-accessible by default; without this the
+      # emulator falls back to software rendering and times out.
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Cross-compile for Android
+        run: |
+          # cargo-ndk looks for ANDROID_NDK_HOME; the runner image exports the
+          # NDK it ships under different names.
+          export ANDROID_NDK_HOME="${ANDROID_NDK_LATEST_HOME:-$ANDROID_NDK_ROOT}"
+          cargo ndk -t x86_64 build --locked
+          cargo ndk -t x86_64 test --locked --lib --no-run
+      - name: Smoke test on emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          arch: x86_64
+          target: default
+          script: ./scripts/android-smoke.sh
+
   # NetBSD 10.1 ships Rust 1.82, below our MSRV (1.85). Cross-compile on the
   # Ubuntu host and run the binary inside the VM.
   netbsd-smoke:
