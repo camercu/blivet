@@ -48,4 +48,4 @@ COPY --chown=1000:1000 . .
 # Library tests only. The integration tests spawn the CLI and probe the
 # resulting process through /proc, which is the Android kernel's business and
 # belongs to the emulator tier.
-CMD ["cargo", "test", "--locked", "--lib"]
+CMD ["sh", "scripts/assert-tests-ran.sh", "cargo", "test", "--locked", "--lib"]
