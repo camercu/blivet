@@ -402,7 +402,10 @@ writable. The check is `faccessat` with `AT_EACCESS`, so it answers for
 the current euid — the identity a setuid binary writes as. Android is
 the exception: bionic rejects `AT_EACCESS`, so there the check answers
 for the real UID. Chdir is exempt: it must already exist as a
-directory, so its parent is never created.
+directory, so its parent is never created. A probe that fails with
+`EACCES` reports the directory as unwritable; any other errno means the
+probe could not run and is reported by name rather than as a
+permission denial.
 
 ### Path comparison
 
@@ -1319,3 +1322,7 @@ verification points.
   running system by a probe test, in both directions — a claimed
   capability the platform lacks and an unclaimed one it has are both
   failures.
+- R141. A writability probe that fails with `EACCES` reports the
+  parent directory as not writable; any other errno is reported by
+  name, so a probe that could not run is never mistaken for a
+  permission denial.
