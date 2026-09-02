@@ -93,8 +93,35 @@ msrv-check:
     fi
     echo "dependencies fit MSRV $msrv (runtime) and {{openbsd_rust}} (dev)"
 
+# A non-Unix target must fail with exactly one diagnostic: the `compile_error!`
+# in `src/lib.rs` naming the target. Everything else in the crate is gated on
+# `cfg(unix)` to keep it that way, and this notices when a new item arrives
+# without that gate.
+#
+# What it catches is name resolution — an ungated `use` or `mod` reaching a
+# Unix-only path, which is the wall of `nix` errors this replaced. It cannot
+# catch an ungated function *body*: rustc stops after resolution when that
+# phase already failed, so a body's type errors are never reached to be
+# counted. Parses compiler output, so it stays on plain cargo.
+check-non-unix:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    rustup target add wasm32-unknown-unknown
+    out=$(cargo check {{locked}} --target wasm32-unknown-unknown --message-format=short 2>&1 || true)
+    # `--message-format=short` writes diagnostics as `file:line:col: error: ...`,
+    # so match the marker anywhere; awk always exits 0, unlike a grep that finds
+    # nothing. The trailing "could not compile" summary is not a diagnostic.
+    errors=$(printf '%s\n' "$out" | awk '/error(\[[A-Z0-9]+\])?: / && !/could not compile/ { n++ } END { print n + 0 }')
+    if [ "$errors" -ne 1 ]; then
+        echo "expected exactly 1 error on a non-Unix target, got $errors:"
+        printf '%s\n' "$out"
+        echo "gate the new item on cfg(unix) so the compile_error stands alone"
+        exit 1
+    fi
+    echo "non-Unix target fails with exactly one diagnostic"
+
 # Run all static checks
-check: fmt-check lint lint-deny doc msrv-check check-cross
+check: fmt-check lint lint-deny doc msrv-check check-cross check-non-unix
 
 # Run tests (excludes ignored root/Linux tests)
 test:
