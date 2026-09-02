@@ -35,9 +35,10 @@ fn main() -> Result<(), DaemonizeError> {
   readiness or reports an error -- no "did it start?" polling. Forget to call
   `notify_parent()` and the launcher exits non-zero automatically.
 - **Correct by default.** Double-fork, `setsid`, signal reset
-  (including real-time signals on Linux; SIGPIPE stays ignored so pipe writes
-  keep returning errors instead of killing the daemon), signal-mask clear, fd
-  close, and `/dev/null` redirect -- the things hand-rolled daemonizers forget.
+  (including real-time signals on Linux and Android; SIGPIPE stays ignored so
+  pipe writes keep returning errors instead of killing the daemon), signal-mask
+  clear, fd close, and `/dev/null` redirect -- the things hand-rolled
+  daemonizers forget.
 - **Split-phase privileges.** `daemonize()` returns while still privileged, so
   you can bind port 80 or `chroot` before `drop_privileges()`.
 - **Safe by default.** The checked entry points verify single-threadedness, so
