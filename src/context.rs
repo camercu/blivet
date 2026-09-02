@@ -981,6 +981,7 @@ mod tests {
     }
 
     // Covers: R62
+    #[cfg(blivet_thread_count)]
     #[test]
     fn drop_privileges_noop_without_user_or_group() {
         let mut ctx = default_ctx();
@@ -1014,6 +1015,7 @@ mod tests {
         ));
     }
 
+    #[cfg(blivet_thread_count)]
     #[test]
     fn drop_privileges_group_not_found() {
         if std::env::var("CI").is_ok() {
@@ -1075,6 +1077,7 @@ mod tests {
         (1..).find(|g| !gids.contains(g) && *g != egid).unwrap()
     }
 
+    #[cfg(blivet_thread_count)]
     #[test]
     fn drop_privileges_chowns_configured_paths() {
         if nix::unistd::geteuid().is_root() {
@@ -1100,6 +1103,7 @@ mod tests {
         );
     }
 
+    #[cfg(blivet_thread_count)]
     #[test]
     fn drop_privileges_skips_chown_when_disabled() {
         if nix::unistd::geteuid().is_root() {
@@ -1137,6 +1141,7 @@ mod tests {
         assert!(ctx.chown_paths().is_ok());
     }
 
+    #[cfg(blivet_thread_count)]
     #[test]
     fn drop_privileges_idempotent_noop() {
         let mut ctx = default_ctx();
