@@ -300,7 +300,8 @@ impl DaemonConfig {
     /// - Any configured path (pidfile, stdout, stderr, lockfile) is not absolute
     /// - The chdir path is not absolute, does not exist, or is not a directory
     /// - The pidfile path is a directory
-    /// - Parent directories of configured paths are not writable
+    /// - Parent directories of configured paths are not writable, or their
+    ///   writability could not be determined (the errno is named)
     /// - Lockfile or pidfile overlaps with stdout or stderr
     /// - The umask does not fit in the 12 permission bits (`> 0o7777`)
     /// - An environment key is empty or contains `=`
@@ -483,11 +484,27 @@ fn validate_parent_writable(path: &std::path::Path, name: &str) -> Result<(), Da
         EFFECTIVE_ACCESS,
     ) {
         Ok(()) => Ok(()),
-        Err(_) => Err(DaemonizeError::ValidationError(format!(
-            "{name} parent directory is not writable: {}",
-            parent.display()
-        ))),
+        Err(errno) => Err(writability_error(name, parent, errno)),
     }
+}
+
+/// Describes a failed writability probe.
+///
+/// Only `EACCES` is the answer the probe asked for; every other errno means the
+/// probe itself could not run, and saying "not writable" there hides a
+/// different problem behind a permission claim. That is how an `EINVAL` from a
+/// flag bionic does not accept reached users as a false permission error.
+fn writability_error(
+    name: &str,
+    parent: &std::path::Path,
+    errno: nix::errno::Errno,
+) -> DaemonizeError {
+    let parent = parent.display();
+    DaemonizeError::ValidationError(if errno == nix::errno::Errno::EACCES {
+        format!("{name} parent directory is not writable: {parent}")
+    } else {
+        format!("{name} parent directory writability check failed ({errno}): {parent}")
+    })
 }
 
 #[cfg(test)]
@@ -1154,6 +1171,35 @@ mod tests {
             Err(DaemonizeError::ValidationError(msg))
                 if msg.contains("not writable") && msg.contains(&dir.path().display().to_string())
         ));
+    }
+
+    // Covers: R141
+    #[test]
+    fn only_eacces_is_reported_as_unwritable() {
+        use nix::errno::Errno;
+
+        let parent = std::path::Path::new("/a");
+        let denied = writability_error("pidfile", parent, Errno::EACCES).to_string();
+        assert!(
+            denied.contains("not writable") && denied.contains("/a"),
+            "a genuine permission denial must say so and name the path: {denied}"
+        );
+
+        // An unsupported flag reaching users as "not writable" is how the
+        // Android build break looked from the outside.
+        for errno in [Errno::EINVAL, Errno::ENOTDIR, Errno::ELOOP] {
+            let msg = writability_error("pidfile", parent, errno).to_string();
+            assert!(
+                msg.contains(errno.desc()) || msg.contains(&format!("{errno}")),
+                "{errno} must be named, not translated into a permission \
+                 claim: {msg}"
+            );
+            assert!(
+                !msg.contains("not writable"),
+                "{errno} does not mean the directory is unwritable: {msg}"
+            );
+            assert!(msg.contains("/a"), "the path must still be named: {msg}");
+        }
     }
 
     #[test]
