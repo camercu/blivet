@@ -266,8 +266,17 @@ jobs:
             -C link-arg=-fuse-ld=lld
         run: |
           cargo build --locked --target x86_64-unknown-netbsd
-          # Cross-build the library test harness too, to run inside the VM.
-          cargo test --no-run --locked --lib --target x86_64-unknown-netbsd
+          # Cross-build the library test harness too, to run inside the VM, and
+          # record the path cargo actually produced. A glob over deps/ resolves
+          # to whatever sorts first, which need not be this build's artifact.
+          # The path is relative so it still resolves inside the VM.
+          cargo test --no-run --locked --lib --target x86_64-unknown-netbsd \
+            --message-format=json \
+            | jq -r 'select(.reason == "compiler-artifact" and .profile.test and .executable) | .executable' \
+            | sed "s|^$PWD/||" > testbin-path.txt
+          if [ "$(wc -l < testbin-path.txt)" -ne 1 ]; then
+            echo "expected exactly one test binary, got:"; cat testbin-path.txt; exit 1
+          fi
       - name: Run smoke test in NetBSD VM
         uses: cross-platform-actions/action@v1
         with:
@@ -292,7 +301,7 @@ jobs:
 
             # Run the cross-built library test harness to prove the NetBSD
             # daemonize_checked thread-count path (sysctl KERN_PROC2) at runtime.
-            TESTBIN=$(ls target/x86_64-unknown-netbsd/debug/deps/blivet-* | grep -v '\.d$' | head -1)
+            TESTBIN=$(cat testbin-path.txt)
             test -x "$TESTBIN" || { echo "FAIL: test binary not found"; exit 1; }
             "$TESTBIN" current_thread_count_tracks_live_threads --nocapture
             echo "PASS: library thread-count test on netbsd"
