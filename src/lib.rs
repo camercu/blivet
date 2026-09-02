@@ -183,9 +183,9 @@
 // errors from inside `nix` that never says why.
 #[cfg(not(unix))]
 compile_error!(concat!(
-    "blivet daemonizes a Unix process, and target_os = \"",
-    env!("BLIVET_TARGET_OS"),
-    "\" is not Unix."
+    "blivet daemonizes a Unix process, and ",
+    env!("BLIVET_TARGET"),
+    " is not Unix."
 ));
 
 mod config;
