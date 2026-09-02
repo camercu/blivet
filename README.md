@@ -183,6 +183,33 @@ guarded). `daemonize_unchecked()` and `drop_privileges_unchecked()` are the
 `unsafe` opt-outs for callers who manage the contract themselves, or who run on
 a target without a thread-count source.
 
+## Platform support
+
+What a platform claim is worth depends on what CI proves about it, so the
+claims are tiered:
+
+| Tier | What CI proves | Platforms |
+| --- | --- | --- |
+| **Supported** | The library test suite runs on the real OS | Linux, Android, macOS, FreeBSD, NetBSD, OpenBSD |
+| **Cross-checked** | The crate type-checks for the target; no test runs there | Other architectures of the above, e.g. `aarch64-linux-android` |
+| **Best-effort** | It compiles and takes the conservative fallback of every capability | Any other Unix (CI additionally smoke-tests the CLI on illumos) |
+
+Platform differences are decided one capability at a time — is the thread count
+readable, is there a trustworthy open-fd directory, does libc reserve real-time
+signals, does `faccessat` accept `AT_EACCESS` — rather than by OS name, so a new
+platform can be partly supported instead of falling off a cliff into every
+fallback at once. Each capability is checked against the running system by a
+probe test.
+
+On a best-effort target `daemonize()` and `drop_privileges()` are `#[deprecated]`
+stubs: using one warns with guidance by default and is a hard error under
+`-D warnings`, and the `unsafe` forms are the way through. Non-Unix targets are
+a `compile_error!` naming the target, not a wall of type errors.
+
+Android is supported with one documented difference: bionic rejects
+`AT_EACCESS`, so the pre-fork writability check there answers for the real UID
+rather than the effective one.
+
 ## API reference
 
 Full reference is on [docs.rs](https://docs.rs/blivet); the essentials:

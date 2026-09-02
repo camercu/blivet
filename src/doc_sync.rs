@@ -65,7 +65,7 @@ fn platform_list_consistent() {
 #[test]
 fn front_page_cfg_example_lists_every_target_os() {
     let front_page = read("src/lib.rs");
-    for os in env!("BLIVET_TARGET_OS").split(',') {
+    for os in env!("BLIVET_SUPPORTED_TARGET_OS").split(',') {
         let clause = format!("target_os = \"{os}\"");
         assert!(
             front_page.contains(&clause),

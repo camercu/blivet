@@ -26,6 +26,35 @@ Dependencies: nix (0.31, features: `fs`, `signal`, `process`,
 `user`, `resource`), clap, thiserror, libc. Dev: tempfile,
 serial_test, relentless.
 
+## Platform support
+
+Platform differences are resolved from one capability table in
+`build.rs`, which maps each supported `target_os` to what it can do:
+whether the live thread count is readable and from where, whether a
+trustworthy open-fd directory exists, whether libc reserves a
+real-time signal range the sweep must skip, and whether `faccessat`
+accepts `AT_EACCESS`. The build script emits one `cfg` alias per
+capability; no module gates on an OS name. Adding a platform is one
+row, and a target absent from the table keeps every conservative
+fallback.
+
+Support is tiered by what CI proves:
+
+| Tier | What CI proves | Platforms |
+| --- | --- | --- |
+| Supported | The library test suite runs on the real OS | Linux, Android, macOS, FreeBSD, NetBSD, OpenBSD |
+| Cross-checked | The crate type-checks for the target; no test runs there | Other architectures of the above |
+| Best-effort | It compiles and takes the conservative fallback of every capability | Any other Unix |
+
+On a best-effort target `daemonize()` and `drop_privileges()` are
+`#[deprecated]` stubs that panic if called; the `unsafe` unchecked
+forms are the supported path there. A non-Unix target is a
+`compile_error!` naming the target.
+
+Android is supported with one documented divergence: bionic rejects
+`AT_EACCESS`, so the pre-fork writability check answers for the real
+UID (see [Validation](#validation)).
+
 ## Dependency policy
 
 Prefer nix crate safe wrappers over direct libc calls. Use libc only
