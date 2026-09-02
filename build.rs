@@ -54,6 +54,19 @@ const PLATFORMS: &[Platform] = &[
         faccessat_eaccess: true,
     },
     Platform {
+        // Android is Linux-like in libc but a distinct `target_os`, and the
+        // capabilities differ: it has `/proc`, and bionic reserves the first
+        // real-time signals for POSIX timers, debuggerd, and the profiler, but
+        // its `faccessat` rejects `AT_EACCESS`.
+        target_os: "android",
+        name: "Android",
+        thread_count: true,
+        thread_count_procfs: true,
+        fd_dir: Some("/proc/self/fd"),
+        rt_signals_reserved: false,
+        faccessat_eaccess: false,
+    },
+    Platform {
         target_os: "macos",
         name: "macOS",
         thread_count: true,
