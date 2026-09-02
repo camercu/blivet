@@ -76,8 +76,9 @@ split in `.github/workflows/ci.yml`:
    rule (hardware acceleration is available on standard hosted runners); the
    artefacts are pushed to `/data/local/tmp` and run over `adb shell`. This is
    the only tier with a real Android kernel and SELinux, and it is where the
-   daemonize sequence itself — fork, setsid, pidfile, signal — is proven. It
-   runs with `fail-fast: false` in the slow tier next to `bsd-smoke`.
+   daemonize sequence itself — fork, setsid, pidfile, signal — is proven. It sits
+   in the slow tier next to `bsd-smoke` as a job of its own, so a failure there
+   cancels nothing else.
 
 `cross test --target aarch64-linux-android` (QEMU-based, test support listed as
 working by cross-rs) is the fallback for tier 3 if the emulator proves too slow

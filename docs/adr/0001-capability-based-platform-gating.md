@@ -47,8 +47,14 @@ Two failure modes follow from OS-name gating, both observed:
 A build script maps each supported `target_os` to the capabilities it has, and
 emits one `cargo::rustc-cfg` alias per capability (the mechanism `nix` itself
 uses for `linux_android` and `freebsdlike`), declared with
-`cargo::rustc-check-cfg` so a typo is a compile error rather than a silently
-false branch. Source code gates on the capability alias; no module names an OS.
+`cargo::rustc-check-cfg` so a typo is an `unexpected_cfgs` warning — an error
+under the `-D warnings` that `just lint` and `just test` set — rather than a
+silently false branch. Source code gates on the capability alias for every *decision*. An OS name
+survives only where it selects the *mechanism* a capability is implemented
+with and the table has no column for it: the four thread-count queries in
+`src/unsafe_ops.rs` (`proc_pidinfo` on macOS, three `sysctl` shapes on the
+BSDs), reached only once `blivet_thread_count` and `blivet_thread_count_procfs`
+have already decided that a count is readable and not in procfs.
 
 The initial capability set:
 
