@@ -165,5 +165,12 @@ fn main() {
     let names: Vec<&str> = PLATFORMS.iter().map(|p| p.name).collect();
     println!("cargo::rustc-env=BLIVET_PLATFORMS={}", names.join(","));
     let oses: Vec<&str> = PLATFORMS.iter().map(|p| p.target_os).collect();
-    println!("cargo::rustc-env=BLIVET_TARGET_OS={}", oses.join(","));
+    println!(
+        "cargo::rustc-env=BLIVET_SUPPORTED_TARGET_OS={}",
+        oses.join(",")
+    );
+
+    // The target actually being built, so the non-Unix `compile_error!` can
+    // name it. `CARGO_CFG_TARGET_OS` reaches build scripts only.
+    println!("cargo::rustc-env=BLIVET_TARGET_OS={target_os}");
 }

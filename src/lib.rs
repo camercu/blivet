@@ -178,6 +178,16 @@
 
 #![deny(unsafe_code)]
 
+// Daemonizing is fork, setsid, signals, and file descriptors — there is no
+// non-Unix fallback to take, and without this the failure is a wall of type
+// errors from inside `nix` that never says why.
+#[cfg(not(unix))]
+compile_error!(concat!(
+    "blivet daemonizes a Unix process, and target_os = \"",
+    env!("BLIVET_TARGET_OS"),
+    "\" is not Unix."
+));
+
 mod config;
 mod context;
 mod error;
