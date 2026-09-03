@@ -102,7 +102,11 @@ fn supported_tier_row(doc: &str) -> Vec<String> {
         })
         .expect("the tier table has a Supported row");
     let cells: Vec<&str> = row.split('|').map(str::trim).collect();
-    cells[3]
+    // Named rather than indexed blindly: a table that gained or lost a column
+    // should say so, not panic with an out-of-bounds index on its own guard.
+    cells
+        .get(3)
+        .unwrap_or_else(|| panic!("the Supported row should have a platforms cell, got: {row}"))
         .split(',')
         .map(|p| p.trim().to_string())
         .filter(|p| !p.is_empty())
