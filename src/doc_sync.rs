@@ -44,6 +44,14 @@ fn readme_msrv_matches_cargo_toml() {
 /// The list comes from the capability table in `build.rs`, the same table the
 /// `cfg` aliases come from, so adding a platform there is what makes this test
 /// demand the docs mention it.
+///
+/// This is the prose-level check, and a deliberately loose one: it asks only
+/// whether the name appears somewhere in the file, so an unrelated mention
+/// satisfies it. The claims that matter are held tighter elsewhere — the tier
+/// tables by [`supported_tier_matches_the_capability_table`], which compares
+/// them as sets in both directions, and the front page's `cfg` example by
+/// [`front_page_cfg_example_lists_every_target_os`]. Read a pass here as "the
+/// platform is mentioned", not as "the platform is documented correctly".
 #[test]
 fn platform_list_consistent() {
     let platforms = env!("BLIVET_PLATFORMS").split(',');
