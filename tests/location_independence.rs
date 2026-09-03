@@ -31,6 +31,8 @@ fn no_source_file_hardcodes_tmp() {
     // Examples are the code a new user copies, so they must run where the
     // crate claims support — Termux included.
     rust_files(&root.join("examples"), &mut files);
+    // build.rs ships with the crate and is source like any other.
+    files.push(root.join("build.rs"));
     files.sort();
 
     let mut offenders = Vec::new();
