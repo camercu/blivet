@@ -75,3 +75,27 @@ fn a_failing_run_stays_failed() {
         String::from_utf8_lossy(&out.stderr)
     );
 }
+
+#[test]
+fn a_run_where_everything_failed_is_not_reported_as_no_tests() {
+    // GIVEN a run that executed tests and every one of them failed
+    let out = guard("echo 'test result: FAILED. 0 passed; 5 failed; 0 ignored'; exit 101");
+
+    // THEN the guard forwards that failure rather than claiming nothing ran:
+    // the counts prove tests did run, and naming the wrong cause sends the
+    // reader looking for a stale build that is not there.
+    assert_eq!(
+        out.status.code(),
+        Some(101),
+        "an all-failed run must keep its own status"
+    );
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        !combined.contains("reported no tests at all"),
+        "5 tests ran and failed, so the no-tests diagnosis is wrong; got:\n{combined}"
+    );
+}

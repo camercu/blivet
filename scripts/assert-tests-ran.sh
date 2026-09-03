@@ -24,11 +24,16 @@ trap 'rm -f "$log" "$status_file"' EXIT INT TERM
 { set +e; "$@" 2>&1; echo $? >"$status_file"; } | tee "$log"
 status=$(cat "$status_file")
 
-# Sum every suite's count: one invocation prints one "test result:" line per
-# suite, and a tier may chain several invocations.
-passed=$(awk '/^test result:/ { total += $4 } END { print total + 0 }' "$log")
+# Sum every suite's counts: one invocation prints one "test result:" line per
+# suite, and a tier may chain several invocations. Passed AND failed, because
+# the question here is whether anything ran at all — a suite where every test
+# failed has a passed count of zero and must keep its own status and its own
+# diagnosis rather than being blamed on a stale build.
+#   test result: FAILED. 0 passed; 5 failed; ...
+#                        ^$4            ^$6
+ran=$(awk '/^test result:/ { total += $4 + $6 } END { print total + 0 }' "$log")
 
-if [ "$passed" -eq 0 ]; then
+if [ "$ran" -eq 0 ]; then
     echo "FAIL: the test command reported no tests at all." >&2
     echo "A suite that matches nothing still exits 0, so this is a green run" >&2
     echo "that proved nothing — usually cargo judging stale sources fresh." >&2
