@@ -19,19 +19,44 @@
 //!   platforms that have a real-time range at all, so the absent case cannot
 //!   name the thing it would measure.
 
-/// A file we can hold open, to give the fd-directory probes something to find.
-fn open_fd() -> (std::fs::File, i32) {
+/// The highest descriptor number a directory of *static* device nodes is
+/// likely to cover. NetBSD's `MAKEDEV` creates `/dev/fd/0` through
+/// `/dev/fd/63` as plain character devices that exist whether or not anything
+/// is open on them, so a listing containing a low number proves nothing.
+const STATIC_FD_RANGE_TOP: i32 = 63;
+
+/// Hold descriptors open until one lands above [`STATIC_FD_RANGE_TOP`], and
+/// return them with that descriptor's number.
+///
+/// The files stay open in the returned `Vec` — dropping it closes them, so a
+/// caller must keep it alive while asking whether the descriptor is listed.
+fn open_fd_above_static_range() -> (Vec<std::fs::File>, i32) {
     use std::os::fd::AsRawFd;
-    let file = tempfile::tempfile().expect("a temp file");
-    let fd = file.as_raw_fd();
-    (file, fd)
+
+    let mut held = Vec::new();
+    loop {
+        let file = tempfile::tempfile().expect("a temp file");
+        let fd = file.as_raw_fd();
+        held.push(file);
+        if fd > STATIC_FD_RANGE_TOP {
+            return (held, fd);
+        }
+        assert!(
+            held.len() < 512,
+            "opened {} files without reaching a descriptor above {}",
+            held.len(),
+            STATIC_FD_RANGE_TOP
+        );
+    }
 }
 
 /// Does the directory at `path` list `fd`, this process's own open descriptor?
 ///
-/// This is the question `blivet_fd_dir` answers. The BSDs' `/dev/fd` exists but
-/// shows only 0-2 unless fdescfs is mounted, so mere existence proves nothing —
-/// the listing has to contain a descriptor we know we opened.
+/// This is the question `blivet_fd_dir` answers. Existence proves nothing: the
+/// BSDs' `/dev/fd` shows only 0-2 unless fdescfs is mounted, and NetBSD
+/// populates it with static nodes for 0-63. So the descriptor asked about is
+/// one from [`open_fd_above_static_range`] — a listing that has it is tracking
+/// this process, not enumerating device nodes.
 fn lists_own_fd(path: &str, fd: i32) -> bool {
     let Ok(entries) = std::fs::read_dir(path) else {
         return false;
@@ -86,7 +111,7 @@ fn proc_status_reports_no_threads() {
 // Covers: R139, R140
 #[test]
 fn fd_dir_lists_open_fds() {
-    let (_file, fd) = open_fd();
+    let (_held, fd) = open_fd_above_static_range();
     let dir = env!("BLIVET_FD_DIR");
     assert!(
         lists_own_fd(dir, fd),
@@ -105,7 +130,7 @@ fn no_fd_dir_lists_open_fds() {
     // none of them works here, so each has to be asked.
     const CANDIDATES: &[&str] = &["/proc/self/fd", "/dev/fd"];
 
-    let (_file, fd) = open_fd();
+    let (_held, fd) = open_fd_above_static_range();
     for dir in CANDIDATES {
         assert!(
             !lists_own_fd(dir, fd),
