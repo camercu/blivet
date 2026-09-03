@@ -105,14 +105,24 @@ fn supported_tier_row(doc: &str) -> Vec<String> {
 /// exotic target. Consumers cannot see this crate's capability aliases, so that
 /// example spells out `target_os` — a copy of the table that would otherwise
 /// go stale the next time a platform is added.
+///
+/// The example carries the list twice, once for the checked call and once for
+/// the `not(...)` fallback, and both have to move together: a platform added to
+/// only the positive list leaves an example in which both branches are live on
+/// that target. So this counts the clauses rather than asking whether each
+/// appears somewhere, which one list alone would satisfy.
 #[test]
 fn front_page_cfg_example_lists_every_target_os() {
+    const BRANCHES: usize = 2;
+
     let front_page = read("src/lib.rs");
     for os in env!("BLIVET_SUPPORTED_TARGET_OS").split(',') {
         let clause = format!("target_os = \"{os}\"");
-        assert!(
-            front_page.contains(&clause),
-            "the front page `cfg` example omits {clause}"
+        assert_eq!(
+            front_page.matches(&clause).count(),
+            BRANCHES,
+            "the front page `cfg` example must name {clause} in both the \
+             checked branch and the `not(...)` fallback"
         );
     }
 }
