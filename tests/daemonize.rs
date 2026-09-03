@@ -3,16 +3,12 @@
 //! `daemonize` reads the process thread count and panics if more than
 //! one thread is running — *before* it forks. So spawning a second thread and
 //! calling it is safe: it panics on the check and never daemonizes the test
-//! process. Only built on the targets where `daemonize` is the real
-//! function (elsewhere it is a deprecated stub).
+//! process. Built where `daemonize` is the real function rather than a
+//! deprecated stub, which is exactly where the thread count can be read — so
+//! it gates on that capability and not on a list of OS names, which is what
+//! left Android out of a test of a function Android has.
 
-#![cfg(any(
-    target_os = "linux",
-    target_os = "macos",
-    target_os = "freebsd",
-    target_os = "netbsd",
-    target_os = "openbsd"
-))]
+#![cfg(blivet_thread_count)]
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
