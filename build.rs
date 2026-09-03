@@ -128,6 +128,13 @@ fn main() {
     // list serves both emissions below, so the set that is declared and the set
     // that can be set cannot disagree.
     let capabilities = [
+        // Not a capability but an alias emitted the same way: is this target in
+        // the table at all? The probes that assert a capability is *absent*
+        // gate on it, because "absent" is a measured fact about a listed
+        // platform and only a default for any other — asserting the default
+        // would fail on, say, illumos, which has a working /proc/self/fd and
+        // would be told by a red test that the crate is broken.
+        ("blivet_known_platform", platform.is_some()),
         (
             "blivet_thread_count",
             platform.is_some_and(|p| p.thread_count),

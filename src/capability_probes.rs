@@ -10,6 +10,12 @@
 //! one it has is silent — it is exactly how Android ended up taking the
 //! unknown-Unix fallback of every decision despite having `/proc`.
 //!
+//! The negative probes run only on a platform the table lists. For any other
+//! target the absent capability is a default rather than a measured fact, and
+//! asserting it would fail on a Unix that simply has not been added yet —
+//! illumos has a working `/proc/self/fd` — telling whoever ran the suite that
+//! the crate is broken when it is merely unlisted.
+//!
 //! Two claims have no negative probe, and the gap is deliberate rather than
 //! overlooked:
 //!
@@ -93,6 +99,7 @@ fn proc_status_reports_threads() {
 /// The absence of `blivet_thread_count_procfs` claims there is no such line to
 /// read. A platform that grows one — or that had one all along — shows up here.
 #[cfg(not(blivet_thread_count_procfs))]
+#[cfg(blivet_known_platform)]
 // Covers: R139, R140
 #[test]
 fn proc_status_reports_no_threads() {
@@ -123,6 +130,7 @@ fn fd_dir_lists_open_fds() {
 /// listing. A platform where one does is falling back to the `3..rlim_cur`
 /// close loop for nothing.
 #[cfg(not(blivet_fd_dir))]
+#[cfg(blivet_known_platform)]
 // Covers: R139, R140
 #[test]
 fn no_fd_dir_lists_open_fds() {
@@ -182,6 +190,7 @@ fn faccessat_accepts_at_eaccess() {
 /// has to be asked for by value: `nix` does not define the constant where the
 /// platform lacks it, which is the compile error that started all this.
 #[cfg(not(blivet_faccessat_eaccess))]
+#[cfg(blivet_known_platform)]
 // Covers: R139, R140
 #[test]
 fn faccessat_rejects_at_eaccess() {
