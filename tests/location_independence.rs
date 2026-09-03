@@ -52,7 +52,11 @@ fn no_source_file_hardcodes_tmp() {
             if trimmed.starts_with("//") {
                 continue;
             }
-            if line.contains("/tmp") {
+            // A trailing comment is prose about the rule too, so the line is
+            // judged on its code alone — otherwise `let d = tmp_dir(); // not
+            // /tmp` is accused of hardcoding a path it does not use.
+            let code = trimmed.split("//").next().unwrap_or(trimmed);
+            if code.contains("/tmp") {
                 offenders.push(format!("  {rel}:{}: {}", i + 1, line.trim()));
             }
         }
