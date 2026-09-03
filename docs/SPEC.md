@@ -1348,9 +1348,13 @@ verification points.
   exists, whether a reserved real-time signal range must be skipped,
   and whether `faccessat` accepts `AT_EACCESS`.
 - R140. Every capability the table claims is checked against the
-  running system by a probe test, in both directions — a claimed
-  capability the platform lacks and an unclaimed one it has are both
-  failures.
+  running system by a probe test. Where a platform lacking the
+  capability still offers something to measure, the absence is probed
+  too, so an unclaimed capability the platform has is also a failure.
+  `thread_count` and `rt_signals_reserved` have no such negative probe
+  and cannot: a platform without a readable thread count exposes no
+  count to call for, and `libc` defines `SIGRTMIN` only where a
+  real-time range exists.
 - R141. A writability probe that fails with `EACCES` reports the
   parent directory as not writable; any other errno is reported by
   name, so a probe that could not run is never mistaken for a
