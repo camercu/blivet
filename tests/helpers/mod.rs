@@ -68,15 +68,16 @@ pub fn query_process(pid: u32) -> Option<ProcessInfo> {
 }
 
 /// Query the current working directory of a process.
-#[cfg(target_os = "linux")]
+///
+/// Tries procfs and falls back to `lsof`, deciding at runtime rather than by
+/// OS name. Gating the procfs path on `target_os = "linux"` sent Android — a
+/// kernel with `/proc` and no `lsof` — down the fallback, where the command is
+/// missing and the cwd comes back as an empty string instead of an error.
 fn query_cwd(pid: u32) -> Option<String> {
-    std::fs::read_link(format!("/proc/{pid}/cwd"))
-        .ok()
-        .map(|p| p.to_string_lossy().into_owned())
-}
+    if let Ok(path) = std::fs::read_link(format!("/proc/{pid}/cwd")) {
+        return Some(path.to_string_lossy().into_owned());
+    }
 
-#[cfg(not(target_os = "linux"))]
-fn query_cwd(pid: u32) -> Option<String> {
     let output = Command::new("lsof")
         .args(["-a", "-p", &pid.to_string(), "-d", "cwd", "-Fn"])
         .output()
