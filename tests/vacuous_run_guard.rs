@@ -99,3 +99,28 @@ fn a_run_where_everything_failed_is_not_reported_as_no_tests() {
         "5 tests ran and failed, so the no-tests diagnosis is wrong; got:\n{combined}"
     );
 }
+
+#[test]
+fn a_command_that_failed_before_running_tests_keeps_its_own_error() {
+    // GIVEN a command that failed before any test could run — a compile error
+    // is the usual one — so it printed no summary line at all
+    let out = guard("echo 'error[E0308]: mismatched types' >&2; exit 101");
+
+    // THEN the guard forwards that failure. A build that never got as far as
+    // running tests is not the stale-source case, and saying so sends the
+    // reader hunting a problem that is not there.
+    assert_eq!(
+        out.status.code(),
+        Some(101),
+        "a command that failed outright must keep its status"
+    );
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        !combined.contains("reported no tests at all"),
+        "the command failed before running tests; got:\n{combined}"
+    );
+}
