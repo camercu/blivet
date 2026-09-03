@@ -1017,8 +1017,15 @@ mod tests {
 
     /// Ignored by default: resolving a group that does not exist goes through
     /// NSS, which can block for as long as its slowest configured source takes
-    /// to answer, and nothing here can bound that. The container tier runs it
-    /// with `--include-ignored`, where the name sources are known and local.
+    /// to answer, and nothing here can bound that. The glibc container tier
+    /// runs it with `--include-ignored`, where the name sources are known and
+    /// local; the bionic tier runs `cargo test --lib` and so does not.
+    ///
+    /// That leaves bionic's own name resolution — a built-in table rather than
+    /// `/etc/passwd` — covered by the identity tests instead, which are not
+    /// ignored and include the nonexistent-name cases
+    /// (`identity::tests::resolve_group_gid_nonexistent_name`). This test adds
+    /// the `drop_privileges` path over that, not the lookup itself.
     ///
     /// Skipping on `CI` being set was the previous mechanism, and it decided
     /// the wrong thing: the environments that set it are the hosted runners,
