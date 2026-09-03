@@ -34,9 +34,15 @@ whether the live thread count is readable and from where, whether a
 trustworthy open-fd directory exists, whether libc reserves a
 real-time signal range the sweep must skip, and whether `faccessat`
 accepts `AT_EACCESS`. The build script emits one `cfg` alias per
-capability; no module gates on an OS name. Adding a platform is one
-row, and a target absent from the table keeps every conservative
-fallback.
+capability, and no module gates a capability *decision* on an OS name;
+the per-kernel thread-count syscalls in `src/unsafe_ops.rs` stay
+per-OS, because which syscall reads the count is not a question the
+table asks. Adding a platform is one row. A target absent from the
+table takes the fallback for each capability, which is the
+conservative answer in every case but `faccessat_eaccess`: that one
+defaults to available, because it is POSIX and assuming its absence
+would quietly downgrade the writability probe from the effective UID
+to the real one.
 
 Support is tiered by what CI proves:
 
