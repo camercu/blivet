@@ -15,12 +15,16 @@ categories = ["os::unix-apis"]
 # legal/readme/changelog files. README.md is required — src/main.rs embeds it
 # via include_str!. build.rs is required — it resolves the capability `cfg`
 # aliases every platform branch gates on, so without it every branch takes the
-# unknown-Unix fallback. Cargo.toml and Cargo.lock are packaged automatically.
+# unknown-Unix fallback. docs/SPEC.md is required — the doc-drift guard in
+# src/doc_sync.rs ships with the sources and reads it, so `cargo test` against
+# a packaged or vendored copy panics without it. Cargo.toml and Cargo.lock are
+# packaged automatically.
 include = [
     "/src/**/*.rs",
     "/build.rs",
     "/examples/**/*.rs",
     "/README.md",
+    "/docs/SPEC.md",
     "/CHANGELOG.md",
     "/LICENSE-APACHE",
     "/LICENSE-MIT",
