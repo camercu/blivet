@@ -105,49 +105,46 @@ const PLATFORMS: &[Platform] = &[
     },
 ];
 
-/// Every alias the crate may gate on, declared whatever the target so that a
-/// misspelled `#[cfg(blivet_fd_dirr)]` is a warning rather than a branch that
-/// silently never compiles.
-const CAPABILITIES: &[&str] = &[
-    "blivet_thread_count",
-    "blivet_thread_count_procfs",
-    "blivet_fd_dir",
-    "blivet_rt_signals_reserved",
-    "blivet_faccessat_eaccess",
-];
-
 fn main() {
     println!("cargo::rerun-if-changed=build.rs");
-
-    for capability in CAPABILITIES {
-        println!("cargo::rustc-check-cfg=cfg({capability})");
-    }
 
     let target_os = std::env::var("CARGO_CFG_TARGET_OS").expect("cargo sets CARGO_CFG_TARGET_OS");
     let platform = PLATFORMS.iter().find(|p| p.target_os == target_os);
 
-    for (enabled, alias) in [
+    // Every alias the crate may gate on, and whether this target has it. One
+    // list serves both emissions below, so the set that is declared and the set
+    // that can be set cannot disagree.
+    let capabilities = [
         (
-            platform.is_some_and(|p| p.thread_count),
             "blivet_thread_count",
+            platform.is_some_and(|p| p.thread_count),
         ),
         (
-            platform.is_some_and(|p| p.thread_count_procfs),
             "blivet_thread_count_procfs",
+            platform.is_some_and(|p| p.thread_count_procfs),
         ),
         (
-            platform.is_some_and(|p| p.fd_dir.is_some()),
             "blivet_fd_dir",
+            platform.is_some_and(|p| p.fd_dir.is_some()),
         ),
         (
-            platform.is_some_and(|p| p.rt_signals_reserved),
             "blivet_rt_signals_reserved",
+            platform.is_some_and(|p| p.rt_signals_reserved),
         ),
         (
-            platform.is_some_and(|p| p.faccessat_eaccess),
             "blivet_faccessat_eaccess",
+            platform.is_some_and(|p| p.faccessat_eaccess),
         ),
-    ] {
+    ];
+
+    // Declared whatever the target, so that a misspelled
+    // `#[cfg(blivet_fd_dirr)]` is an `unexpected_cfgs` warning — an error under
+    // the `-D warnings` CI sets — rather than a branch that silently never
+    // compiles.
+    for (alias, _) in capabilities {
+        println!("cargo::rustc-check-cfg=cfg({alias})");
+    }
+    for (alias, enabled) in capabilities {
         if enabled {
             println!("cargo::rustc-cfg={alias}");
         }
