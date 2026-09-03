@@ -1369,5 +1369,8 @@ verification points.
   real-time range exists.
 - R141. A writability probe that fails with `EACCES` reports the
   parent directory as not writable; any other errno is reported by
-  name, so a probe that could not run is never mistaken for a
-  permission denial.
+  name, so an errno that does not answer the permission question —
+  whether because the probe could not run (`EINVAL` from a rejected
+  flag) or because it describes the path rather than its permissions
+  (`ENOTDIR`, `ELOOP`, `EROFS`) — is never mistaken for a permission
+  denial.

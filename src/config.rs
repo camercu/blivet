@@ -490,10 +490,17 @@ fn validate_parent_writable(path: &std::path::Path, name: &str) -> Result<(), Da
 
 /// Describes a failed writability probe.
 ///
-/// Only `EACCES` is the answer the probe asked for; every other errno means the
-/// probe itself could not run, and saying "not writable" there hides a
-/// different problem behind a permission claim. That is how an `EINVAL` from a
-/// flag bionic does not accept reached users as a false permission error.
+/// `EACCES` is the answer the probe asked for and is reported as such. Every
+/// other errno is named rather than translated, because none of them answers
+/// the permission question: some say the probe could not run at all (`EINVAL`
+/// from a flag the platform rejects), and some describe the path instead of
+/// its permissions (`ENOTDIR`, `ELOOP`). Both are hidden by a blanket "not
+/// writable", which is how an `EINVAL` from a flag bionic does not accept
+/// reached users as a false permission error.
+///
+/// `EROFS` is the honest edge: the directory really is unwritable, on a
+/// read-only filesystem rather than by permission. It is named too, which
+/// tells the caller more than the permission claim would.
 fn writability_error(
     name: &str,
     parent: &std::path::Path,
@@ -1196,7 +1203,8 @@ mod tests {
             );
             assert!(
                 !msg.contains("not writable"),
-                "{errno} does not mean the directory is unwritable: {msg}"
+                "{errno} does not answer the permission question, so it must \
+                 not be reported as one: {msg}"
             );
             assert!(msg.contains("/a"), "the path must still be named: {msg}");
         }
