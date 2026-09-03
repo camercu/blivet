@@ -201,6 +201,12 @@ platform can be partly supported instead of falling off a cliff into every
 fallback at once. Each capability is checked against the running system by a
 probe test.
 
+One carve-out, so the Supported row means what it says: the guards that check
+this repository against itself — that the docs match the code, that no source
+file names a fixed temp path — do not run on the device and VM tiers, which
+have no copy of the sources to read. They test the repository, not the
+platform, and run on the host tier.
+
 On a best-effort target `daemonize()` and `drop_privileges()` are `#[deprecated]`
 stubs: using one warns with guidance by default and is a hard error under
 `-D warnings`, and the `unsafe` forms are the way through. Non-Unix targets are
