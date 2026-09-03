@@ -9,9 +9,14 @@ use relentless::stop;
 use relentless::wait;
 
 const POLL_INTERVAL: Duration = Duration::from_millis(10);
-const POLL_TIMEOUT: Duration = Duration::from_secs(5);
+/// Generous, because it bounds only failure. Polling returns the instant the
+/// condition holds, so a large bound costs a passing test nothing; a small one
+/// fails tests that fork a daemon and wait for it to write through a redirected
+/// descriptor whenever the machine is loaded — a shared CI runner, or a local
+/// run with other work alongside it.
+const POLL_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// Poll `f` at fixed 10ms intervals until it yields `Some`, or give up after 5s.
+/// Poll `f` at fixed 10ms intervals until it yields `Some`, or give up.
 fn poll_until<T>(mut f: impl FnMut() -> Option<T>) -> Option<T> {
     retry(move |_| f())
         .wait(wait::fixed(POLL_INTERVAL))
