@@ -55,6 +55,12 @@ Android is supported with one documented divergence: bionic rejects
 `AT_EACCESS`, so the pre-fork writability check answers for the real
 UID (see [Validation](#validation)).
 
+The Supported tier covers the tests that exercise the platform. The
+guards that check the repository against itself — doc-vs-code drift,
+no hardcoded temp paths — run on the host tier only, because the
+device and VM tiers carry the test binary without the sources it
+would read.
+
 ## Dependency policy
 
 Prefer nix crate safe wrappers over direct libc calls. Use libc only
