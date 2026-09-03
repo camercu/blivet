@@ -7,7 +7,7 @@
 //! stale: fix the doc (or the code, if the code is what moved).
 
 use crate::DaemonizeError;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::PathBuf;
 
@@ -56,6 +56,49 @@ fn platform_list_consistent() {
             "crate front page (lib.rs) omits supported platform {p}"
         );
     }
+}
+
+/// The Supported row of the tier table, in `README.md` and `docs/SPEC.md`,
+/// must name exactly the platforms the capability table has.
+///
+/// [`platform_list_consistent`] checks one direction — that every supported
+/// platform is mentioned — which leaves the direction that matters more
+/// unguarded: a tier table may claim a platform `build.rs` has never heard of,
+/// and claiming support the project cannot back is the failure the tiering
+/// exists to prevent. Set equality closes both.
+#[test]
+fn supported_tier_matches_the_capability_table() {
+    let expected: BTreeSet<&str> = env!("BLIVET_PLATFORMS").split(',').collect();
+
+    for doc in ["README.md", "docs/SPEC.md"] {
+        let listed = supported_tier_row(&read(doc));
+        assert_eq!(
+            listed.iter().map(String::as_str).collect::<BTreeSet<_>>(),
+            expected,
+            "{doc}'s Supported tier row and the build.rs capability table must \
+             name the same platforms"
+        );
+    }
+}
+
+/// Platforms named in the last cell of the tier table's Supported row.
+fn supported_tier_row(doc: &str) -> Vec<String> {
+    let row = doc
+        .lines()
+        .map(str::trim)
+        .find(|l| {
+            l.starts_with('|')
+                && l.split('|')
+                    .nth(1)
+                    .is_some_and(|c| c.trim().trim_matches('*') == "Supported")
+        })
+        .expect("the tier table has a Supported row");
+    let cells: Vec<&str> = row.split('|').map(str::trim).collect();
+    cells[3]
+        .split(',')
+        .map(|p| p.trim().to_string())
+        .filter(|p| !p.is_empty())
+        .collect()
 }
 
 /// The front page shows consumers how to gate the `daemonize` call for an
