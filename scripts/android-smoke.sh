@@ -23,12 +23,20 @@ fail() {
 
 [ -x "${BUILD_DIR}/daemonize" ] || fail "no daemonize binary in ${BUILD_DIR}"
 # cargo names the test binary with a metadata hash and leaves a .d depfile
-# beside it. Stale hashes from earlier builds linger, so take the newest.
+# beside it. Stale hashes from earlier builds linger, so take the newest and
+# say when there was a choice — this runs against a device with whatever was
+# built beforehand, so it cannot ask cargo which artifact is current the way
+# the NetBSD job does.
 # `|| true` keeps the next line reachable: under `set -e` the assignment takes
 # the substitution's status, so with no match the script would exit here and
 # the diagnostic below would never print.
-TEST_BIN=$(ls -t "${BUILD_DIR}"/deps/blivet-* 2>/dev/null | grep -v '\.d$' | head -1 || true)
+CANDIDATES=$(ls -t "${BUILD_DIR}"/deps/blivet-* 2>/dev/null | grep -v '\.d$' || true)
+TEST_BIN=$(printf '%s\n' "${CANDIDATES}" | head -1)
 [ -n "${TEST_BIN}" ] || fail "no library test binary in ${BUILD_DIR}/deps"
+[ -x "${TEST_BIN}" ] || fail "library test binary ${TEST_BIN} is not executable"
+if [ "$(printf '%s\n' "${CANDIDATES}" | wc -l)" -gt 1 ]; then
+    echo "note: several test binaries present, running the newest: ${TEST_BIN}" >&2
+fi
 
 adb wait-for-device
 adb push "${BUILD_DIR}/daemonize" "${DEVICE_DIR}/daemonize" >/dev/null
