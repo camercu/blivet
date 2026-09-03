@@ -53,16 +53,16 @@ adb shell rm -f "${PIDFILE}"
 echo "PASS: smoke test on android"
 
 # Android has no /tmp; the suite takes its temp directory from TMPDIR.
-RESULTS=$(mktemp)
-trap 'rm -f "${RESULTS}"' EXIT
 # --skip doc_sync: those tests read the repo's own README and SPEC through
 # env!("CARGO_MANIFEST_DIR"), baked at cross-compile time to a path that does
 # not exist on the device — only the two binaries are pushed. They guard the
 # repository, not the platform, and run on the host tier.
-adb shell "cd ${DEVICE_DIR} && TMPDIR=${DEVICE_DIR} ./blivet-tests --skip doc_sync" 2>&1 | tee "${RESULTS}"
-
-# A harness with every test compiled away still exits 0 and prints "ok", which
-# reads as coverage this tier does not have. Demand a nonzero pass count.
-grep -qE '^test result: ok\. [1-9][0-9]* passed' "${RESULTS}" \
+#
+# Routed through the shared guard, which is what every other tier uses to
+# demand the run actually executed tests: a harness with every test compiled
+# away still exits 0 and prints "ok", which reads as coverage this tier does
+# not have.
+sh scripts/assert-tests-ran.sh \
+    adb shell "cd ${DEVICE_DIR} && TMPDIR=${DEVICE_DIR} ./blivet-tests --skip doc_sync" \
     || fail "library tests did not report a passing run"
 echo "PASS: library tests on android"
