@@ -32,6 +32,15 @@ struct Platform {
     /// they have none and fall back to closing `3..rlim_cur`.
     fd_dir: Option<&'static str>,
     /// Does libc reserve real-time signals that a signal sweep must not reset?
+    ///
+    /// True also selects *how* the sweep is built: the standard signals
+    /// chained with `SIGRTMIN..=SIGRTMAX`, skipping the reserved band between
+    /// them. False sweeps `1..=64` and so resets a real-time signal only where
+    /// the range happens to fall below 64 — which on every platform answering
+    /// false today it does not (FreeBSD's starts at 65). A platform with
+    /// real-time signals and no reserved band would answer this question
+    /// false and silently stop resetting them; that platform does not exist in
+    /// the table yet, and splitting the two questions is the fix when it does.
     rt_signals_reserved: bool,
     /// Does `faccessat` accept `AT_EACCESS`, so a writability probe answers for
     /// the effective UID rather than the real one?
