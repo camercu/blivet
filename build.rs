@@ -44,6 +44,10 @@ struct Platform {
     rt_signals_reserved: bool,
     /// Does `faccessat` accept `AT_EACCESS`, so a writability probe answers for
     /// the effective UID rather than the real one?
+    ///
+    /// Every listed platform says yes except Android. A target absent from the
+    /// table is assumed to accept it too — see the alias emission below for
+    /// why this capability defaults the opposite way from the others.
     faccessat_eaccess: bool,
 }
 
@@ -142,7 +146,15 @@ fn main() {
         ),
         (
             "blivet_faccessat_eaccess",
-            platform.is_some_and(|p| p.faccessat_eaccess),
+            // The one capability whose default for an unlisted target is
+            // *true*. The others are answers a platform has to earn, and
+            // assuming them would take a wrong branch; this one is POSIX, and
+            // `nix` defines the constant everywhere except Android, so
+            // assuming its absence is what takes the wrong branch — a
+            // best-effort Unix would silently start probing the real UID
+            // instead of the effective one, which is a weaker check than the
+            // crate made before the capability table existed.
+            platform.is_none_or(|p| p.faccessat_eaccess),
         ),
     ];
 
