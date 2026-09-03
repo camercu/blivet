@@ -1015,12 +1015,19 @@ mod tests {
         ));
     }
 
+    /// Ignored by default: resolving a group that does not exist goes through
+    /// NSS, which can block for as long as its slowest configured source takes
+    /// to answer, and nothing here can bound that. The container tier runs it
+    /// with `--include-ignored`, where the name sources are known and local.
+    ///
+    /// Skipping on `CI` being set was the previous mechanism, and it decided
+    /// the wrong thing: the environments that set it are the hosted runners,
+    /// while the VM and device tiers — which do not forward the variable —
+    /// would have run it with no timeout to rescue them.
     #[cfg(blivet_thread_count)]
     #[test]
+    #[ignore = "getgrnam for a missing group can block on a networked NSS source"]
     fn drop_privileges_group_not_found() {
-        if std::env::var("CI").is_ok() {
-            return; // NSS lookups for nonexistent groups can hang in CI
-        }
         let mut config = DaemonConfig::new();
         config.group("nonexistent_daemonize_test_group_xyz");
         let mut ctx = ctx(&config, None, None);
