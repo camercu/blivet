@@ -52,7 +52,11 @@ echo "PASS: smoke test on android"
 # Android has no /tmp; the suite takes its temp directory from TMPDIR.
 RESULTS=$(mktemp)
 trap 'rm -f "${RESULTS}"' EXIT
-adb shell "cd ${DEVICE_DIR} && TMPDIR=${DEVICE_DIR} ./blivet-tests" 2>&1 | tee "${RESULTS}"
+# --skip doc_sync: those tests read the repo's own README and SPEC through
+# env!("CARGO_MANIFEST_DIR"), baked at cross-compile time to a path that does
+# not exist on the device — only the two binaries are pushed. They guard the
+# repository, not the platform, and run on the host tier.
+adb shell "cd ${DEVICE_DIR} && TMPDIR=${DEVICE_DIR} ./blivet-tests --skip doc_sync" 2>&1 | tee "${RESULTS}"
 
 # A harness with every test compiled away still exits 0 and prints "ok", which
 # reads as coverage this tier does not have. Demand a nonzero pass count.
