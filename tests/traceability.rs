@@ -18,7 +18,10 @@
 //! `--ignored --nocapture`) so closing gaps is a visible, deliberate act.
 
 use std::collections::BTreeSet;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
+
+mod common;
+use common::rust_files;
 
 fn manifest_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -39,21 +42,6 @@ fn spec_requirements() -> BTreeSet<u32> {
         }
     }
     reqs
-}
-
-/// Recursively collect `.rs` files under `dir`.
-fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            rust_files(&path, out);
-        } else if path.extension().is_some_and(|e| e == "rs") {
-            out.push(path);
-        }
-    }
 }
 
 /// Requirement numbers named in `// Covers: R..` tags across the test sources.

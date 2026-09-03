@@ -14,25 +14,13 @@
 //! fictional one such as `/a/x.pid`; prose examples name a real daemon
 //! location. Comments and doc comments may still discuss `/tmp` by name.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
+
+mod common;
+use common::rust_files;
 
 /// This file, which is exempt from its own scan.
 const THIS_FILE: &str = "location_independence.rs";
-
-/// Recursively collect `.rs` files under `dir`.
-fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            rust_files(&path, out);
-        } else if path.extension().is_some_and(|e| e == "rs") {
-            out.push(path);
-        }
-    }
-}
 
 #[test]
 fn no_source_file_hardcodes_tmp() {
