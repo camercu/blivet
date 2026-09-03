@@ -56,15 +56,27 @@ pub(crate) fn is_subprocess() -> bool {
 /// ever running the test body.
 pub(crate) fn run_in_subprocess(test_name: &str) {
     let exe = std::env::current_exe().unwrap();
-    let status = Command::new(exe)
+    let output = Command::new(exe)
         .arg("--exact")
         .arg(test_name)
         .arg("--include-ignored") // the target test is #[ignore]
         .arg("--nocapture")
         .env(SUBPROCESS_ENV, "1")
-        .status()
+        .output()
         .unwrap();
-    assert!(status.success(), "subprocess test failed: {status}");
+
+    // Captured rather than inherited. A child writing straight to the parent's
+    // stdout interleaves with it, and with the other children running
+    // alongside, which can split a line so that whatever reads the run's
+    // summary lines no longer matches one. Reporting the child's output only
+    // when it failed keeps the diagnosis without the corruption.
+    assert!(
+        output.status.success(),
+        "subprocess test {test_name} failed: {}\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
 }
 
 /// Directory for test paths that reach the filesystem, honouring `TMPDIR`.
