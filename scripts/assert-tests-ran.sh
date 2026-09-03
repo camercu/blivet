@@ -33,7 +33,10 @@ status=$(cat "$status_file")
 #                        ^$4            ^$6
 ran=$(awk '/^test result:/ { total += $4 + $6 } END { print total + 0 }' "$log")
 
-if [ "$ran" -eq 0 ]; then
+# Only a *successful* command that ran nothing is the case this guard is for.
+# A command that failed has already said why — a compile error, a missing
+# binary — and blaming stale sources for it sends the reader somewhere else.
+if [ "$status" -eq 0 ] && [ "$ran" -eq 0 ]; then
     echo "FAIL: the test command reported no tests at all." >&2
     echo "A suite that matches nothing still exits 0, so this is a green run" >&2
     echo "that proved nothing — usually cargo judging stale sources fresh." >&2
