@@ -107,7 +107,11 @@ check-non-unix:
     #!/usr/bin/env bash
     set -euo pipefail
     rustup target add wasm32-unknown-unknown
-    out=$(cargo check {{locked}} --target wasm32-unknown-unknown --message-format=short 2>&1 || true)
+    # --color=never, not merely unset: CI exports CARGO_TERM_COLOR=always, and
+    # a coloured diagnostic puts an ANSI reset between "error" and its colon,
+    # which no pattern matching plain text will find.
+    out=$(cargo check {{locked}} --target wasm32-unknown-unknown \
+        --message-format=short --color=never 2>&1 || true)
     # `--message-format=short` writes diagnostics as `file:line:col: error: ...`,
     # so match the marker anywhere; awk always exits 0, unlike a grep that finds
     # nothing. The trailing "could not compile" summary is not a diagnostic.
