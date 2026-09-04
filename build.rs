@@ -14,19 +14,33 @@
 //! platform list: it is exported as `BLIVET_PLATFORMS`, and the doc-drift guard
 //! in `src/doc_sync.rs` reads that rather than keeping a copy of its own.
 
+/// Where a platform's live thread count is read from.
+#[derive(PartialEq)]
+enum ThreadCount {
+    /// The `Threads:` line of `/proc/self/status`.
+    ProcFs,
+    /// The per-OS kernel query in `unsafe_ops` — `proc_pidinfo` on macOS, a
+    /// `sysctl` on each BSD.
+    KernelQuery,
+}
+
 /// What one target OS can do.
 struct Platform {
     /// `target_os` value, as rustc reports it.
     target_os: &'static str,
     /// Display name, as the README and the crate front page write it.
     name: &'static str,
-    /// Can the live thread count be read? This gates the safe `daemonize` and
+    /// Where the live thread count comes from, or `None` where it cannot be
+    /// read at all. Being readable gates the safe `daemonize` and
     /// `drop_privileges` entry points, which must prove the process is
     /// single-threaded before forking or calling `setenv`.
-    thread_count: bool,
-    /// Is that count in `/proc/self/status`? False means it comes from the
-    /// per-OS kernel query in `unsafe_ops`.
-    thread_count_procfs: bool,
+    ///
+    /// One field rather than a readable flag beside a source flag, because
+    /// only three of those four combinations mean anything: a source with no
+    /// readable count would compile `count()` with every caller gated out,
+    /// which is a `dead_code` error under the `-D warnings` CI sets, reached
+    /// from a table row that reads perfectly well.
+    thread_count: Option<ThreadCount>,
     /// Directory listing this process's open fds, where a trustworthy one
     /// exists. The BSDs' `/dev/fd` shows only 0-2 unless fdescfs is mounted, so
     /// they have none and fall back to closing `3..rlim_cur`.
@@ -60,8 +74,7 @@ const PLATFORMS: &[Platform] = &[
     Platform {
         target_os: "linux",
         name: "Linux",
-        thread_count: true,
-        thread_count_procfs: true,
+        thread_count: Some(ThreadCount::ProcFs),
         fd_dir: Some("/proc/self/fd"),
         rt_signals_reserved: true,
         faccessat_eaccess: true,
@@ -74,8 +87,7 @@ const PLATFORMS: &[Platform] = &[
         // `faccessat` rejects `AT_EACCESS`.
         target_os: "android",
         name: "Android",
-        thread_count: true,
-        thread_count_procfs: true,
+        thread_count: Some(ThreadCount::ProcFs),
         fd_dir: Some("/proc/self/fd"),
         rt_signals_reserved: true,
         faccessat_eaccess: false,
@@ -83,8 +95,7 @@ const PLATFORMS: &[Platform] = &[
     Platform {
         target_os: "macos",
         name: "macOS",
-        thread_count: true,
-        thread_count_procfs: false,
+        thread_count: Some(ThreadCount::KernelQuery),
         fd_dir: Some("/dev/fd"),
         rt_signals_reserved: false,
         faccessat_eaccess: true,
@@ -92,8 +103,7 @@ const PLATFORMS: &[Platform] = &[
     Platform {
         target_os: "freebsd",
         name: "FreeBSD",
-        thread_count: true,
-        thread_count_procfs: false,
+        thread_count: Some(ThreadCount::KernelQuery),
         fd_dir: None,
         rt_signals_reserved: false,
         faccessat_eaccess: true,
@@ -101,8 +111,7 @@ const PLATFORMS: &[Platform] = &[
     Platform {
         target_os: "netbsd",
         name: "NetBSD",
-        thread_count: true,
-        thread_count_procfs: false,
+        thread_count: Some(ThreadCount::KernelQuery),
         fd_dir: None,
         rt_signals_reserved: false,
         faccessat_eaccess: true,
@@ -110,8 +119,7 @@ const PLATFORMS: &[Platform] = &[
     Platform {
         target_os: "openbsd",
         name: "OpenBSD",
-        thread_count: true,
-        thread_count_procfs: false,
+        thread_count: Some(ThreadCount::KernelQuery),
         fd_dir: None,
         rt_signals_reserved: false,
         faccessat_eaccess: true,
@@ -137,11 +145,11 @@ fn main() {
         ("blivet_known_platform", platform.is_some()),
         (
             "blivet_thread_count",
-            platform.is_some_and(|p| p.thread_count),
+            platform.is_some_and(|p| p.thread_count.is_some()),
         ),
         (
             "blivet_thread_count_procfs",
-            platform.is_some_and(|p| p.thread_count_procfs),
+            platform.is_some_and(|p| p.thread_count == Some(ThreadCount::ProcFs)),
         ),
         (
             "blivet_fd_dir",
