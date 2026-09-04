@@ -192,7 +192,7 @@ claims are tiered:
 | --- | --- | --- |
 | **Supported** | The library test suite runs on the real OS | Linux, Android, macOS, FreeBSD, NetBSD, OpenBSD |
 | **Cross-checked** | The crate type-checks for the target; no test runs there | Other architectures of the above, e.g. `aarch64-linux-android` |
-| **Best-effort** | It compiles and takes the conservative fallback of every capability | Any other Unix (CI additionally smoke-tests the CLI on illumos) |
+| **Best-effort** | It compiles and takes the fallback for every capability | Any other Unix (CI additionally smoke-tests the CLI on illumos) |
 
 Platform differences are decided one capability at a time — is the thread count
 readable, is there a trustworthy open-fd directory, does libc reserve real-time
@@ -201,11 +201,17 @@ platform can be partly supported instead of falling off a cliff into every
 fallback at once. Each capability is checked against the running system by a
 probe test.
 
+Each fallback is the conservative answer except one: `faccessat` is assumed to
+accept `AT_EACCESS`, because it is POSIX and assuming otherwise would quietly
+downgrade the pre-fork writability check from the effective UID to the real
+one.
+
 One carve-out, so the Supported row means what it says: the guards that check
 this repository against itself — that the docs match the code, that no source
-file names a fixed temp path — do not run on the device and VM tiers, which
-have no copy of the sources to read. They test the repository, not the
-platform, and run on the host tier.
+file names a fixed temp path — are skipped on the two tiers that run a
+cross-built binary without the sources beside it, the Android device and the
+NetBSD VM. They test the repository, not the platform. Every other tier builds
+in place and runs them.
 
 On a best-effort target `daemonize()` and `drop_privileges()` are `#[deprecated]`
 stubs: using one warns with guidance by default and is a hard error under
