@@ -335,12 +335,17 @@ library's error type and notification pipe protocol uniformly.
 ### daemonize()
 
 ```rust
-#[cfg(any(target_os = "linux", target_os = "macos", target_os = "freebsd",
-          target_os = "netbsd", target_os = "openbsd"))]
+#[cfg(unix)]
+#[cfg(blivet_thread_count)]
 pub fn daemonize(
     config: &DaemonConfig,
 ) -> Result<DaemonContext, DaemonizeError>
 ```
+
+Gated on the capability, so it is the real function on exactly the
+platforms whose thread count can be read — Android included. Consumers
+cannot see the crate's own aliases and gate by `target_os` instead; the
+front page of the crate carries that form.
 
 The recommended entry point. Reads the current process's thread count,
 panicking (with a message naming the problem and fix) unless it is exactly
@@ -444,9 +449,11 @@ the current euid — the identity a setuid binary writes as. Android is
 the exception: bionic rejects `AT_EACCESS`, so there the check answers
 for the real UID. Chdir is exempt: it must already exist as a
 directory, so its parent is never created. A probe that fails with
-`EACCES` reports the directory as unwritable; any other errno means the
-probe could not run and is reported by name rather than as a
-permission denial.
+`EACCES` reports the directory as unwritable; any other errno is
+reported by name rather than as a permission denial, because none of
+them answers the permission question — some because the probe could
+not run at all, some because they describe the path instead
+(`ENOTDIR`, `ELOOP`, `EROFS`).
 
 ### Path comparison
 
