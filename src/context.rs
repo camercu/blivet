@@ -1076,6 +1076,10 @@ mod tests {
     /// fails EPERM, letting tests observe that `drop_privileges` attempted
     /// the chown — and fail before `setgid`, so the test process's group
     /// state is never actually changed.
+    // Every caller is a test gated on the same capability; without this an
+    // unlisted Unix compiles the helper with nothing calling it, which `-D warnings`
+    // rejects.
+    #[cfg(blivet_thread_count)]
     fn foreign_gid() -> u32 {
         // libc, not nix::unistd::getgroups: nix gates it out on apple targets.
         #[allow(unsafe_code)]
