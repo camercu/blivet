@@ -9,12 +9,20 @@
 # /bin/sh for a shebang to name.
 set -eu
 
-# Scratch paths carry the pid, so concurrent runs cannot read each other's
-# output and conclude the wrong thing about their own.
-scratch="${TMPDIR:-.}/.assert-tests-ran.$$"
-log="$scratch.log"
-status_file="$scratch.status"
-trap 'rm -f "$log" "$status_file"' EXIT INT TERM
+# A directory of its own, so concurrent runs cannot read each other's output
+# and conclude the wrong thing about their own. `mktemp -d` honours TMPDIR and
+# is what keeps a transcript of the whole run out of the working tree: a guard
+# whose subject is build hygiene must not leave files among the sources it is
+# about to scan, and TMPDIR is unset on a GitHub Linux runner. The fallback is
+# for a system without mktemp; Termux has no /tmp but does set TMPDIR.
+scratch=$(mktemp -d 2>/dev/null || true)
+if [ -z "$scratch" ]; then
+    scratch="${TMPDIR:-/tmp}/assert-tests-ran.$$"
+    mkdir -p "$scratch"
+fi
+log="$scratch/output"
+status_file="$scratch/status"
+trap 'rm -rf "$scratch"' EXIT INT TERM
 
 # Stream the output and keep the command's own exit status. `$?` after a
 # pipeline is the last stage's, and `pipefail` is not POSIX, so the status
