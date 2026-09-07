@@ -29,6 +29,12 @@
 /// likely to cover. NetBSD's `MAKEDEV` creates `/dev/fd/0` through
 /// `/dev/fd/63` as plain character devices that exist whether or not anything
 /// is open on them, so a listing containing a low number proves nothing.
+// Compiled wherever one of the fd-directory probes is: the positive one needs
+// it under `blivet_fd_dir`, the negative one under `blivet_known_platform`.
+// Without this an unlisted Unix has neither probe and three unused items, and
+// the `-D warnings` this project sets turns those into a build failure — on
+// exactly the best-effort targets the README promises will compile.
+#[cfg(any(blivet_fd_dir, blivet_known_platform))]
 const STATIC_FD_RANGE_TOP: i32 = 63;
 
 /// Hold descriptors open until one lands above [`STATIC_FD_RANGE_TOP`], and
@@ -36,6 +42,12 @@ const STATIC_FD_RANGE_TOP: i32 = 63;
 ///
 /// The files stay open in the returned `Vec` — dropping it closes them, so a
 /// caller must keep it alive while asking whether the descriptor is listed.
+// Compiled wherever one of the fd-directory probes is: the positive one needs
+// it under `blivet_fd_dir`, the negative one under `blivet_known_platform`.
+// Without this an unlisted Unix has neither probe and three unused items, and
+// the `-D warnings` this project sets turns those into a build failure — on
+// exactly the best-effort targets the README promises will compile.
+#[cfg(any(blivet_fd_dir, blivet_known_platform))]
 fn open_fd_above_static_range() -> (Vec<std::fs::File>, i32) {
     use std::os::fd::AsRawFd;
 
@@ -63,6 +75,12 @@ fn open_fd_above_static_range() -> (Vec<std::fs::File>, i32) {
 /// populates it with static nodes for 0-63. So the descriptor asked about is
 /// one from [`open_fd_above_static_range`] — a listing that has it is tracking
 /// this process, not enumerating device nodes.
+// Compiled wherever one of the fd-directory probes is: the positive one needs
+// it under `blivet_fd_dir`, the negative one under `blivet_known_platform`.
+// Without this an unlisted Unix has neither probe and three unused items, and
+// the `-D warnings` this project sets turns those into a build failure — on
+// exactly the best-effort targets the README promises will compile.
+#[cfg(any(blivet_fd_dir, blivet_known_platform))]
 fn lists_own_fd(path: &str, fd: i32) -> bool {
     let Ok(entries) = std::fs::read_dir(path) else {
         return false;
