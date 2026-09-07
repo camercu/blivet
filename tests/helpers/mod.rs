@@ -76,8 +76,13 @@ pub fn query_process(pid: u32) -> Option<ProcessInfo> {
 ///
 /// Tries procfs and falls back to `lsof`, deciding at runtime rather than by
 /// OS name. Gating the procfs path on `target_os = "linux"` sent Android — a
-/// kernel with `/proc` and no `lsof` — down the fallback, where the command is
-/// missing and the cwd comes back as an empty string instead of an error.
+/// kernel with `/proc` and no `lsof` — down a fallback that cannot answer
+/// there, so it now reads the `/proc` it has.
+///
+/// A platform where neither works still yields `None`, which
+/// [`query_process`] turns into an empty cwd rather than an error; that is
+/// unchanged, and is why the assertions using it compare against a path they
+/// expect rather than merely checking it is non-empty.
 fn query_cwd(pid: u32) -> Option<String> {
     if let Ok(path) = std::fs::read_link(format!("/proc/{pid}/cwd")) {
         return Some(path.to_string_lossy().into_owned());
