@@ -16,6 +16,14 @@
 //! illumos has a working `/proc/self/fd` — telling whoever ran the suite that
 //! the crate is broken when it is merely unlisted.
 //!
+//! `faccessat_accepts_at_eaccess` is deliberately the exception, and runs on
+//! any target claiming the capability, listed or not. That claim is the one
+//! the table makes by default, and `validate` acts on it every call: if an
+//! unlisted Unix rejects the flag, the writability probe is broken there and a
+//! red test is the right answer rather than a courtesy to an unlisted
+//! platform. The other defaults decline a capability, so being wrong about
+//! them costs a fallback, not a failure.
+//!
 //! Two claims have no negative probe, and the gap is deliberate rather than
 //! overlooked:
 //!
