@@ -101,11 +101,14 @@ fn supported_tier_row(doc: &str) -> Vec<String> {
                     .is_some_and(|c| c.trim().trim_matches('*') == "Supported")
         })
         .expect("the tier table has a Supported row");
+    // The last non-empty cell — a markdown row splits to an empty lead and
+    // trailing cell — rather than a fixed index, which would quietly read the
+    // wrong column if the table gained one and then blame `build.rs` for the
+    // mismatch.
     let cells: Vec<&str> = row.split('|').map(str::trim).collect();
-    // Named rather than indexed blindly: a table that gained or lost a column
-    // should say so, not panic with an out-of-bounds index on its own guard.
     cells
-        .get(3)
+        .iter()
+        .rfind(|c| !c.is_empty())
         .unwrap_or_else(|| panic!("the Supported row should have a platforms cell, got: {row}"))
         .split(',')
         .map(|p| p.trim().to_string())
