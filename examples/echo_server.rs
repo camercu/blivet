@@ -25,7 +25,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use blivet::{daemonize, DaemonConfig};
+use blivet::DaemonConfig;
 
 const ADDR: &str = "127.0.0.1:7878";
 
@@ -55,10 +55,31 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .foreground(foreground);
 
     // Daemonize first, while still single-threaded. `daemonize` is the safe
-    // entry point: it verifies the single-threaded requirement for us. On
-    // targets where it is unavailable, use the portable `unsafe` escape hatch
-    // `unsafe { daemonize_unchecked(&config)? }` instead.
-    let mut ctx = daemonize(&config)?;
+    // entry point: it verifies the single-threaded requirement for us. It only
+    // exists where the thread count is readable, so this is the gate a real
+    // consumer writes — the crate front page shows the same one. Calling it
+    // unconditionally would build on a supported platform and fail on any
+    // other, where it resolves to a `#[deprecated]` stub.
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "android",
+        target_os = "macos",
+        target_os = "freebsd",
+        target_os = "netbsd",
+        target_os = "openbsd"
+    ))]
+    let mut ctx = blivet::daemonize(&config)?;
+    #[cfg(not(any(
+        target_os = "linux",
+        target_os = "android",
+        target_os = "macos",
+        target_os = "freebsd",
+        target_os = "netbsd",
+        target_os = "openbsd"
+    )))]
+    // SAFETY: no threads have been spawned yet — this is the first thing main
+    // does, and the serve loop below only starts after daemonizing.
+    let mut ctx = unsafe { blivet::daemonize_unchecked(&config)? };
 
     // Privileged init phase: bind the listening socket.
     let listener = TcpListener::bind(ADDR)?;
