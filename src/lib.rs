@@ -188,9 +188,11 @@ compile_error!(concat!(
     " is not Unix."
 ));
 
-// Every item below is Unix-only, so a non-Unix build stops at the
-// `compile_error!` above instead of adding the wall of type errors from inside
-// `nix` that it exists to replace. `check-cross` holds that property.
+// Every item below is Unix-only, so a non-Unix build of the library stops at
+// the `compile_error!` above instead of adding the wall of type errors from
+// inside `nix` that it exists to replace. `just check-non-unix` holds that
+// property, and holds it for the library alone — the `cfg(test)` modules below
+// are not gated, so a non-Unix `--all-targets` build still has more to say.
 #[cfg(unix)]
 mod config;
 #[cfg(unix)]
