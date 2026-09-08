@@ -12,7 +12,9 @@
 //! code. A test that needs a real directory calls `test_support::tmp_dir()`,
 //! which honours `TMPDIR`; a test whose path is only a value names a plainly
 //! fictional one such as `/a/x.pid`; prose examples name a real daemon
-//! location. Comments and doc comments may still discuss `/tmp` by name.
+//! location. Line comments and doc comments may still discuss `/tmp` by name.
+//! A block comment cannot: the scan reads a line at a time and cannot tell it
+//! is inside one.
 
 use std::path::PathBuf;
 
