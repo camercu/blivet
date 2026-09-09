@@ -130,15 +130,20 @@ fn supported_tier_row(doc: &str) -> Vec<String> {
 fn front_page_cfg_example_lists_every_target_os() {
     const BRANCHES: usize = 2;
 
-    let front_page = read("src/lib.rs");
-    for os in env!("BLIVET_SUPPORTED_TARGET_OS").split(',') {
-        let clause = format!("target_os = \"{os}\"");
-        assert_eq!(
-            front_page.matches(&clause).count(),
-            BRANCHES,
-            "the front page `cfg` example must name {clause} in both the \
-             checked branch and the `not(...)` fallback"
-        );
+    // Both files spell the list out for consumers, who cannot see this crate's
+    // aliases: the front page teaches the pattern and the example runs it.
+    // Each is a copy of the table, so each is pinned to it.
+    for doc in ["src/lib.rs", "examples/echo_server.rs"] {
+        let text = read(doc);
+        for os in env!("BLIVET_SUPPORTED_TARGET_OS").split(',') {
+            let clause = format!("target_os = \"{os}\"");
+            assert_eq!(
+                text.matches(&clause).count(),
+                BRANCHES,
+                "{doc}'s `cfg` example must name {clause} in both the checked \
+                 branch and the `not(...)` fallback"
+            );
+        }
     }
 }
 
