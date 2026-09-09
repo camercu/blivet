@@ -62,7 +62,11 @@ fn no_source_file_hardcodes_tmp() {
             // A `//` inside a string literal ends the scan early, which is a
             // hole rather than a hazard: it exempts a line, never accuses one.
             let code = trimmed.split("//").next().unwrap_or_default();
-            if code.contains("/tmp") {
+            // "/tmp" as a whole path, not as the tail of one: the temp
+            // directories this crate standardises on — /data/local/tmp on a
+            // device, /var/tmp elsewhere — end in those same four characters
+            // and are not what is banned.
+            if code.contains("\"/tmp\"") || code.contains("/tmp/") {
                 offenders.push(format!("  {rel}:{}: {}", i + 1, line.trim()));
             }
         }
