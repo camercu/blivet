@@ -24,11 +24,19 @@
 //! platform. The other defaults decline a capability, so being wrong about
 //! them costs a fallback, not a failure.
 //!
-//! Two claims have no negative probe, and the gap is deliberate rather than
+//! Three claims have no negative probe, and each gap is deliberate rather than
 //! overlooked:
 //!
 //! - `blivet_thread_count`: where it is absent there is no `count` function to
 //!   call, and no portable way to ask "could a count have been read here?".
+//! - `blivet_fd_dir`: every listed platform answering "no" is a BSD, where
+//!   both candidate directories are optional mounts — `procfs` on NetBSD,
+//!   `fdescfs` on `/dev/fd` — so finding one populated says the machine
+//!   running the test mounted it, not that the platform offers a listing the
+//!   crate could rely on. The table's "no" already means "not something to
+//!   depend on", and no runtime observation separates that from "not mounted
+//!   here", so the assertion would fail on a NetBSD with its default
+//!   `/etc/fstab` while saying nothing true.
 //! - `blivet_rt_signals_reserved`: among the platforms the table lists — the
 //!   only ones a negative probe runs on — every one answering "no" is a macOS
 //!   or BSD target for which `libc` defines no `SIGRTMIN`, so the absent case
@@ -41,12 +49,10 @@
 /// likely to cover. NetBSD's `MAKEDEV` creates `/dev/fd/0` through
 /// `/dev/fd/63` as plain character devices that exist whether or not anything
 /// is open on them, so a listing containing a low number proves nothing.
-// Compiled wherever one of the fd-directory probes is: the positive one needs
-// it under `blivet_fd_dir`, the negative one under `blivet_known_platform`.
-// Without this an unlisted Unix has neither probe and three unused items, and
-// the `-D warnings` this project sets turns those into a build failure — on
-// exactly the best-effort targets the README promises will compile.
-#[cfg(any(blivet_fd_dir, blivet_known_platform))]
+// Only the fd-directory probe uses these, and it exists only where the
+// capability does. Anything wider leaves them uncalled on a platform without
+// it, which the `-D warnings` this project sets turns into a build failure.
+#[cfg(blivet_fd_dir)]
 const STATIC_FD_RANGE_TOP: i32 = 63;
 
 /// Hold descriptors open until one lands above [`STATIC_FD_RANGE_TOP`], and
@@ -54,12 +60,10 @@ const STATIC_FD_RANGE_TOP: i32 = 63;
 ///
 /// The files stay open in the returned `Vec` — dropping it closes them, so a
 /// caller must keep it alive while asking whether the descriptor is listed.
-// Compiled wherever one of the fd-directory probes is: the positive one needs
-// it under `blivet_fd_dir`, the negative one under `blivet_known_platform`.
-// Without this an unlisted Unix has neither probe and three unused items, and
-// the `-D warnings` this project sets turns those into a build failure — on
-// exactly the best-effort targets the README promises will compile.
-#[cfg(any(blivet_fd_dir, blivet_known_platform))]
+// Only the fd-directory probe uses these, and it exists only where the
+// capability does. Anything wider leaves them uncalled on a platform without
+// it, which the `-D warnings` this project sets turns into a build failure.
+#[cfg(blivet_fd_dir)]
 fn open_fd_above_static_range() -> (Vec<std::fs::File>, i32) {
     use std::os::fd::AsRawFd;
 
@@ -87,12 +91,10 @@ fn open_fd_above_static_range() -> (Vec<std::fs::File>, i32) {
 /// populates it with static nodes for 0-63. So the descriptor asked about is
 /// one from [`open_fd_above_static_range`] — a listing that has it is tracking
 /// this process, not enumerating device nodes.
-// Compiled wherever one of the fd-directory probes is: the positive one needs
-// it under `blivet_fd_dir`, the negative one under `blivet_known_platform`.
-// Without this an unlisted Unix has neither probe and three unused items, and
-// the `-D warnings` this project sets turns those into a build failure — on
-// exactly the best-effort targets the README promises will compile.
-#[cfg(any(blivet_fd_dir, blivet_known_platform))]
+// Only the fd-directory probe uses these, and it exists only where the
+// capability does. Anything wider leaves them uncalled on a platform without
+// it, which the `-D warnings` this project sets turns into a build failure.
+#[cfg(blivet_fd_dir)]
 fn lists_own_fd(path: &str, fd: i32) -> bool {
     let Ok(entries) = std::fs::read_dir(path) else {
         return false;
@@ -154,28 +156,6 @@ fn fd_dir_lists_open_fds() {
         lists_own_fd(dir, fd),
         "{dir} must list fd {fd}, which this process holds open"
     );
-}
-
-/// The absence of `blivet_fd_dir` claims no directory gives a trustworthy
-/// listing. A platform where one does is falling back to the `3..rlim_cur`
-/// close loop for nothing.
-#[cfg(not(blivet_fd_dir))]
-#[cfg(blivet_known_platform)]
-// Covers: R139, R140
-#[test]
-fn no_fd_dir_lists_open_fds() {
-    // Every directory that could plausibly be one on a Unix: the claim is that
-    // none of them works here, so each has to be asked.
-    const CANDIDATES: &[&str] = &["/proc/self/fd", "/dev/fd"];
-
-    let (_held, fd) = open_fd_above_static_range();
-    for dir in CANDIDATES {
-        assert!(
-            !lists_own_fd(dir, fd),
-            "{dir} lists fd {fd}, so this platform has a usable fd directory — \
-             set fd_dir in build.rs"
-        );
-    }
 }
 
 /// `blivet_rt_signals_reserved` claims libc holds back signals between the

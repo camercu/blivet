@@ -1370,7 +1370,11 @@ verification points.
   running system by a probe test. Where a platform lacking the
   capability still offers something to measure, the absence is probed
   too, so an unclaimed capability the platform has is also a failure.
-  `thread_count` and `rt_signals_reserved` have no such negative probe:
+  `thread_count`, `fd_dir` and `rt_signals_reserved` have no such
+  negative probe. For `fd_dir`, every listed platform answering no is a
+  BSD where both candidate directories are optional mounts, so finding
+  one populated reports how the test machine is configured rather than
+  what the platform offers. For the other two:
   a platform without a readable thread count exposes no count to call
   for, and among the listed platforms answering no to a reserved
   real-time range, none has `SIGRTMIN` in `libc` to measure against.
