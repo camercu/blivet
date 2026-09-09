@@ -258,10 +258,22 @@ jobs:
           # record the path cargo actually produced. A glob over deps/ resolves
           # to whatever sorts first, which need not be this build's artifact.
           # The path is relative so it still resolves inside the VM.
-          cargo test --no-run --locked --lib --target x86_64-unknown-netbsd \
-            --message-format=json \
-            | jq -r 'select(.reason == "compiler-artifact" and .profile.test and .executable) | .executable' \
-            | sed "s|^$PWD/||" > testbin-path.txt
+          # The default `run:` shell is `bash -e` without pipefail, so a
+          # compile failure's status would be masked by sed's — and the JSON
+          # format routes diagnostics through jq, which drops them. Keep the
+          # build's own status and its error text by writing the stream to a
+          # file first.
+          if ! cargo test --no-run --locked --lib --target x86_64-unknown-netbsd \
+              --message-format=json > cargo-artifacts.json; then
+            # The JSON format carries diagnostics instead of printing them, so
+            # a compile break would otherwise reach the log as an empty
+            # artifact list rather than as the error it is.
+            jq -r 'select(.reason == "compiler-message") | .message.rendered' \
+              < cargo-artifacts.json
+            exit 1
+          fi
+          jq -r 'select(.reason == "compiler-artifact" and .profile.test and .executable) | .executable' \
+            < cargo-artifacts.json | sed "s|^$PWD/||" > testbin-path.txt
           if [ "$(wc -l < testbin-path.txt)" -ne 1 ]; then
             echo "expected exactly one test binary, got:"; cat testbin-path.txt; exit 1
           fi
