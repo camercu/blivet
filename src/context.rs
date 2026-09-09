@@ -995,11 +995,13 @@ mod tests {
         assert!(ctx.chown_paths().is_ok());
     }
 
+    /// Ignored for the same reason as [`drop_privileges_group_not_found`]:
+    /// resolving a name that does not exist goes through NSS, which can block
+    /// for as long as its slowest configured source takes, and nothing here
+    /// bounds that. The glibc container tier runs it with `--include-ignored`.
     #[test]
+    #[ignore = "getpwnam for a missing user can block on a networked NSS source"]
     fn drop_privileges_user_not_found() {
-        if std::env::var("CI").is_ok() {
-            return; // NSS lookups for nonexistent users can hang in CI
-        }
         let mut config = DaemonConfig::new();
         config.user("nonexistent_daemonize_test_user_xyz");
         let mut ctx = ctx(&config, None, None);
@@ -1021,11 +1023,11 @@ mod tests {
     /// runs it with `--include-ignored`, where the name sources are known and
     /// local; the bionic tier runs `cargo test --lib` and so does not.
     ///
-    /// That leaves bionic's own name resolution — a built-in table rather than
-    /// `/etc/passwd` — covered by the identity tests instead, which are not
-    /// ignored and include the nonexistent-name cases
-    /// (`identity::tests::resolve_group_gid_nonexistent_name`). This test adds
-    /// the `drop_privileges` path over that, not the lookup itself.
+    /// The nonexistent-name lookups in `identity::tests` are ignored for the
+    /// same reason, so what bionic proves is the resolution that succeeds — a
+    /// built-in table rather than `/etc/passwd` — through the positive tests,
+    /// which are not ignored. The refusal path is exercised where the name
+    /// sources are known to be local.
     ///
     /// Skipping on `CI` being set was the previous mechanism, and it decided
     /// the wrong thing: the environments that set it are the hosted runners,

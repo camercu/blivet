@@ -1053,14 +1053,20 @@ mod tests {
     // So this test runs #[ignore] and is spawned in isolation via
     // crate::test_support::run_in_subprocess.
 
+    /// Ignored by default: closing fds in-process trips systemd's
+    /// `safe_close()` EBADF assertion when the test runs under systemd, as it
+    /// does on a hosted Ubuntu runner. The container tiers have no systemd and
+    /// run it with `--include-ignored`; the integration tests cover the path
+    /// everywhere else.
+    ///
+    /// Keyed on being asked for rather than on `CI` being set, because that
+    /// variable means "a hosted runner" and was standing in for "systemd is
+    /// pid 1" — a proxy that says nothing about the VM and device tiers, which
+    /// do not set it.
     // Covers: R103, R104
     #[test]
+    #[ignore = "closing fds in-process trips systemd's safe_close assertion"]
     fn close_inherited_fds_preserves_skipped() {
-        if std::env::var("CI").is_ok() {
-            // Closing fds in-process triggers systemd's safe_close() EBADF
-            // assertion on Ubuntu CI runners. Integration tests cover this path.
-            return;
-        }
         crate::test_support::run_in_subprocess(
             "steps::tests::close_inherited_fds_preserves_skipped_subprocess",
         );

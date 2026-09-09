@@ -135,11 +135,12 @@ mod tests {
         assert_eq!(user.uid.as_raw(), 0);
     }
 
+    /// Ignored by default: a name that does not exist is the lookup NSS can
+    /// take longest to refuse, and nothing here bounds it. The glibc container
+    /// tier runs it with `--include-ignored`, where the sources are local.
     #[test]
+    #[ignore = "getpwnam for a missing user can block on a networked NSS source"]
     fn resolve_user_nonexistent_name() {
-        if std::env::var("CI").is_ok() {
-            return;
-        }
         let result = resolve_user("nonexistent_daemonize_test_user_xyz");
         assert!(result.is_err());
     }
@@ -158,12 +159,11 @@ mod tests {
         assert!(result.is_ok());
     }
 
+    /// Ignored for the same reason as [`resolve_user_nonexistent_name`].
     // Covers: R51
     #[test]
+    #[ignore = "getgrnam for a missing group can block on a networked NSS source"]
     fn resolve_group_gid_nonexistent_name() {
-        if std::env::var("CI").is_ok() {
-            return;
-        }
         let result = resolve_group_gid("nonexistent_daemonize_test_group_xyz");
         assert!(matches!(result, Err(DaemonizeError::GroupNotFound(_))));
     }
