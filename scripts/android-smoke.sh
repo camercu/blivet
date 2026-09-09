@@ -70,7 +70,10 @@ echo "PASS: smoke test on android"
 # demand the run actually executed tests: a harness with every test compiled
 # away still exits 0 and prints "ok", which reads as coverage this tier does
 # not have.
+# No `|| fail` here: the guard already distinguishes a vacuous run from a
+# failing one and forwards the child's status. Collapsing both into one message
+# would put the vacuous-run verdict on a run whose tests simply failed, which is
+# the conflation the guard exists to prevent.
 sh scripts/assert-tests-ran.sh \
-    adb shell "cd ${DEVICE_DIR} && TMPDIR=${DEVICE_DIR} ./blivet-tests --skip doc_sync" \
-    || fail "library tests did not report a passing run"
+    adb shell "cd ${DEVICE_DIR} && TMPDIR=${DEVICE_DIR} ./blivet-tests --skip doc_sync"
 echo "PASS: library tests on android"
