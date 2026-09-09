@@ -1055,9 +1055,15 @@ mod tests {
 
     /// Ignored by default: closing fds in-process trips systemd's
     /// `safe_close()` EBADF assertion when the test runs under systemd, as it
-    /// does on a hosted Ubuntu runner. The container tiers have no systemd and
-    /// run it with `--include-ignored`; the integration tests cover the path
-    /// everywhere else.
+    /// does on a hosted Ubuntu runner. The glibc container tier has no systemd
+    /// and runs it with `--include-ignored`; the bionic tier runs
+    /// `cargo test --lib` and so does not.
+    ///
+    /// The BSD VM tiers did run it before, because they do not forward `CI`,
+    /// and no longer do. That is the cost of keying on the hazard instead of
+    /// on an environment variable: the variable happened to let it through
+    /// there, but it also let it through on the device and VM tiers where the
+    /// hazard was never assessed.
     ///
     /// Keyed on being asked for rather than on `CI` being set, because that
     /// variable means "a hosted runner" and was standing in for "systemd is
