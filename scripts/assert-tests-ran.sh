@@ -33,7 +33,17 @@ trap 'rm -rf "$scratch"' EXIT INT TERM
 status=$(cat "$status_file")
 
 # Sum every suite's counts: one invocation prints one "test result:" line per
-# suite, and a tier may chain several invocations. Passed AND failed, because
+# suite, and a tier may chain several invocations.
+#
+# Summed across suites rather than checked per suite, which bounds what this
+# can prove: where a tier runs several suites, one that matched nothing is
+# hidden by any other that ran. Per-suite checking is not available — a run of
+# `--all-targets` legitimately includes suites with no tests, so an empty one
+# is not by itself wrong. What the guard catches is the whole tree going stale,
+# which zeroes every suite at once; the stale-fingerprint deletion in each
+# Dockerfile is what stops one binary going stale on its own.
+#
+# Passed AND failed, because
 # the question here is whether anything ran at all — a suite where every test
 # failed has a passed count of zero and must keep its own status and its own
 # diagnosis rather than being blamed on a stale build.
