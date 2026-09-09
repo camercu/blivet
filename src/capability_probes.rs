@@ -29,9 +29,13 @@
 //!
 //! - `blivet_thread_count`: where it is absent there is no `count` function to
 //!   call, and no portable way to ask "could a count have been read here?".
-//! - `blivet_rt_signals_reserved`: `libc` exposes `SIGRTMIN` only on the
-//!   platforms that have a real-time range at all, so the absent case cannot
-//!   name the thing it would measure.
+//! - `blivet_rt_signals_reserved`: among the platforms the table lists — the
+//!   only ones a negative probe runs on — every one answering "no" is a macOS
+//!   or BSD target for which `libc` defines no `SIGRTMIN`, so the absent case
+//!   cannot name the thing it would measure. This is a fact about `libc`'s
+//!   coverage, not about the platforms: `libc` does define `SIGRTMIN` for the
+//!   solarish targets, which have a real-time range and are not listed here.
+//!   Adding one of them to the table means writing this probe.
 
 /// The highest descriptor number a directory of *static* device nodes is
 /// likely to cover. NetBSD's `MAKEDEV` creates `/dev/fd/0` through

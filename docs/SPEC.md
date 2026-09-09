@@ -1370,10 +1370,13 @@ verification points.
   running system by a probe test. Where a platform lacking the
   capability still offers something to measure, the absence is probed
   too, so an unclaimed capability the platform has is also a failure.
-  `thread_count` and `rt_signals_reserved` have no such negative probe
-  and cannot: a platform without a readable thread count exposes no
-  count to call for, and `libc` defines `SIGRTMIN` only where a
-  real-time range exists.
+  `thread_count` and `rt_signals_reserved` have no such negative probe:
+  a platform without a readable thread count exposes no count to call
+  for, and among the listed platforms answering no to a reserved
+  real-time range, none has `SIGRTMIN` in `libc` to measure against.
+  The second is a limit of `libc`'s coverage rather than of the
+  platforms, so adding a target that has both (the solarish ones do)
+  means writing that probe.
 - R141. A writability probe that fails with `EACCES` reports the
   parent directory as not writable; any other errno is reported by
   name, so an errno that does not answer the permission question —
