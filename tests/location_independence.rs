@@ -57,7 +57,11 @@ fn no_source_file_hardcodes_tmp() {
             // A trailing comment is prose about the rule too, so the line is
             // judged on its code alone — otherwise `let d = tmp_dir(); // not
             // /tmp` is accused of hardcoding a path it does not use.
-            let code = trimmed.split("//").next().unwrap_or(trimmed);
+            // Everything before a trailing comment. `split` always yields a
+            // first element, so this is the whole line when there is no `//`.
+            // A `//` inside a string literal ends the scan early, which is a
+            // hole rather than a hazard: it exempts a line, never accuses one.
+            let code = trimmed.split("//").next().unwrap_or_default();
             if code.contains("/tmp") {
                 offenders.push(format!("  {rel}:{}: {}", i + 1, line.trim()));
             }
