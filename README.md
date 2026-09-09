@@ -206,12 +206,13 @@ accept `AT_EACCESS`, because it is POSIX and assuming otherwise would quietly
 downgrade the pre-fork writability check from the effective UID to the real
 one.
 
-One carve-out, so the Supported row means what it says: the guards that check
-this repository against itself — that the docs match the code, that no source
-file names a fixed temp path — are skipped on the two tiers that run a
-cross-built binary without the sources beside it, the Android device and the
-NetBSD VM. They test the repository, not the platform. Every other tier builds
-in place and runs them.
+One carve-out, so the Supported row means what it says. The guards that check
+this repository against itself test the repository, not the platform, and not
+every tier reaches them. The doc-vs-code guard lives in the library and runs
+wherever the library tests do, except on the Android device and the NetBSD VM,
+which run a cross-built binary with no sources beside it to read. The
+hardcoded-temp-path guard is an integration test, so only the tiers that build
+integration targets run it — Linux and macOS. Both run on every pull request.
 
 On a best-effort target `daemonize()` and `drop_privileges()` are `#[deprecated]`
 stubs: using one warns with guidance by default and is a hard error under

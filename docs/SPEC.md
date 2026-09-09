@@ -62,10 +62,12 @@ Android is supported with one documented divergence: bionic rejects
 UID (see [Validation](#validation)).
 
 The Supported tier covers the tests that exercise the platform. The
-guards that check the repository against itself — doc-vs-code drift,
-no hardcoded temp paths — run on the host tier only, because the
-device and VM tiers carry the test binary without the sources it
-would read.
+guards that check the repository against itself do not run everywhere:
+the doc-vs-code guard is a library test and runs wherever those do,
+except on the Android device and the NetBSD VM, which carry a
+cross-built binary without the sources it would read; the
+hardcoded-temp-path guard is an integration test, so it runs only on
+the tiers that build integration targets, Linux and macOS.
 
 ## Dependency policy
 
