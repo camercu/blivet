@@ -12,7 +12,10 @@
 //! code. A test that needs a real directory calls `test_support::tmp_dir()`,
 //! which honours `TMPDIR`; a test whose path is only a value names a plainly
 //! fictional one such as `/a/x.pid`; prose examples name a real daemon
-//! location. Line comments and doc comments may still discuss `/tmp` by name.
+//! location. A directory that only ends in those same four characters is a
+//! different path and stays allowed — `/data/local/tmp` on a device, `/var/tmp`
+//! elsewhere, both of which this crate itself uses.
+//! Line comments and doc comments may still discuss `/tmp` by name.
 //! A block comment cannot: the scan reads a line at a time and cannot tell it
 //! is inside one.
 
@@ -62,11 +65,7 @@ fn no_source_file_hardcodes_tmp() {
             // A `//` inside a string literal ends the scan early, which is a
             // hole rather than a hazard: it exempts a line, never accuses one.
             let code = trimmed.split("//").next().unwrap_or_default();
-            // "/tmp" as a whole path, not as the tail of one: the temp
-            // directories this crate standardises on — /data/local/tmp on a
-            // device, /var/tmp elsewhere — end in those same four characters
-            // and are not what is banned.
-            if code.contains("\"/tmp\"") || code.contains("/tmp/") {
+            if names_tmp_root(code) {
                 offenders.push(format!("  {rel}:{}: {}", i + 1, line.trim()));
             }
         }
@@ -79,4 +78,44 @@ fn no_source_file_hardcodes_tmp() {
          otherwise name a path that is not a temp directory.",
         offenders.join("\n")
     );
+}
+
+/// True when `code` names the absolute path `/tmp`.
+///
+/// The temp directories this crate standardises on end in those same four
+/// characters — `/data/local/tmp` on a device, `/var/tmp` elsewhere — so a
+/// plain substring test accuses the very paths the rule tells a caller to use.
+fn names_tmp_root(code: &str) -> bool {
+    const TMP: &str = "/tmp";
+    code.match_indices(TMP).any(|(at, _)| {
+        // Nothing that can extend a directory name precedes the match, so the
+        // path starts here rather than continuing `/var` or `/data/local`.
+        let starts_the_path = code[..at]
+            .chars()
+            .next_back()
+            .is_none_or(|c| !(c.is_alphanumeric() || matches!(c, '.' | '-' | '_')));
+        // The path ends here, at a separator, or at the end of the literal, so
+        // `/tmpfs` is a different directory and not a match.
+        let ends_the_name = code[at + TMP.len()..]
+            .chars()
+            .next()
+            .is_none_or(|c| matches!(c, '/' | '"'));
+        starts_the_path && ends_the_name
+    })
+}
+
+/// This file is exempt from its own scan, so it may name the paths it judges.
+#[test]
+fn the_banned_path_is_named_however_it_is_written() {
+    assert!(names_tmp_root(r#"c.pidfile("/tmp")"#));
+    assert!(names_tmp_root(r#"PathBuf::from("/tmp/out.log")"#));
+}
+
+#[test]
+fn a_temp_directory_that_only_ends_in_tmp_is_not_the_banned_path() {
+    assert!(!names_tmp_root(r#"let dir = "/data/local/tmp/blivet";"#));
+    assert!(!names_tmp_root(
+        r#"let dir = PathBuf::from("/var/tmp/x.pid");"#
+    ));
+    assert!(!names_tmp_root(r#"let fs = "/tmpfs";"#));
 }
