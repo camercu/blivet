@@ -754,19 +754,14 @@ mod tests {
         use std::os::unix::process::ExitStatusExt;
         let dir = tempfile::tempdir().unwrap();
         let pidfile = dir.path().join("daemon.pid");
-        let exe = std::env::current_exe().unwrap();
-        let status = std::process::Command::new(exe)
-            .arg("--exact")
-            .arg("context::tests::cleanup_on_signals_removes_pidfile_on_signal")
-            .arg("--nocapture")
-            .env(PIDFILE_ENV, &pidfile)
-            .status()
-            .unwrap();
+        const NAME: &str = "context::tests::cleanup_on_signals_removes_pidfile_on_signal";
+        let output = crate::test_support::rerun_in_subprocess(NAME, PIDFILE_ENV, &pidfile);
 
         assert_eq!(
-            status.signal(),
+            output.status.signal(),
             Some(libc::SIGTERM),
-            "child should terminate via the re-raised SIGTERM"
+            "child should terminate via the re-raised SIGTERM; {}",
+            crate::test_support::subprocess_report(NAME, &output)
         );
         assert!(
             !pidfile.exists(),
@@ -795,19 +790,14 @@ mod tests {
         use std::os::unix::process::ExitStatusExt;
         let dir = tempfile::tempdir().unwrap();
         let pidfile = dir.path().join("daemon.pid");
-        let exe = std::env::current_exe().unwrap();
-        let status = std::process::Command::new(exe)
-            .arg("--exact")
-            .arg("context::tests::cleanup_on_term_signals_installs_sigterm_handler")
-            .arg("--nocapture")
-            .env(PIDFILE_ENV, &pidfile)
-            .status()
-            .unwrap();
+        const NAME: &str = "context::tests::cleanup_on_term_signals_installs_sigterm_handler";
+        let output = crate::test_support::rerun_in_subprocess(NAME, PIDFILE_ENV, &pidfile);
 
         assert_eq!(
-            status.signal(),
+            output.status.signal(),
             Some(libc::SIGTERM),
-            "child should terminate via the re-raised SIGTERM"
+            "child should terminate via the re-raised SIGTERM; {}",
+            crate::test_support::subprocess_report(NAME, &output)
         );
         assert!(
             !pidfile.exists(),

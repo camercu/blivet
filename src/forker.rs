@@ -214,15 +214,13 @@ mod tests {
             return;
         }
 
-        let exe = std::env::current_exe().unwrap();
-        let status = std::process::Command::new(exe)
-            .arg("--exact")
-            .arg("forker::tests::real_setsid_makes_the_caller_session_leader")
-            .arg("--nocapture")
-            .env(MARKER, "1")
-            .status()
-            .unwrap();
-        assert!(status.success(), "subprocess assertions failed");
+        const NAME: &str = "forker::tests::real_setsid_makes_the_caller_session_leader";
+        let output = crate::test_support::rerun_in_subprocess(NAME, MARKER, "1");
+        assert!(
+            output.status.success(),
+            "{}",
+            crate::test_support::subprocess_report(NAME, &output)
+        );
     }
 
     // Covers: R107 — both notification pipe ends are created with O_CLOEXEC, so
