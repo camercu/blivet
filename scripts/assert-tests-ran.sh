@@ -22,7 +22,13 @@ if [ -z "$scratch" ]; then
 fi
 log="$scratch/output"
 status_file="$scratch/status"
-trap 'rm -rf "$scratch"' EXIT INT TERM
+# Cleanup hangs off EXIT alone. A trap on INT or TERM runs its command and then
+# *resumes* the script, so cleaning up there would delete the scratch directory
+# out from under the status read below; exiting from those signals reaches the
+# EXIT trap instead, which cleans up once and only once.
+trap 'rm -rf "$scratch"' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 # Stream the output and keep the command's own exit status. `$?` after a
 # pipeline is the last stage's, and `pipefail` is not POSIX, so the status
@@ -30,7 +36,18 @@ trap 'rm -rf "$scratch"' EXIT INT TERM
 # `set +e` inside the group: errexit would abandon the subshell the moment the
 # command failed, losing the very status this is here to carry.
 { set +e; "$@" 2>&1; echo $? >"$status_file"; } | tee "$log"
-status=$(cat "$status_file")
+status=$(cat "$status_file" 2>/dev/null || true)
+
+# No status was recorded, so the group died between the command and the `echo`
+# — a kill, not a completed run. The guard says that itself: a script whose job
+# is the right diagnosis must not answer with `cat` complaining about a scratch
+# file the reader has never heard of.
+case "$status" in
+    '' | *[!0-9]*)
+        echo "FAIL: the test command was killed before it reported a status." >&2
+        exit 1
+        ;;
+esac
 
 # Sum every suite's counts: one invocation prints one "test result:" line per
 # suite, and a tier may chain several invocations.

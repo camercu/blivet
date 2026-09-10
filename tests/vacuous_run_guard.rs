@@ -124,3 +124,30 @@ fn a_command_that_failed_before_running_tests_keeps_its_own_error() {
         "the command failed before running tests; got:\n{combined}"
     );
 }
+
+#[test]
+fn a_command_killed_before_it_reported_a_status_says_so() {
+    // GIVEN the guard's own subshell dies before it can record the exit status
+    let out = guard("kill -9 $PPID");
+
+    // THEN the guard names that, rather than letting a failed `cat` speak for
+    // it. A script whose whole job is the right diagnosis must not answer with
+    // a missing-file error about its own scratch directory.
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        !out.status.success(),
+        "a run that never reported a status must not pass"
+    );
+    assert!(
+        !combined.contains("cat:"),
+        "the guard must diagnose the killed run itself; got:\n{combined}"
+    );
+    assert!(
+        combined.contains("killed"),
+        "the guard must say the command was killed; got:\n{combined}"
+    );
+}
