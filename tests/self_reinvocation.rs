@@ -12,7 +12,7 @@
 use std::path::PathBuf;
 
 mod common;
-use common::rust_files;
+use common::{code_of, rust_files};
 
 /// The one library source allowed to re-invoke the test binary.
 const OWNER: &str = "test_support.rs";
@@ -34,13 +34,7 @@ fn only_test_support_re_invokes_the_test_binary() {
         };
         let rel = file.strip_prefix(&root).unwrap_or(&file).display();
         for (i, line) in text.lines().enumerate() {
-            let trimmed = line.trim_start();
-            // A comment is prose about the rule, not a use of it.
-            if trimmed.starts_with("//") {
-                continue;
-            }
-            let code = trimmed.split("//").next().unwrap_or_default();
-            if code.contains("current_exe") {
+            if code_of(line).contains("current_exe") {
                 offenders.push(format!("  {rel}:{}: {}", i + 1, line.trim()));
             }
         }
