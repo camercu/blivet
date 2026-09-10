@@ -22,7 +22,7 @@
 use std::path::PathBuf;
 
 mod common;
-use common::rust_files;
+use common::{code_of, rust_files};
 
 /// This file, which is exempt from its own scan.
 const THIS_FILE: &str = "location_independence.rs";
@@ -52,20 +52,7 @@ fn no_source_file_hardcodes_tmp() {
         };
         let rel = file.strip_prefix(&root).unwrap_or(&file).display();
         for (i, line) in text.lines().enumerate() {
-            let trimmed = line.trim_start();
-            // A whole-line comment is prose about the rule, not a use of it.
-            if trimmed.starts_with("//") {
-                continue;
-            }
-            // A trailing comment is prose about the rule too, so the line is
-            // judged on its code alone — otherwise `let d = tmp_dir(); // not
-            // /tmp` is accused of hardcoding a path it does not use.
-            // Everything before a trailing comment. `split` always yields a
-            // first element, so this is the whole line when there is no `//`.
-            // A `//` inside a string literal ends the scan early, which is a
-            // hole rather than a hazard: it exempts a line, never accuses one.
-            let code = trimmed.split("//").next().unwrap_or_default();
-            if names_tmp_root(code) {
+            if names_tmp_root(code_of(line)) {
                 offenders.push(format!("  {rel}:{}: {}", i + 1, line.trim()));
             }
         }
