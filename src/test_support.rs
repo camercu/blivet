@@ -12,7 +12,8 @@
 //! - Reversible global state (the umask) gets an RAII guard ([`UmaskGuard`])
 //!   so a panicking assertion cannot leak the altered state.
 
-use std::process::Command;
+use std::ffi::OsStr;
+use std::process::{Command, Output};
 
 /// RAII guard: sets the process umask and restores the previous one on drop.
 ///
@@ -55,28 +56,57 @@ pub(crate) fn is_subprocess() -> bool {
 /// skipped, the subprocess exits 0, and this helper passes *vacuously* without
 /// ever running the test body.
 pub(crate) fn run_in_subprocess(test_name: &str) {
-    let exe = std::env::current_exe().unwrap();
-    let output = Command::new(exe)
-        .arg("--exact")
-        .arg(test_name)
-        .arg("--include-ignored") // the target test is #[ignore]
-        .arg("--nocapture")
-        .env(SUBPROCESS_ENV, "1")
-        .output()
-        .unwrap();
-
-    // Captured rather than inherited. A child writing straight to the parent's
-    // stdout interleaves with it, and with the other children running
-    // alongside, which can split a line so that whatever reads the run's
-    // summary lines no longer matches one. Reporting the child's output only
-    // when it failed keeps the diagnosis without the corruption.
+    let output = rerun_in_subprocess(test_name, SUBPROCESS_ENV, "1");
     assert!(
         output.status.success(),
+        "{}",
+        subprocess_report(test_name, &output)
+    );
+}
+
+/// Re-invokes this test binary to run one test in its own process, with
+/// `marker` set to `value`, and returns what the child exited with.
+///
+/// The child's body branches on `marker`, so the same test source is both the
+/// caller and the isolated run. Every re-invocation in the crate goes through
+/// here; `tests/self_reinvocation.rs` enforces that.
+///
+/// The child's output is captured, not inherited. A child writing straight to
+/// the parent's stdout interleaves with it, and with the other children running
+/// alongside, which can split a line so that whatever reads the run's summary
+/// lines no longer matches one; the child also prints a summary line of its
+/// own, which `scripts/assert-tests-ran.sh` then counts. A caller reports the
+/// captured streams only when the child failed, which keeps the diagnosis
+/// without the corruption — see [`subprocess_report`].
+///
+/// `--include-ignored` is required: without it a test marked `#[ignore]` is
+/// skipped, the child exits 0, and the caller passes *vacuously* without ever
+/// running the body.
+pub(crate) fn rerun_in_subprocess(
+    test_name: &str,
+    marker: &str,
+    value: impl AsRef<OsStr>,
+) -> Output {
+    let exe = std::env::current_exe().unwrap();
+    Command::new(exe)
+        .arg("--exact")
+        .arg(test_name)
+        .arg("--include-ignored")
+        .arg("--nocapture")
+        .env(marker, value)
+        .output()
+        .unwrap()
+}
+
+/// Renders a finished subprocess for a failure message: how it ended, and both
+/// of its captured streams.
+pub(crate) fn subprocess_report(test_name: &str, output: &Output) -> String {
+    format!(
         "subprocess test {test_name} failed: {}\n--- stdout ---\n{}\n--- stderr ---\n{}",
         output.status,
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr),
-    );
+    )
 }
 
 /// Directory for test paths that reach the filesystem, honouring `TMPDIR`.
