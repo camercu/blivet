@@ -74,19 +74,25 @@ fn no_source_file_hardcodes_tmp() {
 /// plain substring test accuses the very paths the rule tells a caller to use.
 fn names_tmp_root(code: &str) -> bool {
     const TMP: &str = "/tmp";
+
+    /// True where `c` can be part of a directory name.
+    ///
+    /// One of these on either side of the match means a different path:
+    /// `/var/tmp` before, `/tmpfs` after. Everything else terminates the name,
+    /// so `/tmp/x`, `"/tmp"`, `format!("/tmp{i}")` and `"/tmp\0file"` are all
+    /// the banned path. Stated as what may not sit there rather than what may:
+    /// a list of permitted terminators has to anticipate every way a path gets
+    /// written, and the one written here missed three.
+    fn extends_a_name(c: char) -> bool {
+        c.is_alphanumeric() || matches!(c, '.' | '-' | '_')
+    }
+
     code.match_indices(TMP).any(|(at, _)| {
-        // Nothing that can extend a directory name precedes the match, so the
-        // path starts here rather than continuing `/var` or `/data/local`.
-        let starts_the_path = code[..at]
-            .chars()
-            .next_back()
-            .is_none_or(|c| !(c.is_alphanumeric() || matches!(c, '.' | '-' | '_')));
-        // The path ends here, at a separator, or at the end of the literal, so
-        // `/tmpfs` is a different directory and not a match.
-        let ends_the_name = code[at + TMP.len()..]
+        let starts_the_path = !code[..at].chars().next_back().is_some_and(extends_a_name);
+        let ends_the_name = !code[at + TMP.len()..]
             .chars()
             .next()
-            .is_none_or(|c| matches!(c, '/' | '"'));
+            .is_some_and(extends_a_name);
         starts_the_path && ends_the_name
     })
 }
@@ -96,6 +102,11 @@ fn names_tmp_root(code: &str) -> bool {
 fn the_banned_path_is_named_however_it_is_written() {
     assert!(names_tmp_root(r#"c.pidfile("/tmp")"#));
     assert!(names_tmp_root(r#"PathBuf::from("/tmp/out.log")"#));
+    // An interpolated path is the natural way to make one unique per test.
+    assert!(names_tmp_root(r#"let p = format!("/tmp{i}.pid");"#));
+    assert!(names_tmp_root(r#"let p = format!("/tmp{}", n);"#));
+    // The literal this crate removed from its own sources, escape and all.
+    assert!(names_tmp_root(r#"config.pidfile("/tmp\0file");"#));
 }
 
 #[test]
