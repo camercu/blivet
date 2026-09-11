@@ -445,8 +445,10 @@ surfacing as a late `EINVAL` when first passed to a syscall. Pidfile,
 stdout, stderr, and lockfile paths must be absolute when configured.
 Chdir path must be absolute, must exist, and must be a directory.
 Pidfile path must not be a directory. Parent directories of the
-configured *file* paths (pidfile, stdout, stderr, lockfile) must be
-writable. The check is `faccessat` with `AT_EACCESS`, so it answers for
+configured *file* paths (pidfile, stdout, stderr, lockfile) must exist,
+must be directories, and must be writable. A parent that exists as a
+regular file is rejected here rather than surfacing later as a failure
+to create the file. The check is `faccessat` with `AT_EACCESS`, so it answers for
 the current euid — the identity a setuid binary writes as. Android is
 the exception: bionic rejects `AT_EACCESS`, so there the check answers
 for the real UID. Chdir is exempt: it must already exist as a
