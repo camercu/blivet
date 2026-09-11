@@ -1063,7 +1063,11 @@ mod tests {
     /// and no longer do. That is the cost of keying on the hazard instead of
     /// on an environment variable: the variable happened to let it through
     /// there, but it also let it through on the device and VM tiers where the
-    /// hazard was never assessed.
+    /// hazard was never assessed. What those tiers uniquely covered was the
+    /// brute-force branch, since they have no fd directory; that no longer
+    /// depends on which tier runs, because
+    /// `close_inherited_fds_without_a_listing_preserves_skipped` forces the
+    /// branch wherever it runs.
     ///
     /// Keyed on being asked for rather than on `CI` being set, because that
     /// variable means "a hosted runner" and was standing in for "systemd is
@@ -1086,6 +1090,43 @@ mod tests {
         if !crate::test_support::is_subprocess() {
             return;
         }
+        assert_closes_all_but_skipped();
+    }
+
+    /// The same property, proven on the brute-force `3..rlim_cur` fallback.
+    ///
+    /// That branch is what every platform without a trustworthy fd directory
+    /// takes at runtime — the BSDs, and every best-effort Unix — and the only
+    /// other test that reaches it fails `getrlimit` as well, so it returns
+    /// before closing anything. Forcing the listing to be unavailable runs the
+    /// fallback on whichever tier runs this test, rather than waiting for a
+    /// tier that lacks the directory.
+    // Covers: R103, R104, R135
+    #[test]
+    #[ignore = "closing fds in-process trips systemd's safe_close assertion"]
+    fn close_inherited_fds_without_a_listing_preserves_skipped() {
+        crate::test_support::run_in_subprocess(
+            "steps::tests::close_inherited_fds_without_a_listing_preserves_skipped_subprocess",
+        );
+    }
+
+    #[test]
+    #[ignore = "closes fds process-wide; only safe in an isolated subprocess"]
+    fn close_inherited_fds_without_a_listing_preserves_skipped_subprocess() {
+        if !crate::test_support::is_subprocess() {
+            return;
+        }
+        // Process-global, which is why this runs isolated. Where the platform
+        // has no fd directory the flag changes nothing and the fallback was
+        // already the only branch.
+        failpoints::FD_LISTING_UNAVAILABLE.store(true, std::sync::atomic::Ordering::Relaxed);
+        assert_closes_all_but_skipped();
+    }
+
+    /// Closes every fd it was not told to keep, and keeps the ones it was.
+    ///
+    /// Closes fds process-wide, so only an isolated subprocess may call it.
+    fn assert_closes_all_but_skipped() {
         // Save stdout/stderr so the test harness can still report results
         // after we close all non-skipped fds (which includes harness-internal fds).
         let restore = SavedFds::new(&[1, 2]);
