@@ -59,13 +59,14 @@ struct Platform {
     /// silently stop skipping it. Splitting the two questions is the fix when
     /// such a platform is added.
     rt_signals_reserved: bool,
-    /// Does `faccessat` accept `AT_EACCESS`, so a writability probe answers for
-    /// the effective UID rather than the real one?
+    /// Does `faccessat` *reject* `AT_EACCESS`, leaving a writability probe to
+    /// answer for the real UID rather than the effective one?
     ///
-    /// Every listed platform says yes except Android. A target absent from the
-    /// table is assumed to accept it too — see the alias emission below for
-    /// why this capability defaults the opposite way from the others.
-    faccessat_eaccess: bool,
+    /// Named after the deviation, not the feature: accepting the flag is
+    /// POSIX, so an unlisted target assuming it does what every other
+    /// capability's default does — declines to assume anything the platform
+    /// has not earned. Android is the only listed platform that rejects it.
+    faccessat_lacks_eaccess: bool,
 }
 
 /// Every platform the crate claims to support, and what each one can do.
@@ -80,7 +81,7 @@ const PLATFORMS: &[Platform] = &[
         thread_count: Some(ThreadCount::ProcFs),
         fd_dir: Some("/proc/self/fd"),
         rt_signals_reserved: true,
-        faccessat_eaccess: true,
+        faccessat_lacks_eaccess: false,
     },
     Platform {
         // Android is Linux-like in libc but a distinct `target_os`, and it
@@ -93,7 +94,7 @@ const PLATFORMS: &[Platform] = &[
         thread_count: Some(ThreadCount::ProcFs),
         fd_dir: Some("/proc/self/fd"),
         rt_signals_reserved: true,
-        faccessat_eaccess: false,
+        faccessat_lacks_eaccess: true,
     },
     Platform {
         target_os: "macos",
@@ -101,7 +102,7 @@ const PLATFORMS: &[Platform] = &[
         thread_count: Some(ThreadCount::KernelQuery),
         fd_dir: Some("/dev/fd"),
         rt_signals_reserved: false,
-        faccessat_eaccess: true,
+        faccessat_lacks_eaccess: false,
     },
     Platform {
         target_os: "freebsd",
@@ -109,7 +110,7 @@ const PLATFORMS: &[Platform] = &[
         thread_count: Some(ThreadCount::KernelQuery),
         fd_dir: None,
         rt_signals_reserved: false,
-        faccessat_eaccess: true,
+        faccessat_lacks_eaccess: false,
     },
     Platform {
         target_os: "netbsd",
@@ -117,7 +118,7 @@ const PLATFORMS: &[Platform] = &[
         thread_count: Some(ThreadCount::KernelQuery),
         fd_dir: None,
         rt_signals_reserved: false,
-        faccessat_eaccess: true,
+        faccessat_lacks_eaccess: false,
     },
     Platform {
         target_os: "openbsd",
@@ -125,7 +126,7 @@ const PLATFORMS: &[Platform] = &[
         thread_count: Some(ThreadCount::KernelQuery),
         fd_dir: None,
         rt_signals_reserved: false,
-        faccessat_eaccess: true,
+        faccessat_lacks_eaccess: false,
     },
 ];
 
@@ -171,16 +172,8 @@ fn main() {
             platform.is_some_and(|p| p.rt_signals_reserved),
         ),
         (
-            "blivet_faccessat_eaccess",
-            // The one capability whose default for an unlisted target is
-            // *true*. The others are answers a platform has to earn, and
-            // assuming them would take a wrong branch; this one is POSIX, and
-            // `nix` defines the constant everywhere except Android, so
-            // assuming its absence is what takes the wrong branch — a
-            // best-effort Unix would silently start probing the real UID
-            // instead of the effective one, which is a weaker check than the
-            // crate made before the capability table existed.
-            platform.is_none_or(|p| p.faccessat_eaccess),
+            "blivet_faccessat_lacks_eaccess",
+            platform.is_some_and(|p| p.faccessat_lacks_eaccess),
         ),
     ];
 

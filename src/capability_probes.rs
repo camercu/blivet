@@ -16,14 +16,6 @@
 //! illumos has a working `/proc/self/fd` — telling whoever ran the suite that
 //! the crate is broken when it is merely unlisted.
 //!
-//! `faccessat_accepts_at_eaccess` is deliberately the exception, and runs on
-//! any target claiming the capability, listed or not. That claim is the one
-//! the table makes by default, and `validate` acts on it every call: if an
-//! unlisted Unix rejects the flag, the writability probe is broken there and a
-//! red test is the right answer rather than a courtesy to an unlisted
-//! platform. The other defaults decline a capability, so being wrong about
-//! them costs a fallback, not a failure.
-//!
 //! Three claims have no negative probe, and each gap is deliberate rather than
 //! overlooked:
 //!
@@ -180,9 +172,12 @@ fn rt_signal_range_starts_above_the_standard_signals() {
     );
 }
 
-/// `blivet_faccessat_eaccess` claims `faccessat` accepts `AT_EACCESS`, so the
-/// writability probe answers for the effective UID.
-#[cfg(blivet_faccessat_eaccess)]
+/// Without `blivet_faccessat_lacks_eaccess` the platform accepts `AT_EACCESS`,
+/// so the writability probe answers for the effective UID. That is the table's
+/// default, which `validate` acts on every call, so this runs on an unlisted
+/// target too: a Unix that rejects the flag has a broken writability probe and
+/// a red test is the right answer.
+#[cfg(not(blivet_faccessat_lacks_eaccess))]
 // Covers: R139, R140
 #[test]
 fn faccessat_accepts_at_eaccess() {
@@ -196,11 +191,13 @@ fn faccessat_accepts_at_eaccess() {
     .expect("a temp dir is writable, and AT_EACCESS must not be rejected");
 }
 
-/// The absence of `blivet_faccessat_eaccess` claims the flag is rejected. It
-/// has to be asked for by value: `nix` does not define the constant where the
-/// platform lacks it, which is the compile error that started all this.
-#[cfg(not(blivet_faccessat_eaccess))]
-#[cfg(blivet_known_platform)]
+/// `blivet_faccessat_lacks_eaccess` claims the flag is rejected. It has to be
+/// asked for by value: `nix` does not define the constant where the platform
+/// lacks it, which is the compile error that started all this.
+///
+/// Set only from a table row, so this is already a measured fact rather than a
+/// default and needs no `blivet_known_platform` beside it.
+#[cfg(blivet_faccessat_lacks_eaccess)]
 // Covers: R139, R140
 #[test]
 fn faccessat_rejects_at_eaccess() {

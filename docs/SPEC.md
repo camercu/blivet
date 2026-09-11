@@ -39,10 +39,11 @@ the per-kernel thread-count syscalls in `src/unsafe_ops.rs` stay
 per-OS, because which syscall reads the count is not a question the
 table asks. Adding a platform is one row. A target absent from the
 table takes the fallback for each capability, which is the
-conservative answer in every case but `faccessat_eaccess`: that one
-defaults to available, because it is POSIX and assuming its absence
-would quietly downgrade the writability probe from the effective UID
-to the real one.
+conservative answer in every case. Each capability is named for what a
+platform has to earn, so an unlisted target assumes none of them:
+`faccessat` accepting `AT_EACCESS` is POSIX, so the table asks the
+opposite question — `faccessat_lacks_eaccess`, which only Android
+answers yes.
 
 Support is tiered by what CI proves:
 

@@ -454,10 +454,11 @@ fn validate_path(path: &std::path::Path, name: &str) -> Result<(), DaemonizeErro
 /// not define the constant on Android and the probe answers for the real UID
 /// there instead; see [`DaemonConfig::validate`] for what that means for
 /// callers.
-#[cfg(blivet_faccessat_eaccess)]
+#[cfg(not(blivet_faccessat_lacks_eaccess))]
 const EFFECTIVE_ACCESS: nix::fcntl::AtFlags = nix::fcntl::AtFlags::AT_EACCESS;
-/// Without `AT_EACCESS` the probe has only the real UID to answer for.
-#[cfg(not(blivet_faccessat_eaccess))]
+/// Where the platform rejects the flag, the probe has only the real UID to
+/// answer for.
+#[cfg(blivet_faccessat_lacks_eaccess)]
 const EFFECTIVE_ACCESS: nix::fcntl::AtFlags = nix::fcntl::AtFlags::empty();
 
 fn validate_parent_writable(path: &std::path::Path, name: &str) -> Result<(), DaemonizeError> {
@@ -1271,14 +1272,14 @@ mod tests {
             let mut cfg = DaemonConfig::new();
             cfg.pidfile(std::path::Path::new(&dir).join("daemon.pid"));
             let result = cfg.validate();
-            #[cfg(blivet_faccessat_eaccess)]
+            #[cfg(not(blivet_faccessat_lacks_eaccess))]
             assert!(
                 matches!(&result, Err(DaemonizeError::ValidationError(msg))
                     if msg.contains("not writable")),
                 "the probe must answer for the effective UID, which cannot \
                  write a root-owned directory: {result:?}"
             );
-            #[cfg(not(blivet_faccessat_eaccess))]
+            #[cfg(blivet_faccessat_lacks_eaccess)]
             assert!(
                 result.is_ok(),
                 "without AT_EACCESS the probe answers for the real UID, which \
