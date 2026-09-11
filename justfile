@@ -128,8 +128,20 @@ check-non-unix:
 check: fmt-check lint lint-deny doc msrv-check check-cross check-non-unix
 
 # Run tests (excludes ignored root/Linux tests)
+#
+# Under nextest, for the reason `coverage` is: several tests have process-wide
+# side effects (redirecting and closing std fds) that clobber the shared
+# harness's result pipe, failing the run with a BrokenPipe unrelated to any
+# change. nextest gives each test its own process, so none of them can corrupt
+# the collector. A gate that fails now and then teaches its readers to re-run
+# it, which is how a real red gets waved through.
+#
+# nextest does not run doctests, so they run after it on the plain harness.
+# They are compiled fresh by rustdoc every time and touch no process state, so
+# the failure above cannot reach them.
 test:
-    RUSTFLAGS="-D warnings" {{cargo}} test {{locked}}
+    RUSTFLAGS="-D warnings" {{cargo}} nextest run {{locked}}
+    RUSTFLAGS="-D warnings" {{cargo}} test {{locked}} --doc
 
 # Build and run Docker container for root + Linux-specific tests
 docker-test:
@@ -151,10 +163,7 @@ manpage:
     sed "s/@VERSION@/$version/" docs/daemonize.1.md | pandoc -f markdown -s -t man -o docs/daemonize.1
 
 # Generate code coverage report (requires cargo-llvm-cov + cargo-nextest).
-# Runs under nextest, not the plain `cargo test` harness: several tests have
-# process-global side effects (redirect/close std fds) that clobber the shared
-# harness's result pipe, failing the run with a BrokenPipe. nextest isolates
-# each test in its own process, so those tests can't corrupt the collector.
+# Under nextest for the same reason `test` is, stated there.
 coverage:
     cargo llvm-cov nextest --html {{locked}}
     @echo "Coverage report: target/llvm-cov/html/index.html"
