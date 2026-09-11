@@ -10,6 +10,9 @@
 use std::path::PathBuf;
 use std::process::Output;
 
+mod common;
+use common::code_before;
+
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 }
@@ -164,26 +167,78 @@ const CALLERS: [&str; 5] = [
     "justfile",
 ];
 
+/// `text` as whole commands: comments dropped, `\` continuations joined, and
+/// the quoting of a JSON-array `CMD` flattened so it reads like a shell line.
+fn logical_lines(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut current = String::new();
+    for line in text.lines() {
+        let code = code_before(line, "#").replace(['"', ',', '[', ']'], " ");
+        let continues = code.trim_end().ends_with('\\');
+        current.push_str(code.trim_end().trim_end_matches('\\'));
+        current.push(' ');
+        if !continues {
+            // Runs of whitespace collapse, so `["cargo", "test"]` reads the
+            // same as `cargo test` once its punctuation is gone.
+            out.push(current.split_whitespace().collect::<Vec<_>>().join(" "));
+            current.clear();
+        }
+    }
+    let tail = current.split_whitespace().collect::<Vec<_>>().join(" ");
+    if !tail.is_empty() {
+        out.push(tail);
+    }
+    out
+}
+
+#[test]
+fn every_tier_runs_its_tests_through_the_guard() {
+    // A tier that runs its suite bare reports success having possibly proven
+    // nothing, which is the outcome the guard exists to turn red. The check is
+    // per command: a `cargo test` with no guard ahead of it on its own line.
+    let root = repo_root();
+    let mut offenders = Vec::new();
+    for caller in CALLERS {
+        let path = root.join(caller);
+        let text = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("{caller} must be readable: {e}"));
+        for line in logical_lines(&text) {
+            // `--no-run` compiles a suite for another platform and runs
+            // nothing, so there is no run here for the guard to judge.
+            if line.contains("--no-run") {
+                continue;
+            }
+            let before_any_guard = line.split(GUARD).next().unwrap_or(&line);
+            if before_any_guard.contains("cargo test") {
+                offenders.push(format!("  {caller}: {}", line.trim()));
+            }
+        }
+    }
+
+    assert!(
+        offenders.is_empty(),
+        "a tier runs tests without the guard ahead of them:\n{}\n\
+         Prefix the command with `sh scripts/{GUARD}`, so a run that matched \
+         nothing cannot report the tier's claim as proven.",
+        offenders.join("\n")
+    );
+}
+
 /// The commands each guard invocation in `text` wraps.
 ///
 /// An invocation ends at the end of its logical line — a trailing `\` joins the
 /// next one — or where the next invocation begins, since a tier may chain two
 /// guarded commands together.
 fn wrapped_commands(text: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    for (at, _) in text.match_indices(GUARD) {
-        let rest = &text[at + GUARD.len()..];
-        let end = rest.find(GUARD).unwrap_or(rest.len());
-        let mut command = String::new();
-        for line in rest[..end].lines() {
-            command.push_str(line);
-            if !line.trim_end().ends_with('\\') {
-                break;
-            }
-        }
-        out.push(command);
-    }
-    out
+    logical_lines(text)
+        .iter()
+        .flat_map(|line| {
+            line.split(GUARD)
+                .skip(1)
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })
+        .collect()
 }
 
 #[test]

@@ -183,7 +183,11 @@ jobs:
 
             # Run the library unit tests natively so the daemonize_checked
             # thread-count path (sysctl on the BSDs) is proven on this OS.
-            cargo test --locked --lib
+            # Routed through the vacuous-run guard, as every other tier holding
+            # up the Supported claim is: a harness that matched nothing still
+            # exits 0 and prints "ok", which reads as coverage this tier would
+            # not have.
+            sh scripts/assert-tests-ran.sh cargo test --locked --lib
             echo "PASS: library tests on ${{ matrix.os.name }}"
 
   # Tier 3 of the Android support ladder (docs/adr/0002), and the only tier with
