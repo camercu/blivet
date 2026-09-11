@@ -34,6 +34,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@just
       - uses: taiki-e/install-action@cargo-deny
+      - uses: taiki-e/install-action@nextest
       - name: CI
         run: just ci
 
@@ -48,6 +49,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.85
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@just
+      - uses: taiki-e/install-action@nextest
       - name: Test on MSRV
         run: just test
 

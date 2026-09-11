@@ -158,13 +158,19 @@ fn a_command_killed_before_it_reported_a_status_says_so() {
 /// The guard script, as every tier names it.
 const GUARD: &str = "assert-tests-ran.sh";
 
-/// Every file that invokes the guard, and so is subject to the rule below.
-const CALLERS: [&str; 5] = [
+/// The tier wiring: every place that runs a suite on behalf of a support
+/// claim, and so is subject to the rules below.
+///
+/// The justfile is not here. The hazard the guard answers is a build cache
+/// that makes sources look older than the artifacts built from them, which is
+/// a container layer cache; a developer's tree and a fresh CI checkout both
+/// give cargo a freshness judgement it can trust. `just test` also runs under
+/// nextest, whose summary line this guard does not read.
+const CALLERS: [&str; 4] = [
     "Dockerfile",
     "Dockerfile.termux",
     "scripts/android-smoke.sh",
     ".github/workflows/ci.yml",
-    "justfile",
 ];
 
 /// `text` as whole commands: comments dropped, `\` continuations joined, and
