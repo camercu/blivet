@@ -502,15 +502,21 @@ fn validate_parent_writable(path: &std::path::Path, name: &str) -> Result<(), Da
 ///
 /// `EACCES` is the answer the probe asked for and is reported as such. Every
 /// other errno is named rather than translated, because none of them answers
-/// the permission question: some say the probe could not run at all (`EINVAL`
-/// from a flag the platform rejects), and some describe the path instead of
-/// its permissions (`ENOTDIR`, `ELOOP`). Both are hidden by a blanket "not
-/// writable", which is how an `EINVAL` from a flag bionic does not accept
-/// reached users as a false permission error.
+/// the permission question, and a blanket "not writable" hides that — which is
+/// how an `EINVAL` from a flag bionic does not accept reached users as a false
+/// permission error.
 ///
-/// `EROFS` is the honest edge: the directory really is unwritable, on a
-/// read-only filesystem rather than by permission. It is named too, which
-/// tells the caller more than the permission claim would.
+/// Two errnos actually arrive here. `EINVAL` is that rejected flag. `EROFS` is
+/// the honest edge: the directory really is unwritable, on a read-only
+/// filesystem rather than by permission; naming it tells the caller more than
+/// the permission claim would.
+///
+/// The errnos that describe the path rather than its permissions — `ENOTDIR`,
+/// `ELOOP` — cannot reach this function from [`DaemonConfig::validate`]: the
+/// parent must exist and be a directory before the probe runs, and
+/// `Path::exists` follows symlinks, so a loop answers "does not exist". They
+/// are still named rather than translated if they ever arrive, which costs
+/// nothing and is what the blanket claim above would have to say anyway.
 fn writability_error(
     name: &str,
     parent: &std::path::Path,
@@ -1296,6 +1302,55 @@ mod tests {
         let report = crate::test_support::subprocess_report(NAME, &output);
         let _ = std::fs::remove_dir_all(&dir);
         assert!(output.status.success(), "{report}");
+    }
+
+    /// The claim R141 makes about which errnos reach the probe, tested where
+    /// the claim is made rather than on the pure helper.
+    ///
+    /// `ENOTDIR` and `ELOOP` never arrive: the parent must exist and be a
+    /// directory first, and `Path::exists` follows symlinks, so a loop answers
+    /// "does not exist". `EINVAL` and `EROFS` are the two that do, and neither
+    /// is reproducible here — `EINVAL` needs bionic, `EROFS` a read-only mount.
+    // Covers: R141
+    #[test]
+    fn a_path_error_is_answered_before_the_writability_probe() {
+        let tmp = crate::test_support::tmp_dir();
+        let msg = |config: &DaemonConfig| match config.validate() {
+            Err(DaemonizeError::ValidationError(msg)) => msg,
+            other => panic!("expected ValidationError, got {other:?}"),
+        };
+
+        // A non-final component that is a regular file: ENOTDIR territory.
+        let file = tmp.join("blivet-errno-not-a-dir");
+        std::fs::write(&file, b"").unwrap();
+        let mut config = DaemonConfig::new();
+        config.pidfile(file.join("sub").join("daemon.pid"));
+        let m = msg(&config);
+        let _ = std::fs::remove_file(&file);
+        assert!(
+            m.contains("does not exist") && !m.contains("check failed"),
+            "the existence check must answer first, not the probe: {m}"
+        );
+
+        // A symlink loop: ELOOP territory.
+        let (a, b) = (
+            tmp.join("blivet-errno-loop-a"),
+            tmp.join("blivet-errno-loop-b"),
+        );
+        let _ = std::fs::remove_file(&a);
+        let _ = std::fs::remove_file(&b);
+        std::os::unix::fs::symlink(&b, &a).unwrap();
+        std::os::unix::fs::symlink(&a, &b).unwrap();
+        let mut config = DaemonConfig::new();
+        config.pidfile(a.join("daemon.pid"));
+        let m = msg(&config);
+        let _ = std::fs::remove_file(&a);
+        let _ = std::fs::remove_file(&b);
+        assert!(
+            m.contains("does not exist") && !m.contains("check failed"),
+            "a symlink loop must answer as non-existent, not as a probe \
+             failure: {m}"
+        );
     }
 
     #[test]

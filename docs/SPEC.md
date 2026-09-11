@@ -1387,8 +1387,11 @@ verification points.
   means writing that probe.
 - R141. A writability probe that fails with `EACCES` reports the
   parent directory as not writable; any other errno is reported by
-  name, so an errno that does not answer the permission question —
-  whether because the probe could not run (`EINVAL` from a rejected
-  flag) or because it describes the path rather than its permissions
-  (`ENOTDIR`, `ELOOP`, `EROFS`) — is never mistaken for a permission
-  denial.
+  name, so an errno that does not answer the permission question is
+  never mistaken for a permission denial. Two reach the probe:
+  `EINVAL`, from a flag the platform rejects, and `EROFS`, where the
+  directory is unwritable for a reason permission does not describe.
+  The errnos that describe the path instead (`ENOTDIR`, `ELOOP`) are
+  answered by the existence and directory checks that run first, so
+  they never arrive; they are named rather than translated all the
+  same.
