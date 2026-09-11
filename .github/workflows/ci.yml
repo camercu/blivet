@@ -208,8 +208,15 @@ jobs:
   # matrix and the likeliest to flake, hence the slow tier; if it proves too
   # flaky, `cross test --target aarch64-linux-android` trades the real kernel
   # for far less plumbing.
+  #
+  # Advisory, like `coverage`: release.yml runs on this workflow concluding
+  # success, so without this an emulator that failed to boot would hold up the
+  # release of every commit in that push. The Android release gate is tier 2,
+  # the bionic container, which runs the library suite on the real libc and
+  # does not flake. A red here still shows on the run and is worth reading.
   android-smoke:
     runs-on: ubuntu-latest
+    continue-on-error: true
     name: smoke (android)
     steps:
       - uses: actions/checkout@v7
