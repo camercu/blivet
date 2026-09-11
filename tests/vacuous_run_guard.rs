@@ -151,3 +151,75 @@ fn a_command_killed_before_it_reported_a_status_says_so() {
         "the guard must say the command was killed; got:\n{combined}"
     );
 }
+
+/// The guard script, as every tier names it.
+const GUARD: &str = "assert-tests-ran.sh";
+
+/// Every file that invokes the guard, and so is subject to the rule below.
+const CALLERS: [&str; 5] = [
+    "Dockerfile",
+    "Dockerfile.termux",
+    "scripts/android-smoke.sh",
+    ".github/workflows/ci.yml",
+    "justfile",
+];
+
+/// The commands each guard invocation in `text` wraps.
+///
+/// An invocation ends at the end of its logical line — a trailing `\` joins the
+/// next one — or where the next invocation begins, since a tier may chain two
+/// guarded commands together.
+fn wrapped_commands(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for (at, _) in text.match_indices(GUARD) {
+        let rest = &text[at + GUARD.len()..];
+        let end = rest.find(GUARD).unwrap_or(rest.len());
+        let mut command = String::new();
+        for line in rest[..end].lines() {
+            command.push_str(line);
+            if !line.trim_end().ends_with('\\') {
+                break;
+            }
+        }
+        out.push(command);
+    }
+    out
+}
+
+#[test]
+fn a_guard_invocation_wraps_one_test_command() {
+    // The guard sums counts across every suite the wrapped command runs, which
+    // its own header states. Chaining a second test command into the same
+    // invocation therefore lets that command's counts cover the first's zero —
+    // and `cargo test --doc` can never report zero, because rustdoc re-reads
+    // the sources every run and has no stale binary to reuse. A tier that
+    // chains the two guards its own suite for nothing.
+    //
+    // Counted on `cargo test`, so a tier running a prebuilt test binary — the
+    // NetBSD VM and the Android device — is outside what this proves; each of
+    // those runs exactly one binary today.
+    let root = repo_root();
+    let mut offenders = Vec::new();
+    for caller in CALLERS {
+        let path = root.join(caller);
+        let text = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("{caller} must be readable: {e}"));
+        for command in wrapped_commands(&text) {
+            let runs = command.matches("cargo test").count();
+            if runs > 1 {
+                offenders.push(format!(
+                    "  {caller}: {runs} test commands in one guard invocation:\n    {}",
+                    command.trim()
+                ));
+            }
+        }
+    }
+
+    assert!(
+        offenders.is_empty(),
+        "a guard invocation must wrap one test command:\n{}\n\
+         Give each command its own `sh scripts/{GUARD}` prefix, so neither \
+         command's counts can stand in for the other's.",
+        offenders.join("\n")
+    );
+}

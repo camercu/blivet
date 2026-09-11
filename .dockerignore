@@ -1,6 +1,8 @@
+# Build outputs and local tooling. `.github/` stays in the context: the
+# container tier runs the repository guards, and one of them reads the CI
+# wiring to hold every caller of the vacuous-run guard to one test command.
 target/
 .git/
-.github/
 .claude/
 .direnv/
 node_modules/

@@ -53,12 +53,18 @@ esac
 # suite, and a tier may chain several invocations.
 #
 # Summed across suites rather than checked per suite, which bounds what this
-# can prove: where a tier runs several suites, one that matched nothing is
+# can prove: where one command runs several suites, one that matched nothing is
 # hidden by any other that ran. Per-suite checking is not available — a run of
 # `--all-targets` legitimately includes suites with no tests, so an empty one
 # is not by itself wrong. What the guard catches is the whole tree going stale,
-# which zeroes every suite at once; the stale-fingerprint deletion in each
-# Dockerfile is what stops one binary going stale on its own.
+# which zeroes every suite the command compiled; the stale-fingerprint deletion
+# in each Dockerfile is what stops one binary going stale on its own.
+#
+# The sum therefore holds only for as long as one invocation wraps one test
+# command. Chaining a second one in lets its counts stand in for the first's
+# zero, and `cargo test --doc` never reports zero at all, because rustdoc
+# re-reads the sources every run. `tests/vacuous_run_guard.rs` holds every
+# caller to one test command apiece, which is what keeps this paragraph true.
 #
 # Passed AND failed, because
 # the question here is whether anything ran at all — a suite where every test

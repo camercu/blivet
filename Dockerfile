@@ -31,4 +31,10 @@ RUN cargo build --locked --tests
 # separately without --include-ignored: rustdoc maps `ignore` code blocks to
 # libtest-ignored tests, so --include-ignored would try to compile README
 # fragments that are marked `ignore` precisely because they cannot compile.
-CMD ["sh", "scripts/assert-tests-ran.sh", "sh", "-c", "cargo test --locked --all-targets -- --include-ignored && cargo test --locked --doc"]
+#
+# Each command carries its own guard. The guard sums counts across everything
+# one invocation runs, and a doctest suite can never report zero — rustdoc
+# re-reads the sources every run, so it has no stale binary to reuse. Under one
+# shared guard its count stood in for the compiled suites, and the stale tree
+# this tier exists to catch would have gone green.
+CMD ["sh", "-c", "sh scripts/assert-tests-ran.sh cargo test --locked --all-targets -- --include-ignored && sh scripts/assert-tests-ran.sh cargo test --locked --doc"]
