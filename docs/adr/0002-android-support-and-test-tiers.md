@@ -43,8 +43,10 @@ bionic in CI.
 Capability answers for Android: `thread_count` yes (`/proc/self/status`),
 `fd_dir` yes (`/proc/self/fd`), `rt_signals_reserved` yes (bionic reserves the
 first real-time signals for POSIX timers, debuggerd, and the profiler — they
-must be skipped, exactly as the NPTL range is on glibc), `faccessat_eaccess`
-no.
+must be skipped, exactly as the NPTL range is on glibc), and
+`faccessat_lacks_eaccess` yes — Android is the only listed platform whose
+`faccessat` rejects the flag, which is why the capability is named for the
+deviation.
 
 **The effective-UID gap is documented, not papered over.** With `AT_EACCESS`
 unavailable, the writability probe on Android tests the *real* UID. `nix` also

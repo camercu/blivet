@@ -201,11 +201,6 @@ platform can be partly supported instead of falling off a cliff into every
 fallback at once. Each capability is checked against the running system by a
 probe test.
 
-Each fallback is the conservative answer except one: `faccessat` is assumed to
-accept `AT_EACCESS`, because it is POSIX and assuming otherwise would quietly
-downgrade the pre-fork writability check from the effective UID to the real
-one.
-
 One carve-out, so the Supported row means what it says. The guards that check
 this repository against itself test the repository, not the platform, and not
 every tier reaches them. The doc-vs-code guard lives in the library and runs

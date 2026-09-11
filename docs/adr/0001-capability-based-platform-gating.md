@@ -63,7 +63,7 @@ The initial capability set:
 | `thread_count` | Can the live thread count be read? | `/proc/self/status`, `proc_pidinfo`, `sysctl` |
 | `fd_dir` | Is there a trustworthy open-fd directory? | `/proc/self/fd`, `/dev/fd` |
 | `rt_signals_reserved` | Must a reserved real-time signal range be skipped? | libc-internal signals |
-| `faccessat_eaccess` | Does `faccessat` accept `AT_EACCESS`? | effective-UID access check |
+| `faccessat_lacks_eaccess` | Does `faccessat` reject `AT_EACCESS`? | effective-UID access check |
 
 The same table is the single source of truth for the documented platform list:
 the build script exports it as an environment variable, and the doc-drift guard
