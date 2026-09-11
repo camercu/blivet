@@ -145,6 +145,14 @@ fn main() {
         // platform and only a default for any other — asserting the default
         // would fail on, say, illumos, which has a working /proc/self/fd and
         // would be told by a red test that the crate is broken.
+        //
+        // Considered and declined: giving each alias a value instead
+        // (`cfg(blivet_fd_dir = "no")` for measured-absent, nothing emitted
+        // for an unlisted target) would say the same thing per capability and
+        // delete this alias. It also puts `= "yes"` on every positive use site
+        // — the common case, and today a bare `#[cfg(blivet_fd_dir)]` — to
+        // spare the two negative probes one attribute each. The concept earns
+        // the line it costs.
         ("blivet_known_platform", platform.is_some()),
         (
             "blivet_thread_count",
