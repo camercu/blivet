@@ -1210,6 +1210,68 @@ mod tests {
         }
     }
 
+    /// The writability probe answers for the identity the daemon will write
+    /// as: the effective UID wherever `faccessat` accepts `AT_EACCESS`.
+    ///
+    /// The child drops its *effective* UID while keeping real UID 0, which is
+    /// the setuid shape the flag exists for. The two identities then disagree
+    /// about a root-owned directory — real UID 0 may write it, effective UID
+    /// nobody may not — so `EFFECTIVE_ACCESS` cannot hold the wrong value
+    /// without this failing. Asserting the constant instead would only restate
+    /// it.
+    ///
+    /// Root-only and process-global, hence `#[ignore]` and the subprocess: the
+    /// root/Linux container tier is what passes `--include-ignored`.
+    #[test]
+    #[ignore = "drops the process's effective UID; needs root"]
+    fn writability_is_probed_against_the_effective_identity() {
+        use std::os::unix::fs::PermissionsExt;
+
+        const NAME: &str = "config::tests::writability_is_probed_against_the_effective_identity";
+        const ROOT_ONLY_DIR: &str = "__BLIVET_ROOT_ONLY_DIR";
+        /// The conventional unprivileged UID; it need not exist in passwd for
+        /// `seteuid` to take it.
+        const NOBODY: u32 = 65534;
+
+        if let Ok(dir) = std::env::var(ROOT_ONLY_DIR) {
+            nix::unistd::seteuid(nix::unistd::Uid::from_raw(NOBODY))
+                .expect("dropping the effective UID needs root");
+            let mut cfg = DaemonConfig::new();
+            cfg.pidfile(std::path::Path::new(&dir).join("daemon.pid"));
+            let result = cfg.validate();
+            #[cfg(blivet_faccessat_eaccess)]
+            assert!(
+                matches!(&result, Err(DaemonizeError::ValidationError(msg))
+                    if msg.contains("not writable")),
+                "the probe must answer for the effective UID, which cannot \
+                 write a root-owned directory: {result:?}"
+            );
+            #[cfg(not(blivet_faccessat_eaccess))]
+            assert!(
+                result.is_ok(),
+                "without AT_EACCESS the probe answers for the real UID, which \
+                 is root here: {result:?}"
+            );
+            return;
+        }
+
+        if !nix::unistd::geteuid().is_root() {
+            eprintln!("skipping: requires root");
+            return;
+        }
+
+        let dir = crate::test_support::tmp_dir().join("blivet-effective-uid-probe");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir(&dir).expect("root creates the probe directory");
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))
+            .expect("root-only permissions");
+
+        let output = crate::test_support::rerun_in_subprocess(NAME, ROOT_ONLY_DIR, &dir);
+        let report = crate::test_support::subprocess_report(NAME, &output);
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(output.status.success(), "{report}");
+    }
+
     #[test]
     fn paths_same_canonicalize_fallback() {
         // Paths that don't exist — canonicalize will fail, should fall back to byte comparison
