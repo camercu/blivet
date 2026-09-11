@@ -475,6 +475,16 @@ fn validate_parent_writable(path: &std::path::Path, name: &str) -> Result<(), Da
             parent.display()
         )));
     }
+    // Existing and writable are both true of a regular file, and every message
+    // here says "parent directory". Without this the config passed validation
+    // and then failed at daemonize time with ENOTDIR, reported as "could not
+    // create" rather than as the bad path it is.
+    if !parent.is_dir() {
+        return Err(DaemonizeError::ValidationError(format!(
+            "{name} parent is not a directory: {}",
+            parent.display()
+        )));
+    }
     // Writability is probed with faccessat, against the effective UID/GID where
     // the platform supports it (see EFFECTIVE_ACCESS).
     match nix::unistd::faccessat(
@@ -655,8 +665,16 @@ mod tests {
         let overlap = tmp.join("same.pid");
         let overlap_name = overlap.display().to_string();
 
+        // A regular file standing where a parent directory is named. It exists
+        // and its owner may write it, so the two questions the probe used to
+        // ask both answer yes.
+        let parent_file = tmp.join("blivet-parent-is-a-file");
+        std::fs::write(&parent_file, b"").unwrap();
+        let parent_file_name = parent_file.display().to_string();
+        let under_a_file = parent_file.join("daemon.pid");
+
         type Setup<'a> = &'a dyn Fn(&mut DaemonConfig);
-        let cases: [(&str, Setup, &str); 7] = [
+        let cases: [(&str, Setup, &str); 8] = [
             (
                 "chdir relative",
                 &|c| {
@@ -706,6 +724,13 @@ mod tests {
                 },
                 &overlap_name,
             ),
+            (
+                "pidfile parent is a file",
+                &|c| {
+                    c.pidfile(&under_a_file);
+                },
+                &parent_file_name,
+            ),
         ];
         for (name, setup, expected_path) in cases {
             let mut config = DaemonConfig::new();
@@ -716,6 +741,7 @@ mod tests {
                 "{name}: message {m:?} does not name the offending path {expected_path:?}"
             );
         }
+        let _ = std::fs::remove_file(&parent_file);
     }
 
     #[test]
