@@ -22,7 +22,7 @@
 use std::path::PathBuf;
 
 mod common;
-use common::{code_of, rust_files};
+use common::{offending_lines, rust_files};
 
 /// This file, which is exempt from its own scan.
 const THIS_FILE: &str = "location_independence.rs";
@@ -40,23 +40,7 @@ fn no_source_file_hardcodes_tmp() {
     files.push(root.join("build.rs"));
     files.sort();
 
-    let mut offenders = Vec::new();
-    for file in files {
-        // The rule has to name the path it bans, in the scan and in the
-        // failure message both, so it exempts the file that states it.
-        if file.file_name().is_some_and(|n| n == THIS_FILE) {
-            continue;
-        }
-        let Ok(text) = std::fs::read_to_string(&file) else {
-            continue;
-        };
-        let rel = file.strip_prefix(&root).unwrap_or(&file).display();
-        for (i, line) in text.lines().enumerate() {
-            if names_tmp_root(code_of(line)) {
-                offenders.push(format!("  {rel}:{}: {}", i + 1, line.trim()));
-            }
-        }
-    }
+    let offenders = offending_lines(&root, &files, THIS_FILE, names_tmp_root);
 
     assert!(
         offenders.is_empty(),

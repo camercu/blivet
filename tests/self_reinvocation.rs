@@ -12,7 +12,7 @@
 use std::path::PathBuf;
 
 mod common;
-use common::{code_of, rust_files};
+use common::{offending_lines, rust_files};
 
 /// The one library source allowed to re-invoke the test binary.
 const OWNER: &str = "test_support.rs";
@@ -24,21 +24,7 @@ fn only_test_support_re_invokes_the_test_binary() {
     rust_files(&root.join("src"), &mut files);
     files.sort();
 
-    let mut offenders = Vec::new();
-    for file in files {
-        if file.file_name().is_some_and(|n| n == OWNER) {
-            continue;
-        }
-        let Ok(text) = std::fs::read_to_string(&file) else {
-            continue;
-        };
-        let rel = file.strip_prefix(&root).unwrap_or(&file).display();
-        for (i, line) in text.lines().enumerate() {
-            if code_of(line).contains("current_exe") {
-                offenders.push(format!("  {rel}:{}: {}", i + 1, line.trim()));
-            }
-        }
-    }
+    let offenders = offending_lines(&root, &files, OWNER, |code| code.contains("current_exe"));
 
     assert!(
         offenders.is_empty(),
