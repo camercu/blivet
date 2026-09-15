@@ -14,11 +14,14 @@ test_tool = "nextest"
 # exact functions that OR constant flags; `|`→`&` is not excluded because it
 # does change the value.
 #
-# cfg-dead stubs: the `#[deprecated]` unsupported-target stubs are never
-# compiled on any OS the suite runs on. The drop_privileges entry is
-# line-pinned to spare its live twin of the same name; re-pin if context.rs
-# shifts. The daemonize stub needs no pin: the real daemonize's twin of that
-# mutant is unviable (DaemonContext has no Default).
+# cfg-dead stubs: the unsupported-target stubs are never compiled on any OS the
+# suite runs on. Two are line-pinned, because each shares a name and a signature
+# with the live implementation it stands in for and nothing else in the mutant's
+# description tells them apart. A line pin goes stale the moment the file moves,
+# so `tests/mutant_exclusions.rs` checks that each one still names a
+# `#[cfg(not(...))]` item — the pins below were `36\d` and had already drifted
+# past the code they were written for. The daemonize stub needs no pin: the real
+# daemonize's twin of that mutant is unviable (DaemonContext has no Default).
 exclude_re = [
     # -- equivalent bitflag mutants --
     'replace \| with \^ in open_and_lock',
@@ -26,8 +29,8 @@ exclude_re = [
     'replace \| with \^ in thread_count',
     # -- cfg-dead unsupported-target stubs --
     'replace daemonize -> Result<DaemonContext, DaemonizeError> with Ok\(Default::default\(\)\)',
-    'src/context\.rs:36\d:9: replace DaemonContext::drop_privileges -> Result<\(\), DaemonizeError> with Ok\(\(\)\)',
+    'src/context\.rs:358:9: replace DaemonContext::drop_privileges -> Result<\(\), DaemonizeError> with Ok\(\(\)\)',
     # The cfg(not(linux, macos)) list_open_fds stub is dead on every sweep
     # host; line-pinned to spare the live implementation just above it.
-    'src/steps\.rs:36\d:5: replace list_open_fds',
+    'src/steps\.rs:426:5: replace list_open_fds',
 ]
