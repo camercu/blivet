@@ -139,8 +139,12 @@ check: fmt-check lint lint-deny doc msrv-check check-cross check-non-unix
 # nextest does not run doctests, so they run after it on the plain harness.
 # They are compiled fresh by rustdoc every time and touch no process state, so
 # the failure above cannot reach them.
+#
+# --profile gate, not the default: the default profile belongs to cargo-mutants
+# and kills any test at 5s, which killed fourteen CLI integration tests on a
+# loaded machine. See .config/nextest.toml.
 test:
-    RUSTFLAGS="-D warnings" {{cargo}} nextest run {{locked}}
+    RUSTFLAGS="-D warnings" {{cargo}} nextest run --profile gate {{locked}}
     RUSTFLAGS="-D warnings" {{cargo}} test {{locked}} --doc
 
 # Build and run Docker container for root + Linux-specific tests
