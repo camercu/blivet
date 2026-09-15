@@ -8,12 +8,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # The tier runs under nextest, which gives each test its own process: the tests
 # that close std fds process-wide are exactly the ones this tier exists to run,
 # and under a shared harness they corrupt its result pipe.
+#
+# Pinned, like the nixpkgs revision, the rustdoc nightly and cargo-public-api:
+# an image rebuilt months apart otherwise runs a different harness than the one
+# a result was recorded against. This is the version shell.nix carries, so a
+# developer and the tier agree. Bump both together.
+ARG NEXTEST_VERSION=0.9.116
 RUN case "$(uname -m)" in \
-      x86_64) url=https://get.nexte.st/latest/linux ;; \
-      aarch64) url=https://get.nexte.st/latest/linux-arm ;; \
+      x86_64) arch=linux ;; \
+      aarch64) arch=linux-arm ;; \
       *) echo "no nextest build for $(uname -m)" >&2; exit 1 ;; \
     esac; \
-    curl -LsSf "$url" | tar zxf - -C "$CARGO_HOME/bin"
+    curl -LsSf "https://get.nexte.st/${NEXTEST_VERSION}/${arch}" \
+      | tar zxf - -C "$CARGO_HOME/bin"
 
 # Create a non-root user and extra group for user/group-switching tests
 RUN useradd --create-home --shell /bin/bash testuser \
