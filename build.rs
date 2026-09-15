@@ -62,6 +62,15 @@ struct Platform {
     /// the `libc` crate, which exposes `SIGRTMIN` only for the linux-like and
     /// solarish targets. A platform having no `SIGRTMIN` in `libc` is a fact
     /// about the crate's coverage and says nothing about the platform.
+    ///
+    /// Considered and declined: splitting the two questions now, and putting
+    /// each platform's range in the table so a probe could measure the claim
+    /// rather than argue it. Nothing behaves wrongly today — every listed
+    /// platform inside the sweep reserves none of its band — and the ranges
+    /// would be a fourth hand-maintained copy of ABI facts no test here can
+    /// check, on targets with no runner. The trigger to do it: a listed
+    /// platform that reserves part of its real-time range and answers this
+    /// question false. That platform is the one this field cannot describe.
     rt_signals_reserved: bool,
     /// Does `faccessat` *reject* `AT_EACCESS`, leaving a writability probe to
     /// answer for the real UID rather than the effective one?
