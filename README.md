@@ -224,6 +224,15 @@ Android is supported with one documented difference: bionic rejects
 `AT_EACCESS`, so the pre-fork writability check there answers for the real UID
 rather than the effective one.
 
+Android is also the one Supported platform whose "real OS" is split across two
+jobs. The blocking one runs the library suite against bionic and the real
+dynamic linker, on a Linux kernel in a container. The one with a real Android
+kernel and SELinux is the emulator smoke test, which is advisory — it is the
+slowest job in the matrix and the likeliest to flake, and gating releases on a
+booted emulator held up every commit in a push when one failed to start. So
+what blocks on Android is the libc and the linker; the kernel and SELinux are
+proven, but a failure there is read rather than enforced.
+
 ## API reference
 
 Full reference is on [docs.rs](https://docs.rs/blivet); the essentials:
