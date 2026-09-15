@@ -82,10 +82,10 @@ pub(crate) fn reset_signal_dispositions() -> Result<(), crate::error::DaemonizeE
 /// (the NPTL pair at 32-33 on glibc) is skipped rather than reset.
 ///
 /// Elsewhere, returns 1..=64 (EINVAL skips invalid ones). That covers the
-/// standard signals everywhere, and real-time signals only where the range
-/// falls below 64 — on the platforms currently answering false it does not, so
-/// their real-time dispositions are left alone. See the capability's own doc in
-/// `build.rs` for why that is acceptable today and what would change it.
+/// standard signals everywhere, and also the real-time ones on a platform
+/// whose range falls below 64 — NetBSD's 33-63 does, so its real-time
+/// dispositions are reset rather than left alone. See the capability's own doc
+/// in `build.rs` for why that is acceptable today and what would change it.
 fn signal_range() -> Vec<i32> {
     #[cfg(blivet_rt_signals_reserved)]
     {

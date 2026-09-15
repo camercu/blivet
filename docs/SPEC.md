@@ -1383,9 +1383,10 @@ verification points.
   a platform without a readable thread count exposes no count to call
   for, and among the listed platforms answering no to a reserved
   real-time range, none has `SIGRTMIN` in `libc` to measure against.
-  The second is a limit of `libc`'s coverage rather than of the
-  platforms, so adding a target that has both (the solarish ones do)
-  means writing that probe.
+  The second is a limit of `libc`'s coverage and says nothing about the
+  platforms themselves — NetBSD has a real-time range (33–63) that
+  `libc` does not expose — so the probe needs a source other than
+  `libc` to be written at all.
 - R141. A writability probe that fails with `EACCES` reports the
   parent directory as not writable; any other errno is reported by
   name, so an errno that does not answer the permission question is
