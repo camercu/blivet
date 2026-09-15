@@ -37,13 +37,25 @@ doc:
 # lacks (bionic has no AT_EACCESS) before push. `cargo check` needs only the
 # target's std (rustup-installable); OpenBSD is tier-3 without one, so CI's
 # OpenBSD smoke remains the backstop there.
+#
+# "Any other Unix" is not checkable as a class — `x86_64-pc-solaris` does not
+# compile, because `nix` gates `Flock` and `sys::resource` away there. illumos
+# stands in for the tier: it is a Unix the table does not list, so it exercises
+# every fallback branch, and it has a rustup std to check against.
 check-cross:
-    rustup target add x86_64-unknown-linux-gnu x86_64-unknown-freebsd x86_64-unknown-netbsd aarch64-linux-android x86_64-linux-android
+    rustup target add x86_64-unknown-linux-gnu x86_64-unknown-freebsd x86_64-unknown-netbsd aarch64-linux-android x86_64-linux-android x86_64-unknown-illumos
     {{cargo}} check {{locked}} --target x86_64-unknown-linux-gnu
     {{cargo}} check {{locked}} --target x86_64-unknown-freebsd
     {{cargo}} check {{locked}} --target x86_64-unknown-netbsd
     {{cargo}} check {{locked}} --target aarch64-linux-android
     {{cargo}} check {{locked}} --target x86_64-linux-android
+    # illumos is not in the capability table: it is the best-effort tier's
+    # stand-in, so this is the only gate behind the row promising those targets
+    # compile. --all-targets because what breaks there is the shipped example
+    # and the test helpers reaching for a capability-gated item, not the
+    # library; -D warnings because a deprecated stub is a warning, and the
+    # stubs are what a best-effort target resolves to.
+    RUSTFLAGS="-D warnings" {{cargo}} check {{locked}} --target x86_64-unknown-illumos --all-targets
 
 # Lowest rustc that must be able to *resolve* the dev-dependency graph: the
 # rust OpenBSD ships via `pkg_add rust` (Tier 3, no rustup), which the openbsd
