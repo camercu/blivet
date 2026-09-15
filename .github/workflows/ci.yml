@@ -83,8 +83,16 @@ jobs:
           components: llvm-tools-preview
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@cargo-llvm-cov
+      - uses: taiki-e/install-action@nextest
+      # Under nextest, and on the gate profile, for the reason the justfile's
+      # `test` recipe is: the tests that close std fds process-wide corrupt a
+      # shared harness's result pipe, and the default nextest profile is
+      # cargo-mutants' 5s kill. Through the vacuous-run guard like every other
+      # tier: a coverage report measured from zero tests is a confident 0%.
       - name: Generate coverage
-        run: cargo llvm-cov --lcov --output-path lcov.info
+        env:
+          NEXTEST_PROFILE: gate
+        run: sh scripts/assert-tests-ran.sh cargo llvm-cov nextest --lcov --output-path lcov.info
       - uses: actions/upload-artifact@v7
         with:
           name: coverage-report
