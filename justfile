@@ -179,9 +179,13 @@ manpage:
     sed "s/@VERSION@/$version/" docs/daemonize.1.md | pandoc -f markdown -s -t man -o docs/daemonize.1
 
 # Generate code coverage report (requires cargo-llvm-cov + cargo-nextest).
-# Under nextest for the same reason `test` is, stated there.
+# Under nextest for the same reason `test` is, stated there, and on the same
+# profile — through NEXTEST_PROFILE rather than --profile, which cargo-llvm-cov
+# reads as a cargo build profile of its own. Left on the default profile this
+# recipe inherited cargo-mutants' 5s kill, and instrumented tests are the
+# slowest thing here.
 coverage:
-    cargo llvm-cov nextest --html {{locked}}
+    NEXTEST_PROFILE=gate cargo llvm-cov nextest --html {{locked}}
     @echo "Coverage report: target/llvm-cov/html/index.html"
 
 # ── Public API surface ──────────────────────────────────────
