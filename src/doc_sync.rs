@@ -307,3 +307,72 @@ fn parse_exit_code_table() -> BTreeMap<String, String> {
     assert!(!map.is_empty(), "parsed no rows from the exit-code table");
     map
 }
+
+/// The rustc triple token that identifies each supported `target_os`.
+///
+/// A fact about rustc's naming, not a support decision — macOS's triple says
+/// `apple-darwin` and Android's says `linux-android`, so a substring test on
+/// the `target_os` alone would miss one and confuse the other with Linux.
+fn triple_token(target_os: &str) -> String {
+    match target_os {
+        "macos" => "apple-darwin".to_string(),
+        "android" => "linux-android".to_string(),
+        "linux" => "unknown-linux".to_string(),
+        other => format!("unknown-{other}"),
+    }
+}
+
+/// Every place outside the capability table that carries a list of targets
+/// must carry the whole table, or name why it does not.
+///
+/// ADR 0001 promises that adding a platform is one table row. It is not: the
+/// docs.rs target list and `just check-cross` are hand-maintained copies, and
+/// nothing noticed when they disagreed with the table. The second one is the
+/// gap ADR 0002 blames for the Android build break reaching a release — "no
+/// gate ever asked whether Android compiled".
+///
+/// Each exemption is a target the consumer *cannot* carry, with the reason,
+/// rather than one it merely happens to lack.
+#[test]
+fn every_target_list_carries_the_whole_table() {
+    // (consumer file, what reads it, [(target_os, why it is absent)]).
+    let consumers: [(&str, &str, &[(&str, &str)]); 2] = [
+        (
+            "Cargo.toml",
+            "the docs.rs target list",
+            // OpenBSD is tier 3 and has no prebuilt std for docs.rs to build
+            // against; Linux is the default-target rather than a listed one.
+            &[
+                ("openbsd", "no prebuilt std"),
+                ("linux", "the default-target"),
+            ],
+        ),
+        (
+            "justfile",
+            "the check-cross recipe",
+            // OpenBSD has no rustup std to check against, and the CI matrix
+            // builds on a macOS host, which is a stronger check than a
+            // cross-check would be.
+            &[("openbsd", "no rustup std"), ("macos", "a CI host")],
+        ),
+    ];
+
+    for (file, what, exempt) in consumers {
+        let text = read(file);
+        for target_os in env!("BLIVET_SUPPORTED_TARGET_OS").split(',') {
+            if let Some((_, why)) = exempt.iter().find(|(os, _)| *os == target_os) {
+                assert!(
+                    !why.is_empty(),
+                    "an exemption must say why {target_os} is absent"
+                );
+                continue;
+            }
+            let token = triple_token(target_os);
+            assert!(
+                text.contains(&token),
+                "{file}: {what} omits {target_os} ({token}), which the \
+                 capability table supports"
+            );
+        }
+    }
+}
