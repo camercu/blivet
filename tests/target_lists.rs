@@ -61,12 +61,39 @@ fn docs_rs_targets(cargo_toml: &str) -> Vec<String> {
     targets
 }
 
+/// The triples the justfile actually runs a `cargo check` for.
+///
+/// Read from the `--target` of a line that also runs a check, not from
+/// anywhere the triple is merely written: `check-cross` opens with a
+/// `rustup target add` naming every triple, so a guard that asked only whether
+/// the name appeared was satisfied by that one line and would have watched
+/// every check below it be deleted.
+fn checked_targets(justfile: &str) -> Vec<String> {
+    let mut targets = Vec::new();
+    for line in justfile.lines() {
+        let code = code_before(line, "#");
+        if !code.contains("check") {
+            continue;
+        }
+        let mut words = code.split_whitespace();
+        while let Some(word) = words.next() {
+            if word == "--target" {
+                if let Some(triple) = words.next() {
+                    targets.push(triple.to_string());
+                }
+            }
+        }
+    }
+    assert!(!targets.is_empty(), "parsed no checked targets");
+    targets
+}
+
 #[test]
 fn every_target_list_carries_the_whole_table() {
     let cargo_toml = read("Cargo.toml");
     let justfile = read("justfile");
     let docs_rs = docs_rs_targets(&cargo_toml);
-    let justfile_words: Vec<String> = justfile.split_whitespace().map(str::to_string).collect();
+    let checked = checked_targets(&justfile);
 
     // (what carries the list, the triples in it, [(target_os, why absent)]).
     let consumers: [(&str, &[String], &[(&str, &str)]); 2] = [
@@ -82,7 +109,7 @@ fn every_target_list_carries_the_whole_table() {
         ),
         (
             "the check-cross recipe",
-            &justfile_words,
+            &checked,
             // OpenBSD has no rustup std to check against, and the CI matrix
             // builds on a macOS host, which is a stronger check than a
             // cross-check would be.
@@ -107,6 +134,32 @@ fn every_target_list_carries_the_whole_table() {
             );
         }
     }
+}
+
+#[test]
+fn the_best_effort_tier_is_type_checked() {
+    // The Best-effort row promises a Unix the table does not list compiles.
+    // illumos stands in for the class, and this check is the row's only
+    // backing — so it is the one check whose deletion the guard above cannot
+    // notice, since no table row demands it.
+    let justfile = read("justfile");
+    let line = justfile
+        .lines()
+        .map(|l| code_before(l, "#"))
+        .find(|code| code.contains("--target x86_64-unknown-illumos"))
+        .expect("a recipe must type-check illumos: it backs the Best-effort tier");
+    assert!(
+        line.contains("--all-targets"),
+        "the illumos check must cover --all-targets: what breaks on a \
+         best-effort target is the shipped example and the test helpers \
+         reaching for a capability-gated item, not the library: {line}"
+    );
+    assert!(
+        line.contains("-D warnings"),
+        "the illumos check must run under -D warnings: a best-effort target \
+         resolves to the #[deprecated] stubs, and a deprecation is a warning: \
+         {line}"
+    );
 }
 
 /// The list of files inside `Cargo.toml`'s `include` array.
