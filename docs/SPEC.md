@@ -62,6 +62,14 @@ Android is supported with one documented divergence: bionic rejects
 `AT_EACCESS`, so the pre-fork writability check answers for the real
 UID (see [Validation](#validation)).
 
+Android's Supported row is also the one split across two jobs. The
+blocking job runs the library suite against bionic and the real
+dynamic linker on a Linux kernel; the job with a real Android kernel
+and SELinux is the emulator smoke test, which is advisory because
+gating releases on a booted emulator stalled every commit in a push
+when one failed to start. What blocks on Android is therefore the libc
+and the linker, not the kernel.
+
 The Supported tier covers the tests that exercise the platform. The
 guards that check the repository against itself do not run everywhere:
 the doc-vs-code guard is a library test and runs wherever those do,
