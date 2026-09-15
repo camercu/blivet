@@ -74,6 +74,17 @@ esac
 #                        ^$4            ^$6
 ran=$(awk '/^test result:/ { total += $4 + $6 } END { print total + 0 }' "$log")
 
+# Validated the same way the status is. `[ "$ran" -eq 0 ]` on something that is
+# not a number fails the *test command*, not the script: the error inside an
+# `if` condition does not trip errexit, so the check is skipped and the run
+# exits 0 — this guard's one failure mode that opens rather than closes.
+case "$ran" in
+    '' | *[!0-9]*)
+        echo "FAIL: could not read the test counts from the run." >&2
+        exit 1
+        ;;
+esac
+
 # Only a *successful* command that ran nothing is the case this guard is for.
 # A command that failed has already said why — a compile error, a missing
 # binary — and blaming stale sources for it sends the reader somewhere else.

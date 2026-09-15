@@ -22,20 +22,30 @@ fn repo_root() -> PathBuf {
 /// Invoked as `sh <script>` rather than executed directly: Termux has no
 /// `/bin/sh` for a shebang to name, so the containers call it this way too.
 fn guard(inner: &str) -> Output {
+    guard_with_tools(inner, None)
+}
+
+/// The same, with `tools` ahead of `PATH` so a test can stand in for a program
+/// the script depends on.
+fn guard_with_tools(inner: &str, tools: Option<&std::path::Path>) -> Output {
     let script = repo_root().join("scripts/assert-tests-ran.sh");
     assert!(
         script.is_file(),
         "the guard script is missing: {}",
         script.display()
     );
-    std::process::Command::new("sh")
+    let mut command = std::process::Command::new("sh");
+    command
         .arg(&script)
         .arg("sh")
         .arg("-c")
         .arg(inner)
-        .current_dir(repo_root())
-        .output()
-        .expect("the guard script runs")
+        .current_dir(repo_root());
+    if let Some(tools) = tools {
+        let path = std::env::var("PATH").unwrap_or_default();
+        command.env("PATH", format!("{}:{path}", tools.display()));
+    }
+    command.output().expect("the guard script runs")
 }
 
 #[test]
@@ -152,6 +162,40 @@ fn a_command_killed_before_it_reported_a_status_says_so() {
     assert!(
         combined.contains("killed"),
         "the guard must say the command was killed; got:\n{combined}"
+    );
+}
+
+#[test]
+fn a_run_whose_counts_could_not_be_read_fails() {
+    use std::os::unix::fs::PermissionsExt;
+
+    // GIVEN an `awk` that reports nothing and exits 0, so the count the guard
+    // reads back is the empty string rather than a number
+    let tools = tempfile::tempdir().unwrap();
+    let awk = tools.path().join("awk");
+    std::fs::write(&awk, "exit 0\n").unwrap();
+    std::fs::set_permissions(&awk, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    let out = guard_with_tools(
+        "echo 'test result: ok. 0 passed; 0 failed'",
+        Some(tools.path()),
+    );
+
+    // THEN the guard fails closed. A run of zero tests reaching `exit 0`
+    // because the count was unreadable is the outcome the guard exists to
+    // prevent, arrived at from the other side.
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        !out.status.success(),
+        "a count the guard could not read must not pass; got:\n{combined}"
+    );
+    assert!(
+        combined.contains("counts"),
+        "the guard must say it could not read the counts; got:\n{combined}"
     );
 }
 
