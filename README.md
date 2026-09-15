@@ -198,7 +198,7 @@ claims are tiered:
 | --- | --- | --- |
 | **Supported** | The library test suite runs on the real OS | Linux, Android, macOS, FreeBSD, NetBSD, OpenBSD |
 | **Cross-checked** | The crate type-checks for the target; no test runs there | Other architectures of the above, e.g. `aarch64-linux-android` |
-| **Best-effort** | It compiles and takes the fallback for every capability | Any other Unix (CI additionally smoke-tests the CLI on illumos) |
+| **Best-effort** | It type-checks and takes the fallback for every capability | Any other Unix `nix` supports — illumos stands in for the tier, type-checked on every run and CLI-smoke-tested in CI |
 
 Platform differences are decided one capability at a time — is the thread count
 readable, is there a trustworthy open-fd directory, does libc reserve real-time
@@ -214,6 +214,12 @@ wherever the library tests do, except on the Android device and the NetBSD VM,
 which run a cross-built binary with no sources beside it to read. The
 hardcoded-temp-path guard is an integration test, so only the tiers that build
 integration targets run it — Linux and macOS. Both run on every pull request.
+
+"Any other Unix" is not a checkable class, and one member of it does not hold:
+`x86_64-pc-solaris` fails to compile, because `nix` gates `Flock` and
+`sys::resource` away there. What the row is backed by is illumos — a Unix the
+capability table does not list, so it takes every fallback branch — type-checked
+with `--all-targets` under `-D warnings` on every run.
 
 On a best-effort target `daemonize()` and `drop_privileges()` are `#[deprecated]`
 stubs: using one warns with guidance by default and is a hard error under
