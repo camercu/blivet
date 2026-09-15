@@ -456,9 +456,9 @@ for the real UID. Chdir is exempt: it must already exist as a
 directory, so its parent is never created. A probe that fails with
 `EACCES` reports the directory as unwritable; any other errno is
 reported by name rather than as a permission denial, because none of
-them answers the permission question — some because the probe could
-not run at all, some because they describe the path instead
-(`ENOTDIR`, `ELOOP`, `EROFS`).
+them answers the permission question — `EINVAL` because the probe
+could not run at all, `EROFS` because the directory is unwritable for
+a reason permission does not describe. See R141.
 
 ### Path comparison
 
