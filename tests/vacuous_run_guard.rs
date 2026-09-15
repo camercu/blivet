@@ -277,10 +277,11 @@ fn test_commands(command: &str) -> usize {
 /// a container layer cache; a developer's tree and a fresh CI checkout both
 /// give cargo a freshness judgement it can trust. `just test` also runs under
 /// nextest, whose summary line this guard does not read.
-const CALLERS: [&str; 4] = [
+const CALLERS: [&str; 5] = [
     "Dockerfile",
     "Dockerfile.termux",
     "scripts/android-smoke.sh",
+    "scripts/privileged-test.sh",
     ".github/workflows/ci.yml",
 ];
 

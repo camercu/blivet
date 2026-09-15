@@ -2,8 +2,18 @@ FROM rust:1.87-slim-bookworm
 
 # Install tools used by integration test helpers
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    lsof procps \
+    lsof procps curl ca-certificates \
     && rm -rf /var/lib/apt/lists/*
+
+# The tier runs under nextest, which gives each test its own process: the tests
+# that close std fds process-wide are exactly the ones this tier exists to run,
+# and under a shared harness they corrupt its result pipe.
+RUN case "$(uname -m)" in \
+      x86_64) url=https://get.nexte.st/latest/linux ;; \
+      aarch64) url=https://get.nexte.st/latest/linux-arm ;; \
+      *) echo "no nextest build for $(uname -m)" >&2; exit 1 ;; \
+    esac; \
+    curl -LsSf "$url" | tar zxf - -C "$CARGO_HOME/bin"
 
 # Create a non-root user and extra group for user/group-switching tests
 RUN useradd --create-home --shell /bin/bash testuser \
@@ -27,14 +37,7 @@ COPY . .
 # Build tests (this layer is cached as long as source doesn't change)
 RUN cargo build --locked --tests
 
-# Run all tests including root-only and Linux-specific. Doctests run
-# separately without --include-ignored: rustdoc maps `ignore` code blocks to
-# libtest-ignored tests, so --include-ignored would try to compile README
-# fragments that are marked `ignore` precisely because they cannot compile.
-#
-# Each command carries its own guard. The guard sums counts across everything
-# one invocation runs, and a doctest suite can never report zero — rustdoc
-# re-reads the sources every run, so it has no stale binary to reuse. Under one
-# shared guard its count stood in for the compiled suites, and the stale tree
-# this tier exists to catch would have gone green.
-CMD ["sh", "-c", "sh scripts/assert-tests-ran.sh cargo test --locked --all-targets -- --include-ignored && sh scripts/assert-tests-ran.sh cargo test --locked --doc"]
+# One name, not a line of flags. The tier's preconditions — root, and every
+# ignored test actually requested — are asserted inside it, next to the flags
+# that satisfy them, so neither can be dropped while the other stays.
+CMD ["sh", "scripts/privileged-test.sh"]
