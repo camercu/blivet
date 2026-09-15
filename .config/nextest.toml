@@ -22,3 +22,9 @@ slow-timeout = { period = "5s", terminate-after = 1 }
 # Report a test as slow at the integration poll bound, kill it at four times
 # that, so a genuinely hung test still cannot wedge the run.
 slow-timeout = { period = "30s", terminate-after = 4 }
+
+# What the privileged container tier runs under (scripts/privileged-test.sh).
+# Same bounds as the gate: it runs a superset of the same tests, plus the
+# ignored ones, on a container that is usually busier than a developer's shell.
+[profile.privileged]
+slow-timeout = { period = "30s", terminate-after = 4 }
