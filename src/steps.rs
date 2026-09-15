@@ -31,6 +31,16 @@ pub(crate) mod failpoints {
     pub(crate) static GETRLIMIT_FAILS: AtomicBool = AtomicBool::new(false);
     pub(crate) static FD_LISTING_UNAVAILABLE: AtomicBool = AtomicBool::new(false);
 
+    /// Stands in for the fd limit `getrlimit` would report, or 0 to use the
+    /// real one.
+    ///
+    /// A test that wants the brute-force branch wants the branch, not the
+    /// machine's `RLIMIT_NOFILE`: closing `3..rlim_cur` is a real loop, and a
+    /// host with a large limit makes an otherwise instant test take minutes
+    /// (measured: ~0.2s at 1M, and a systemd `LimitNOFILE=infinity` clamps to
+    /// `i32::MAX`). Bounding it here keeps the test constant-time on any host.
+    pub(crate) static MAX_FD: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
+
     /// True when `flag` is set — reads with `Relaxed`: flags are set before the
     /// sequence runs and never concurrently.
     pub(crate) fn injected(flag: &AtomicBool) -> bool {
@@ -366,6 +376,13 @@ pub(crate) fn get_max_fd() -> Result<i32, DaemonizeError> {
         return Err(DaemonizeError::SystemError(
             "getrlimit(RLIMIT_NOFILE): injected failure".into(),
         ));
+    }
+    #[cfg(test)]
+    {
+        let injected = failpoints::MAX_FD.load(std::sync::atomic::Ordering::Relaxed);
+        if injected > 0 {
+            return Ok(injected);
+        }
     }
     let limit = nix::sys::resource::getrlimit(nix::sys::resource::Resource::RLIMIT_NOFILE)
         .map_err(|e| DaemonizeError::SystemError(format!("getrlimit(RLIMIT_NOFILE): {e}")))?;
@@ -1120,6 +1137,10 @@ mod tests {
         // has no fd directory the flag changes nothing and the fallback was
         // already the only branch.
         failpoints::FD_LISTING_UNAVAILABLE.store(true, std::sync::atomic::Ordering::Relaxed);
+        // Bounded, so the loop is the branch under test rather than the host's
+        // fd limit. Comfortably above the handful of descriptors a test process
+        // holds, and far below what a raised RLIMIT_NOFILE would make it walk.
+        failpoints::MAX_FD.store(4096, std::sync::atomic::Ordering::Relaxed);
         assert_closes_all_but_skipped();
     }
 
