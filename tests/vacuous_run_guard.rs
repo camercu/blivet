@@ -199,8 +199,75 @@ fn a_run_whose_counts_could_not_be_read_fails() {
     );
 }
 
+/// A nextest summary line, as nextest prints it. `colour` wraps the parts
+/// nextest highlights, which CI turns on through `CARGO_TERM_COLOR`.
+fn nextest_summary(count: &str, word: &str, colour: bool) -> String {
+    let (on, off) = if colour {
+        ("\\033[1m", "\\033[0m")
+    } else {
+        ("", "")
+    };
+    format!(
+        "printf '   {on}Summary{off} [   0.007s] {count} {word} run: {count} passed, 3 skipped\\n'"
+    )
+}
+
+#[test]
+fn a_nextest_run_that_ran_tests_passes() {
+    for colour in [false, true] {
+        // GIVEN a healthy nextest run, which reports its counts in nextest's
+        // words rather than libtest's
+        let out = guard(&nextest_summary("271", "tests", colour));
+
+        // THEN the guard accepts it. Reporting a run of 271 tests as one that
+        // proved nothing is the wrong diagnosis from a script whose whole
+        // product is the right diagnosis.
+        let combined = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(
+            out.status.success(),
+            "a nextest run of 271 tests must pass (colour: {colour}); got:\n{combined}"
+        );
+    }
+}
+
+#[test]
+fn a_nextest_run_that_ran_nothing_fails() {
+    for colour in [false, true] {
+        // GIVEN a nextest run whose filter matched nothing, which nextest also
+        // reports as success
+        let out = guard(&nextest_summary("0", "tests", colour));
+
+        // THEN the guard rejects it, exactly as it does the libtest form
+        assert!(
+            !out.status.success(),
+            "a nextest run of zero tests must not pass (colour: {colour})"
+        );
+    }
+}
+
 /// The guard script, as every tier names it.
 const GUARD: &str = "assert-tests-ran.sh";
+
+/// The ways this repo asks cargo to run tests.
+///
+/// Keyed on the runner rather than on one literal, because a tier that changes
+/// harness must not fall out of the rules below by doing so — `just test`
+/// already moved from one to another. `cargo llvm-cov --lcov` is absent
+/// deliberately: the coverage job produces an artefact and makes no support
+/// claim, and it is advisory in CI.
+const TEST_RUNNERS: [&str; 3] = ["cargo test", "cargo nextest run", "llvm-cov nextest"];
+
+/// How many test commands `command` runs.
+fn test_commands(command: &str) -> usize {
+    TEST_RUNNERS
+        .iter()
+        .map(|runner| command.matches(runner).count())
+        .sum()
+}
 
 /// The tier wiring: every place that runs a suite on behalf of a support
 /// claim, and so is subject to the rules below.
@@ -259,7 +326,7 @@ fn every_tier_runs_its_tests_through_the_guard() {
                 continue;
             }
             let before_any_guard = line.split(GUARD).next().unwrap_or(&line);
-            if before_any_guard.contains("cargo test") {
+            if test_commands(before_any_guard) > 0 {
                 offenders.push(format!("  {caller}: {}", line.trim()));
             }
         }
@@ -310,7 +377,7 @@ fn a_guard_invocation_wraps_one_test_command() {
         let text = std::fs::read_to_string(&path)
             .unwrap_or_else(|e| panic!("{caller} must be readable: {e}"));
         for command in wrapped_commands(&text) {
-            let runs = command.matches("cargo test").count();
+            let runs = test_commands(&command);
             if runs > 1 {
                 offenders.push(format!(
                     "  {caller}: {runs} test commands in one guard invocation:\n    {}",

@@ -72,7 +72,23 @@ esac
 # diagnosis rather than being blamed on a stale build.
 #   test result: FAILED. 0 passed; 5 failed; ...
 #                        ^$4            ^$6
-ran=$(awk '/^test result:/ { total += $4 + $6 } END { print total + 0 }' "$log")
+# Two harnesses, two summary lines. libtest prints "test result: ok. N passed;
+# M failed"; nextest prints "Summary [ Ns] N tests run: N passed". The counts
+# are read from whichever the tier used, so moving a tier between harnesses
+# does not silently turn the guard into a false red.
+#
+# Colour codes are stripped first: CI exports CARGO_TERM_COLOR=always, and
+# nextest highlights the word the second pattern anchors on.
+ran=$(awk '
+    { gsub(/\033\[[0-9;]*m/, "") }
+    /^test result:/ { total += $4 + $6 }
+    /^ *Summary \[/ {
+        for (i = 1; i <= NF; i++) {
+            if ($i == "run:") total += $(i - 2)
+        }
+    }
+    END { print total + 0 }
+' "$log")
 
 # Validated the same way the status is. `[ "$ran" -eq 0 ]` on something that is
 # not a number fails the *test command*, not the script: the error inside an
