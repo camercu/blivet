@@ -133,9 +133,10 @@ fn front_page_cfg_example_lists_every_target_os() {
     // Both files spell the list out for consumers, who cannot see this crate's
     // aliases: the front page teaches the pattern and the example runs it.
     // Each is a copy of the table, so each is pinned to it.
+    let table: Vec<&str> = env!("BLIVET_SUPPORTED_TARGET_OS").split(',').collect();
     for doc in ["src/lib.rs", "examples/echo_server.rs"] {
         let text = read(doc);
-        for os in env!("BLIVET_SUPPORTED_TARGET_OS").split(',') {
+        for os in &table {
             let clause = format!("target_os = \"{os}\"");
             assert_eq!(
                 text.matches(&clause).count(),
@@ -144,7 +145,36 @@ fn front_page_cfg_example_lists_every_target_os() {
                  branch and the `not(...)` fallback"
             );
         }
+        // And nothing else. The direction above catches a platform added to the
+        // table and not to the example; this one catches a target named in the
+        // example that the crate does not support, which is worse — a reader
+        // copies the example and calls the `#[deprecated]` stub that panics.
+        let extra: Vec<&str> = target_os_clauses(&text)
+            .into_iter()
+            .filter(|os| !table.contains(os))
+            .collect();
+        assert!(
+            extra.is_empty(),
+            "{doc}'s `cfg` example names {extra:?}, which the capability table \
+             does not support"
+        );
     }
+}
+
+/// Every distinct `target_os` a `cfg` clause in `text` names.
+fn target_os_clauses(text: &str) -> Vec<&str> {
+    const CLAUSE: &str = "target_os = \"";
+    let mut names = Vec::new();
+    for (at, _) in text.match_indices(CLAUSE) {
+        let rest = &text[at + CLAUSE.len()..];
+        if let Some(end) = rest.find('"') {
+            let name = &rest[..end];
+            if !names.contains(&name) {
+                names.push(name);
+            }
+        }
+    }
+    names
 }
 
 /// Every `DaemonizeError` variant's documented exit code (the README "Errors &
