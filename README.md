@@ -29,6 +29,12 @@ fn main() -> Result<(), DaemonizeError> {
 }
 ```
 
+This calls `daemonize` unconditionally, which is what you want on a supported
+platform. On any other Unix it resolves to a `#[deprecated]` stub that panics,
+so a crate that must also build there gates the call on `target_os` — the
+[crate front page](https://docs.rs/blivet) and `examples/echo_server.rs` both
+show that form. See [Platform support](#platform-support).
+
 ## Why blivet
 
 - **Parent notification.** The launcher blocks until the daemon signals
