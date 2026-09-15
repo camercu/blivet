@@ -49,15 +49,19 @@ struct Platform {
     ///
     /// True also selects *how* the sweep is built: the standard signals
     /// chained with `SIGRTMIN..=SIGRTMAX`, skipping the reserved band between
-    /// them. False sweeps `1..=64`, which reaches a real-time signal only
-    /// where the range falls below 64 — not so on any listed platform
-    /// answering false (FreeBSD's starts at 65), though it is on an unlisted
-    /// one such as illumos, whose range starts at 41 and which therefore does
-    /// get its real-time dispositions reset. That is harmless where libc
-    /// reserves none of them, which is the case there, but it is the seam: a
-    /// platform that reserves a band would answer this question false and
-    /// silently stop skipping it. Splitting the two questions is the fix when
-    /// such a platform is added.
+    /// them. False sweeps `1..=64`, which reaches a real-time signal wherever
+    /// the platform's range falls below 64 — NetBSD's is 33-63 and illumos's
+    /// starts at 41, so both get their real-time dispositions reset, while
+    /// FreeBSD's starts at 65 and OpenBSD and macOS have none. Resetting is
+    /// harmless where libc reserves none of that band, which is the case on
+    /// all three, but it is the seam: a platform that reserves a band would
+    /// answer this question false and silently stop skipping it. Splitting the
+    /// two questions is the fix when such a platform is added.
+    ///
+    /// The numbers above come from each platform's `sys/signal.h`, not from
+    /// the `libc` crate, which exposes `SIGRTMIN` only for the linux-like and
+    /// solarish targets. A platform having no `SIGRTMIN` in `libc` is a fact
+    /// about the crate's coverage and says nothing about the platform.
     rt_signals_reserved: bool,
     /// Does `faccessat` *reject* `AT_EACCESS`, leaving a writability probe to
     /// answer for the real UID rather than the effective one?
