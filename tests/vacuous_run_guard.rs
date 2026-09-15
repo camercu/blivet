@@ -22,12 +22,12 @@ fn repo_root() -> PathBuf {
 /// Invoked as `sh <script>` rather than executed directly: Termux has no
 /// `/bin/sh` for a shebang to name, so the containers call it this way too.
 fn guard(inner: &str) -> Output {
-    guard_with_tools(inner, None)
+    guard_with(inner, None, &[])
 }
 
 /// The same, with `tools` ahead of `PATH` so a test can stand in for a program
-/// the script depends on.
-fn guard_with_tools(inner: &str, tools: Option<&std::path::Path>) -> Output {
+/// the script depends on, and `env` set for the run.
+fn guard_with(inner: &str, tools: Option<&std::path::Path>, env: &[(&str, &str)]) -> Output {
     let script = repo_root().join("scripts/assert-tests-ran.sh");
     assert!(
         script.is_file(),
@@ -44,6 +44,13 @@ fn guard_with_tools(inner: &str, tools: Option<&std::path::Path>) -> Output {
     if let Some(tools) = tools {
         let path = std::env::var("PATH").unwrap_or_default();
         command.env("PATH", format!("{}:{path}", tools.display()));
+    }
+    // Cleared, not merely unset by default: the privileged tier exports this
+    // for its own run, so every test process under that tier inherits it and
+    // these fixtures would be judged against a demand they never made.
+    command.env_remove("ASSERT_NO_SKIPPED");
+    for (key, value) in env {
+        command.env(key, value);
     }
     command.output().expect("the guard script runs")
 }
@@ -176,9 +183,10 @@ fn a_run_whose_counts_could_not_be_read_fails() {
     std::fs::write(&awk, "exit 0\n").unwrap();
     std::fs::set_permissions(&awk, std::fs::Permissions::from_mode(0o755)).unwrap();
 
-    let out = guard_with_tools(
+    let out = guard_with(
         "echo 'test result: ok. 0 passed; 0 failed'",
         Some(tools.path()),
+        &[],
     );
 
     // THEN the guard fails closed. A run of zero tests reaching `exit 0`
@@ -251,6 +259,70 @@ fn a_nextest_run_that_ran_nothing_fails() {
 
 /// The guard script, as every tier names it.
 const GUARD: &str = "assert-tests-ran.sh";
+
+#[test]
+fn a_run_asked_to_leave_nothing_out_rejects_a_skip() {
+    // GIVEN a caller that asked for every test, and a run that skipped some
+    let out = guard_with(
+        &nextest_summary_with_skips("271", "33"),
+        None,
+        &[("ASSERT_NO_SKIPPED", "1")],
+    );
+
+    // THEN the guard rejects it. "Tests ran" is not the claim here; "these
+    // tests ran" is, and a skip is coverage the caller says it has.
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        !out.status.success(),
+        "a run that skipped 33 tests must not pass; got:\n{combined}"
+    );
+    assert!(
+        combined.contains("33 test(s) were skipped"),
+        "the guard must name the skip count; got:\n{combined}"
+    );
+}
+
+#[test]
+fn a_run_that_left_nothing_out_passes() {
+    // GIVEN the same demand and a run that skipped nothing
+    let out = guard_with(
+        &nextest_summary_with_skips("271", "0"),
+        None,
+        &[("ASSERT_NO_SKIPPED", "1")],
+    );
+
+    // THEN the guard accepts it
+    assert!(
+        out.status.success(),
+        "a run that skipped nothing must pass; stderr:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+#[test]
+fn a_skip_is_ignored_unless_the_caller_asked() {
+    // GIVEN a run that skipped tests, from a caller that did not demand none
+    let out = guard_with(&nextest_summary_with_skips("271", "33"), None, &[]);
+
+    // THEN the guard accepts it: most tiers legitimately filter, and only the
+    // caller knows whether its own claim covers what it left out.
+    assert!(
+        out.status.success(),
+        "a skip must not fail a caller that did not ask; stderr:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+/// A nextest summary reporting `count` tests run and `skipped` left out.
+fn nextest_summary_with_skips(count: &str, skipped: &str) -> String {
+    format!(
+        "printf '   Summary [   0.007s] {count} tests run: {count} passed, {skipped} skipped\\n'"
+    )
+}
 
 /// The ways this repo asks cargo to run tests.
 ///

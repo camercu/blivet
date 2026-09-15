@@ -23,48 +23,16 @@ if [ "$(id -u)" -ne 0 ]; then
     exit 1
 fi
 
-scratch=$(mktemp -d 2>/dev/null || true)
-if [ -z "$scratch" ]; then
-    scratch="${TMPDIR:-/tmp}/privileged-test.$$"
-    mkdir -p "$scratch"
-fi
-trap 'rm -rf "$scratch"' EXIT
-trap 'exit 130' INT
-trap 'exit 143' TERM
-log="$scratch/output"
-
 # --run-ignored all: the ignored corpus is this tier's whole reason to exist.
 # Every test the range moved from an environment-variable skip to `#[ignore]`
 # runs here and nowhere else.
-sh scripts/assert-tests-ran.sh \
-    cargo nextest run --profile privileged --run-ignored all --locked \
-    >"$log" 2>&1 || {
-    cat "$log"
-    exit 1
-}
-cat "$log"
-
-# Nothing may be filtered out. With no filter and every ignored test requested,
-# a non-zero skip count means the run did not ask for what this tier claims to
-# prove — which is the failure above, seen from the summary rather than guessed
-# at from the flags.
-skipped=$(awk '
-    { gsub(/\033\[[0-9;]*m/, "") }
-    /^ *Summary \[/ { for (i = 1; i <= NF; i++) if ($i == "skipped") print $(i - 1) }
-' "$log")
-case "$skipped" in
-    '' | *[!0-9]*)
-        echo "FAIL: could not read the skip count from the run." >&2
-        exit 1
-        ;;
-    0) ;;
-    *)
-        echo "FAIL: $skipped test(s) were skipped in the privileged tier." >&2
-        echo "It runs with every ignored test requested, so nothing should be" >&2
-        echo "filtered out; a skip here is coverage the tier claims and lacks." >&2
-        exit 1
-        ;;
-esac
+#
+# ASSERT_NO_SKIPPED: with no filter and every ignored test requested, a skip
+# means the run did not ask for what this tier claims to prove. The guard owns
+# that check, so it reads the summary it already parses rather than a second
+# copy of the same awk here.
+ASSERT_NO_SKIPPED=1 sh scripts/assert-tests-ran.sh \
+    cargo nextest run --profile privileged --run-ignored all --locked
 
 # Doctests are a separate harness: nextest does not run them, and rustdoc maps
 # an `ignore` code block to a libtest-ignored test, so asking for ignored ones

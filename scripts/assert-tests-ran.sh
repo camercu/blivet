@@ -111,4 +111,34 @@ if [ "$status" -eq 0 ] && [ "$ran" -eq 0 ]; then
     exit 1
 fi
 
+# Opt-in, for a tier whose claim is not "tests ran" but "these tests ran": a
+# run that asked for every test and skipped some did not cover what the tier
+# says it covers. Only nextest reports a skip count, which is why this is asked
+# for rather than always checked — libtest's "ignored" is a different thing,
+# the tests the run deliberately did not request.
+if [ "${ASSERT_NO_SKIPPED:-}" = "1" ] && [ "$status" -eq 0 ]; then
+    skipped=$(awk '
+        { gsub(/\033\[[0-9;]*m/, "") }
+        /^ *Summary \[/ {
+            for (i = 1; i <= NF; i++) {
+                if ($i == "skipped") total += $(i - 1)
+            }
+        }
+        END { print total + 0 }
+    ' "$log")
+    case "$skipped" in
+        '' | *[!0-9]*)
+            echo "FAIL: could not read the skip count from the run." >&2
+            exit 1
+            ;;
+        0) ;;
+        *)
+            echo "FAIL: $skipped test(s) were skipped." >&2
+            echo "This run was asked to leave nothing out, so a skip is" >&2
+            echo "coverage the caller claims and does not have." >&2
+            exit 1
+            ;;
+    esac
+fi
+
 exit "$status"
