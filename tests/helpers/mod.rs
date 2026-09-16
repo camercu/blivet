@@ -107,12 +107,11 @@ fn query_cwd(pid: u32) -> Option<String> {
 }
 
 /// Path to the built CLI binary.
+///
+/// Cargo exports it, so this neither walks up from the test binary's own path
+/// nor needs to know how deep `deps/` is.
 pub fn daemonize_bin() -> std::path::PathBuf {
-    let mut path = std::env::current_exe().unwrap();
-    path.pop(); // remove test binary name
-    path.pop(); // remove deps/
-    path.push("daemonize");
-    path
+    std::path::PathBuf::from(env!("CARGO_BIN_EXE_daemonize"))
 }
 
 /// Wait for a pidfile to appear and return its contents as a PID.
