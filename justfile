@@ -63,15 +63,24 @@ check-cross:
 # rust; that is also what unblocks the serial_test ignore in dependabot.yml.
 openbsd_rust := "1.90"
 
+# Lowest rustc that must be able to *compile* the dev-dependency graph: the
+# base image of the privileged container tier, which runs
+# `cargo build --locked --tests` and so builds every dev-dependency. It is a
+# release-gating tier, so a dev-dep landing between this and `openbsd_rust`
+# would pass the cheap guard below and break the expensive one. Headroom is
+# zero today: heapless declares exactly this. `tests/toolchain_floors.rs` holds
+# the Dockerfile's `FROM rust:` to it.
+docker_rust := "1.87"
+
 # Fail if a resolved dependency declares a rust-version too high for the
 # toolchains CI must satisfy. Two floors, because the failure modes differ:
 #
 #   runtime deps (normal + build) — must fit this crate's MSRV, or consumers
 #       on that MSRV cannot build blivet at all.
-#   dev-dependencies — need only fit {{openbsd_rust}}, the oldest rustc that
-#       runs our test suite. Over-declaring is common (heapless declares 1.87
-#       yet compiles on 1.85), so holding dev-deps to the crate MSRV would
-#       reject working graphs.
+#   dev-dependencies — need only fit the oldest rustc that builds or runs our
+#       test suite, which is the lower of {{openbsd_rust}} and {{docker_rust}}.
+#       Over-declaring is common (heapless declares 1.87 yet compiles on 1.85),
+#       so holding dev-deps to the crate MSRV would reject working graphs.
 #
 # Cargo is not a backstop for either: the toolchain the msrv job pins (1.85)
 # predates the resolver diagnostic and silently compiled serial_test 4.x
@@ -87,6 +96,13 @@ msrv-check:
     # `sort -V` orders 1.85 before 1.85.0 — so a dep that exactly MEETS the
     # floor would be reported as exceeding it. Pad both to three parts first.
     pad() { awk -F. '{ printf "%d.%d.%d\n", $1, ($2 == "" ? 0 : $2), ($3 == "" ? 0 : $3) }' <<<"$1"; }
+    # The dev floor is whichever of the two test toolchains is older.
+    if [ "$(printf '%s\n%s\n' "$(pad {{openbsd_rust}})" "$(pad {{docker_rust}})" \
+        | sort -V | head -1)" = "$(pad {{docker_rust}})" ]; then
+        dev_floor={{docker_rust}}
+    else
+        dev_floor={{openbsd_rust}}
+    fi
     runtime=$(cargo tree -e normal,build --prefix none {{locked}} \
         | awk 'NF >= 2 { sub(/^v/, "", $2); print $1 "@" $2 }' | sort -u)
     offenders=$(cargo metadata --format-version 1 {{locked}} \
@@ -96,7 +112,7 @@ msrv-check:
             if grep -qxF "$pkg" <<<"$runtime"; then
                 floor=$msrv kind=runtime
             else
-                floor={{openbsd_rust}} kind=dev
+                floor=$dev_floor kind=dev
             fi
             padded_req=$(pad "$req")
             [ "$(printf '%s\n%s\n' "$(pad "$floor")" "$padded_req" | sort -V | head -1)" = "$padded_req" ] \
@@ -108,7 +124,7 @@ msrv-check:
         echo "pin the dependency back, or raise the floor deliberately"
         exit 1
     fi
-    echo "dependencies fit MSRV $msrv (runtime) and {{openbsd_rust}} (dev)"
+    echo "dependencies fit MSRV $msrv (runtime) and $dev_floor (dev)"
 
 # A non-Unix target must fail with exactly one diagnostic: the `compile_error!`
 # in `src/lib.rs` naming the target. Everything else in the crate is gated on
