@@ -29,10 +29,6 @@ fn run_tier(dir: &Path) -> Output {
         .arg("scripts/privileged-test.sh")
         .current_dir(repo_root())
         .env("PATH", format!("{}:{path}", dir.display()))
-        // The script sets this itself for the run it guards; inheriting it
-        // from a tier that is already running would judge the stubs against a
-        // demand this test did not make.
-        .env_remove("ASSERT_NO_SKIPPED")
         .output()
         .expect("the tier script runs")
 }
