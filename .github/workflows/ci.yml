@@ -53,6 +53,20 @@ jobs:
       - name: Test on MSRV
         run: just test
 
+  # `src/` ships and the rest of the repository does not, so a `#[cfg(test)]`
+  # guard in `src/` that reaches outside `Cargo.toml`'s include list passes in a
+  # checkout and fails for whoever installs the crate. That shipped once. This
+  # is the only job that compiles the packaged file set.
+  package-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@just
+      - name: Test the crate as a consumer receives it
+        run: just package-test
+
   docker-test:
     runs-on: ubuntu-latest
     steps:
