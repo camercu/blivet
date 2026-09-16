@@ -258,10 +258,10 @@ and notification pipe. The methods you reach for most: `notify_parent()`,
 
 ### Errors & exit codes
 
-`DaemonizeError` has sixteen variants covering validation, fork, setsid, lock,
-permission, chown, exec, and parent-notify failures, plus a caller-supplied
-`Application` variant. Each maps to a `sysexits.h` exit code via `exit_code()`,
-so failures reach the shell with a meaningful status:
+`DaemonizeError` covers validation, fork, setsid, lock, permission, chown, exec,
+and parent-notify failures, plus a caller-supplied `Application` variant. Each
+variant maps to a `sysexits.h` exit code via `exit_code()`, so failures reach
+the shell with a meaningful status:
 
 | Variant            | Exit code   | Meaning                                  |
 | ------------------ | ----------- | ---------------------------------------- |
