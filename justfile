@@ -83,6 +83,10 @@ msrv-check:
     msrv=$(cargo metadata --format-version 1 --no-deps \
         | jq -r '.packages[] | select(.name == "blivet") | .rust_version')
     [ -n "$msrv" ] && [ "$msrv" != "null" ] || { echo "no rust-version in Cargo.toml"; exit 1; }
+    # `rust-version` may be spelled with or without a patch component, and
+    # `sort -V` orders 1.85 before 1.85.0 — so a dep that exactly MEETS the
+    # floor would be reported as exceeding it. Pad both to three parts first.
+    pad() { awk -F. '{ printf "%d.%d.%d\n", $1, ($2 == "" ? 0 : $2), ($3 == "" ? 0 : $3) }' <<<"$1"; }
     runtime=$(cargo tree -e normal,build --prefix none {{locked}} \
         | awk 'NF >= 2 { sub(/^v/, "", $2); print $1 "@" $2 }' | sort -u)
     offenders=$(cargo metadata --format-version 1 {{locked}} \
@@ -94,7 +98,8 @@ msrv-check:
             else
                 floor={{openbsd_rust}} kind=dev
             fi
-            [ "$(printf '%s\n%s\n' "$floor" "$req" | sort -V | head -1)" = "$req" ] \
+            padded_req=$(pad "$req")
+            [ "$(printf '%s\n%s\n' "$(pad "$floor")" "$padded_req" | sort -V | head -1)" = "$padded_req" ] \
                 || echo "  $pkg ($kind) requires rustc $req > $floor"
         done)
     if [ -n "$offenders" ]; then
