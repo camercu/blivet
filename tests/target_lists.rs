@@ -162,3 +162,32 @@ fn the_best_effort_tier_is_type_checked() {
          {line}"
     );
 }
+
+/// The recipes above are only worth guarding if the gate still runs them.
+///
+/// `every_target_list_carries_the_whole_table` and
+/// `the_best_effort_tier_is_type_checked` both assert what `check-cross` and
+/// `check-non-unix` *contain*. Neither asks whether `check` still depends on
+/// them, so deleting both from the dependency list leaves every guard here
+/// green while CI silently stops type-checking Android, FreeBSD, NetBSD and
+/// illumos — the failure this file's header blames for the Android break
+/// reaching a release.
+#[test]
+fn the_gate_still_depends_on_the_cross_recipes() {
+    let justfile = read("justfile");
+    let line = justfile
+        .lines()
+        .map(|l| code_before(l, "#"))
+        .find(|l| l.trim_start().starts_with("check:"))
+        .expect("the justfile has a `check:` recipe");
+    let dependencies: Vec<&str> = line.split_whitespace().skip(1).collect();
+
+    for recipe in ["check-cross", "check-non-unix"] {
+        assert!(
+            dependencies.contains(&recipe),
+            "`check` no longer depends on `{recipe}`, so nothing runs it and \
+             the guards over its contents prove nothing. Dependencies are: \
+             {dependencies:?}"
+        );
+    }
+}
