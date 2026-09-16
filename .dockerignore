@@ -8,3 +8,4 @@ target/
 node_modules/
 mutants.out/
 mutants.out.old/
+.harden/
