@@ -328,9 +328,10 @@ fn nextest_summary_with_skips(count: &str, skipped: &str) -> String {
 ///
 /// Keyed on the runner rather than on one literal, because a tier that changes
 /// harness must not fall out of the rules below by doing so — `just test`
-/// already moved from one to another. `cargo llvm-cov --lcov` is absent
-/// deliberately: the coverage job produces an artefact and makes no support
-/// claim, and it is advisory in CI.
+/// already moved from one to another. The coverage runner is listed with the
+/// rest: a report measured from zero tests is a confident 0%, which is a
+/// falsehood the artefact carries onward, so it needs the guard as much as a
+/// support-claiming tier does.
 const TEST_RUNNERS: [&str; 3] = ["cargo test", "cargo nextest run", "llvm-cov nextest"];
 
 /// How many test commands `command` runs.
