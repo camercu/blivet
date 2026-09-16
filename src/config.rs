@@ -300,8 +300,9 @@ impl DaemonConfig {
     /// - Any configured path (pidfile, stdout, stderr, lockfile) is not absolute
     /// - The chdir path is not absolute, does not exist, or is not a directory
     /// - The pidfile path is a directory
-    /// - Parent directories of configured paths are not writable, or their
-    ///   writability could not be determined (the errno is named)
+    /// - Parent directories of configured paths are not writable — by
+    ///   permission, or because the filesystem is read-only — or the probe
+    ///   could not answer at all (the errno is named)
     /// - Lockfile or pidfile overlaps with stdout or stderr
     /// - The umask does not fit in the 12 permission bits (`> 0o7777`)
     /// - An environment key is empty or contains `=`
@@ -507,10 +508,13 @@ fn validate_parent_writable(path: &std::path::Path, name: &str) -> Result<(), Da
 /// how an `EINVAL` from a flag bionic does not accept reached users as a false
 /// permission error.
 ///
-/// Two errnos actually arrive here. `EINVAL` is that rejected flag. `EROFS` is
-/// the honest edge: the directory really is unwritable, on a read-only
-/// filesystem rather than by permission; naming it tells the caller more than
-/// the permission claim would.
+/// Two errnos actually arrive here. `EINVAL` is that rejected flag, and the
+/// probe could not answer, so the message says the check failed. `EROFS` is the
+/// honest edge: the probe *did* answer — the directory really is unwritable, on
+/// a read-only filesystem rather than by permission — so it gets its own arm
+/// saying that, which is both determinate and actionable. It is also the common
+/// one: `/` is read-only on macOS under SSV, as is any read-only container
+/// mount.
 ///
 /// The errnos that describe the path rather than its permissions — `ENOTDIR`,
 /// `ELOOP` — cannot reach this function from [`DaemonConfig::validate`]: the
@@ -524,10 +528,12 @@ fn writability_error(
     errno: nix::errno::Errno,
 ) -> DaemonizeError {
     let parent = parent.display();
-    DaemonizeError::ValidationError(if errno == nix::errno::Errno::EACCES {
-        format!("{name} parent directory is not writable: {parent}")
-    } else {
-        format!("{name} parent directory writability check failed ({errno}): {parent}")
+    DaemonizeError::ValidationError(match errno {
+        nix::errno::Errno::EACCES => format!("{name} parent directory is not writable: {parent}"),
+        nix::errno::Errno::EROFS => {
+            format!("{name} parent directory is on a read-only filesystem (EROFS): {parent}")
+        }
+        _ => format!("{name} parent directory writability check failed ({errno}): {parent}"),
     })
 }
 
@@ -1303,6 +1309,47 @@ mod tests {
         let report = crate::test_support::subprocess_report(NAME, &output);
         let _ = std::fs::remove_dir_all(&dir);
         assert!(output.status.success(), "{report}");
+    }
+
+    /// The two errnos that reach the probe describe different situations, and
+    /// the message has to keep them apart.
+    ///
+    /// `EROFS` is a determinate answer — the directory really is unwritable —
+    /// so a message saying the check *failed* would be wrong, and it is the
+    /// message most users meet: `/` is read-only on macOS under SSV, as is any
+    /// read-only container mount. `EINVAL` is the indeterminate one: the probe
+    /// could not run. Neither is reproducible through `validate`, so they are
+    /// tested on the helper that formats them.
+    // Covers: R141
+    #[test]
+    fn a_read_only_filesystem_is_reported_as_the_answer_it_is() {
+        let path = std::path::Path::new("/ro");
+        let msg = |errno| match writability_error("pidfile", path, errno) {
+            DaemonizeError::ValidationError(msg) => msg,
+            other => panic!("expected ValidationError, got {other:?}"),
+        };
+
+        let erofs = msg(nix::errno::Errno::EROFS);
+        assert!(
+            erofs.contains("read-only filesystem") && erofs.contains("EROFS"),
+            "EROFS determines writability, so say so and name it: {erofs}"
+        );
+        assert!(
+            !erofs.contains("check failed"),
+            "the EROFS probe did not fail, it answered: {erofs}"
+        );
+
+        let einval = msg(nix::errno::Errno::EINVAL);
+        assert!(
+            einval.contains("check failed") && einval.contains("EINVAL"),
+            "EINVAL means the probe could not answer, and must name itself: {einval}"
+        );
+
+        let eacces = msg(nix::errno::Errno::EACCES);
+        assert!(
+            eacces.contains("is not writable"),
+            "EACCES is the answer the probe asked for: {eacces}"
+        );
     }
 
     /// The claim R141 makes about which errnos reach the probe, tested where
