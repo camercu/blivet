@@ -494,3 +494,63 @@ fn a_guard_invocation_wraps_one_test_command() {
         offenders.join("\n")
     );
 }
+
+/// Each tier that must still run a suite, and whether the guard can recognise
+/// that suite as a `cargo test` command.
+///
+/// `Dockerfile` is absent on purpose: it runs `scripts/privileged-test.sh`,
+/// which is on the list in its own right. `android-smoke.sh` is held to a
+/// guarded invocation rather than a guarded `cargo test`, because it runs a
+/// prebuilt test binary over `adb` — the same limit
+/// [`a_guard_invocation_wraps_one_test_command`] records for the NetBSD VM and
+/// the Android device.
+/// The runner whose presence does not, on its own, back a support claim.
+///
+/// The coverage job is `continue-on-error` and advisory. It still needs the
+/// guard — a report measured from zero tests is a confident 0% — but it must
+/// not be what keeps a tier file over the floor below, or deleting every
+/// support-claiming suite from `ci.yml` would go unnoticed.
+const ADVISORY_RUNNER: &str = "llvm-cov";
+
+const TIERS_THAT_RUN_TESTS: [(&str, bool); 4] = [
+    ("Dockerfile.termux", true),
+    ("privileged-test.sh", true),
+    ("ci.yml", true),
+    ("android-smoke.sh", false),
+];
+
+#[test]
+fn every_tier_that_claims_support_still_runs_a_guarded_suite() {
+    // Both scan tests above only ever grow `offenders` from a violation, so
+    // both pass when a tier's test step is *deleted* rather than unwrapped —
+    // and the support claim it backed loses its only backing in silence.
+    // `ci.yml` alone carries the only library-suite run for FreeBSD, OpenBSD
+    // and NetBSD, three of the six platforms in the README's Supported row.
+    //
+    // `tier_files()` guards its own glob against matching nothing for exactly
+    // this reason; the rules it feeds had no floor of their own.
+    for (tier, runs_cargo) in TIERS_THAT_RUN_TESTS {
+        let path = tier_files()
+            .into_iter()
+            .find(|p| p.file_name().is_some_and(|n| n == tier))
+            .unwrap_or_else(|| panic!("{tier} is a tier file and must exist"));
+        let text = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("{tier} must be readable: {e}"));
+
+        let wrapped = wrapped_commands(&text);
+        let guarded = if runs_cargo {
+            wrapped
+                .iter()
+                .filter(|command| test_commands(command) > 0 && !command.contains(ADVISORY_RUNNER))
+                .count()
+        } else {
+            wrapped.len()
+        };
+        assert!(
+            guarded > 0,
+            "{tier} no longer runs a suite through the guard. A tier that \
+             stops running its suite proves nothing, and the two scan rules \
+             above cannot see a deleted step — only an unguarded one."
+        );
+    }
+}
