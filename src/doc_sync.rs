@@ -107,27 +107,44 @@ fn supported_tier_matches_the_capability_table() {
     }
 }
 
-/// Platforms named in the last cell of the tier table's Supported row.
+/// Platforms named in the Supported row's `Platforms` column.
+///
+/// The column is found by its header, in the nearest header row above the
+/// Supported row, rather than by position. Reading the last cell survives a
+/// column added on the left and breaks on one added on the right — a Notes or
+/// Since column, the likelier addition — and the break would read as
+/// `build.rs` disagreeing with a doc that in fact still agrees.
 fn supported_tier_row(doc: &str) -> Vec<String> {
-    let row = doc
+    let rows: Vec<Vec<&str>> = doc
         .lines()
         .map(str::trim)
-        .find(|l| {
-            l.starts_with('|')
-                && l.split('|')
-                    .nth(1)
-                    .is_some_and(|c| c.trim().trim_matches('*') == "Supported")
+        .filter(|l| l.starts_with('|'))
+        .map(|l| l.split('|').map(str::trim).collect())
+        .collect();
+
+    let supported = rows
+        .iter()
+        .position(|cells| {
+            cells
+                .get(1)
+                .is_some_and(|c| c.trim_matches('*') == "Supported")
         })
         .expect("the tier table has a Supported row");
-    // The last non-empty cell — a markdown row splits to an empty lead and
-    // trailing cell — rather than a fixed index, which would quietly read the
-    // wrong column if the table gained one and then blame `build.rs` for the
-    // mismatch.
-    let cells: Vec<&str> = row.split('|').map(str::trim).collect();
-    cells
+
+    let column = rows[..supported]
         .iter()
-        .rfind(|c| !c.is_empty())
-        .unwrap_or_else(|| panic!("the Supported row should have a platforms cell, got: {row}"))
+        .rev()
+        .find_map(|cells| cells.iter().position(|c| *c == "Platforms"))
+        .expect("the tier table has a Platforms column above its Supported row");
+
+    rows[supported]
+        .get(column)
+        .unwrap_or_else(|| {
+            panic!(
+                "the Supported row has no cell under the Platforms column, got: {:?}",
+                rows[supported]
+            )
+        })
         .split(',')
         .map(|p| p.trim().to_string())
         .filter(|p| !p.is_empty())
