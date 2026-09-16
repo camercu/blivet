@@ -207,7 +207,7 @@ jobs:
   # flaky, `cross test --target aarch64-linux-android` trades the real kernel
   # for far less plumbing.
   #
-  # Advisory, like `coverage`: release.yml runs on this workflow concluding
+  # Advisory, per docs/adr/0003: release.yml runs on this workflow concluding
   # success, so without this an emulator that failed to boot would hold up the
   # release of every commit in that push. The Android release gate is tier 2,
   # the bionic container, which runs the library suite on the real libc and
