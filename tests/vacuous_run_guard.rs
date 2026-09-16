@@ -409,6 +409,23 @@ fn logical_lines(text: &str) -> Vec<String> {
     out
 }
 
+/// The commands a logical line runs, split on the shell's separators.
+///
+/// A guard invocation wraps the command it prefixes, not everything that
+/// follows it on the line: in `sh scripts/GUARD true; cargo test --lib` the
+/// suite is unguarded. Judging the line as one unit hides that, because the
+/// text before the first guard holds no test command.
+fn shell_commands(line: &str) -> Vec<String> {
+    const SEPARATOR: char = '\u{1}';
+    line.replace("&&", &SEPARATOR.to_string())
+        .replace("||", &SEPARATOR.to_string())
+        .replace(';', &SEPARATOR.to_string())
+        .split(SEPARATOR)
+        .map(|c| c.trim().to_string())
+        .filter(|c| !c.is_empty())
+        .collect()
+}
+
 #[test]
 fn every_tier_runs_its_tests_through_the_guard() {
     // A tier that runs its suite bare reports success having possibly proven
@@ -420,14 +437,16 @@ fn every_tier_runs_its_tests_through_the_guard() {
         let text = std::fs::read_to_string(&path)
             .unwrap_or_else(|e| panic!("{caller} must be readable: {e}"));
         for line in logical_lines(&text) {
-            // `--no-run` compiles a suite for another platform and runs
-            // nothing, so there is no run here for the guard to judge.
-            if line.contains("--no-run") {
-                continue;
-            }
-            let before_any_guard = line.split(GUARD).next().unwrap_or(&line);
-            if test_commands(before_any_guard) > 0 {
-                offenders.push(format!("  {caller}: {}", line.trim()));
+            for command in shell_commands(&line) {
+                // `--no-run` compiles a suite for another platform and runs
+                // nothing, so there is no run here for the guard to judge.
+                if command.contains("--no-run") {
+                    continue;
+                }
+                let before_any_guard = command.split(GUARD).next().unwrap_or(&command);
+                if test_commands(before_any_guard) > 0 {
+                    offenders.push(format!("  {caller}: {}", command.trim()));
+                }
             }
         }
     }
