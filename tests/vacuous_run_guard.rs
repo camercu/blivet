@@ -344,19 +344,46 @@ fn test_commands(command: &str) -> usize {
 /// The tier wiring: every place that runs a suite on behalf of a support
 /// claim, and so is subject to the rules below.
 ///
+/// Collected from disk, not listed: a hand-written list is a copy of the
+/// repository that stops matching it, and a tier file added tomorrow would be
+/// unguarded with nothing saying so. Every container image, shell script and
+/// workflow is read; one that runs no tests simply has nothing to offend.
+///
 /// The justfile is not here. The hazard the guard answers is a build cache
 /// that makes sources look older than the artifacts built from them, which is
 /// a container layer cache; a developer's tree and a fresh CI checkout both
-/// give cargo a freshness judgement it can trust. `just test` also runs under
-/// nextest, whose summary line this guard does not read.
-const CALLERS: [&str; 5] = [
-    "Dockerfile",
-    "Dockerfile.termux",
-    "scripts/android-smoke.sh",
-    "scripts/privileged-test.sh",
-    ".github/workflows/ci.yml",
-];
-
+/// give cargo a freshness judgement it can trust.
+fn tier_files() -> Vec<PathBuf> {
+    let root = repo_root();
+    let mut files: Vec<PathBuf> = Vec::new();
+    for dir in ["", "scripts", ".github/workflows"] {
+        let Ok(entries) = std::fs::read_dir(root.join(dir)) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let name = path.file_name().unwrap_or_default().to_string_lossy();
+            let wanted =
+                name.starts_with("Dockerfile") || name.ends_with(".sh") || name.ends_with(".yml");
+            if path.is_file() && wanted {
+                files.push(path);
+            }
+        }
+    }
+    files.sort();
+    // A glob that matched nothing would make every rule below vacuous, and the
+    // tier files it should have found are the ones this crate cannot ship
+    // without.
+    for required in ["Dockerfile", "Dockerfile.termux", "ci.yml"] {
+        assert!(
+            files
+                .iter()
+                .any(|f| f.file_name().is_some_and(|n| n == required)),
+            "the tier-file scan did not find {required}; it found {files:?}"
+        );
+    }
+    files
+}
 /// `text` as whole commands: comments dropped, `\` continuations joined, and
 /// the quoting of a JSON-array `CMD` flattened so it reads like a shell line.
 fn logical_lines(text: &str) -> Vec<String> {
@@ -386,10 +413,9 @@ fn every_tier_runs_its_tests_through_the_guard() {
     // A tier that runs its suite bare reports success having possibly proven
     // nothing, which is the outcome the guard exists to turn red. The check is
     // per command: a `cargo test` with no guard ahead of it on its own line.
-    let root = repo_root();
     let mut offenders = Vec::new();
-    for caller in CALLERS {
-        let path = root.join(caller);
+    for path in tier_files() {
+        let caller = path.file_name().unwrap_or_default().to_string_lossy();
         let text = std::fs::read_to_string(&path)
             .unwrap_or_else(|e| panic!("{caller} must be readable: {e}"));
         for line in logical_lines(&text) {
@@ -443,10 +469,9 @@ fn a_guard_invocation_wraps_one_test_command() {
     // Counted on `cargo test`, so a tier running a prebuilt test binary — the
     // NetBSD VM and the Android device — is outside what this proves; each of
     // those runs exactly one binary today.
-    let root = repo_root();
     let mut offenders = Vec::new();
-    for caller in CALLERS {
-        let path = root.join(caller);
+    for path in tier_files() {
+        let caller = path.file_name().unwrap_or_default().to_string_lossy();
         let text = std::fs::read_to_string(&path)
             .unwrap_or_else(|e| panic!("{caller} must be readable: {e}"));
         for command in wrapped_commands(&text) {
