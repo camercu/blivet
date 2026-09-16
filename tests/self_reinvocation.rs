@@ -7,7 +7,9 @@
 //! child also prints a summary line of its own, and `scripts/assert-tests-ran.sh`
 //! counts those. `test_support::rerun_in_subprocess` captures the child and
 //! reports its streams only when it failed, so every re-invocation goes through
-//! that one helper and no other library source names `current_exe`.
+//! that one helper, and no other source in `src/` or `tests/` names
+//! `current_exe`. The CLI's own path comes from Cargo's `CARGO_BIN_EXE_*`, so
+//! locating a built binary is not a reason to reach for it.
 
 use std::path::PathBuf;
 
@@ -22,9 +24,12 @@ fn only_test_support_re_invokes_the_test_binary() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let mut files = Vec::new();
     rust_files(&root.join("src"), &mut files);
+    rust_files(&root.join("tests"), &mut files);
     files.sort();
 
-    let offenders = offending_lines(&root, &files, OWNER, |code| code.contains("current_exe"));
+    // Spelled in two halves so this file does not match its own scan.
+    let needle = format!("current{}exe", "_");
+    let offenders = offending_lines(&root, &files, OWNER, |code| code.contains(&needle));
 
     assert!(
         offenders.is_empty(),
