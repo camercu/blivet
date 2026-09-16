@@ -10,8 +10,9 @@ test_tool = "nextest"
 # Unkillable false positives, excluded with reasons:
 #
 # Equivalent mutants: `|` over disjoint bitflag constants is value-identical
-# to `^` (no shared bits), so no test can ever kill these. Scoped to the
-# exact functions that OR constant flags; `|`→`&` is not excluded because it
+# to `^` (no shared bits), so no test can ever kill these. Anchored on the end
+# of the description, so each is scoped to the exact function that ORs constant
+# flags and not to a future `thread_count_*`; `|`→`&` is not excluded because it
 # does change the value.
 #
 # The unsupported-target stubs are excluded too, but not from here: they carry
@@ -29,7 +30,7 @@ test_tool = "nextest"
 # it in, and every entry below is then one honest category.
 exclude_re = [
     # -- equivalent bitflag mutants --
-    'replace \| with \^ in open_and_lock',
-    'replace \| with \^ in plan_output_redirect',
-    'replace \| with \^ in thread_count',
+    'replace \| with \^ in open_and_lock$',
+    'replace \| with \^ in plan_output_redirect$',
+    'replace \| with \^ in thread_count$',
 ]
