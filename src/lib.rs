@@ -387,6 +387,7 @@ pub fn daemonize(config: &DaemonConfig) -> Result<DaemonContext, DaemonizeError>
 /// Always panics: the operation is unsupported on this target.
 #[cfg(unix)]
 #[cfg(not(blivet_thread_count))]
+#[cfg_attr(test, mutants::skip)]
 #[deprecated(note = "daemonize cannot verify the thread count on this target. \
             Call `unsafe { daemonize_unchecked(&config) }` and ensure the process \
             is single-threaded yourself.")]
