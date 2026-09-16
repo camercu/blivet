@@ -423,6 +423,7 @@ pub(crate) fn list_open_fds() -> Option<Vec<i32>> {
 }
 
 #[cfg(not(blivet_fd_dir))]
+#[cfg_attr(test, mutants::skip)]
 pub(crate) fn list_open_fds() -> Option<Vec<i32>> {
     None
 }

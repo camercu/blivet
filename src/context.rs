@@ -350,6 +350,7 @@ impl DaemonContext {
     ///
     /// Always panics: unsupported on this target.
     #[cfg(not(blivet_thread_count))]
+    #[cfg_attr(test, mutants::skip)]
     #[deprecated(
         note = "drop_privileges cannot verify the thread count on this target. \
                 Call `unsafe { drop_privileges_unchecked() }` and ensure the \
