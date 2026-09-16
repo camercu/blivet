@@ -27,11 +27,11 @@ fi
 # Every test the range moved from an environment-variable skip to `#[ignore]`
 # runs here and nowhere else.
 #
-# ASSERT_NO_SKIPPED: with no filter and every ignored test requested, a skip
-# means the run did not ask for what this tier claims to prove. The guard owns
-# that check, so it reads the summary it already parses rather than a second
-# copy of the same awk here.
-ASSERT_NO_SKIPPED=1 sh scripts/assert-tests-ran.sh \
+# --no-skips: with no filter and every ignored test requested, a skip means the
+# run did not ask for what this tier claims to prove. The guard owns that check,
+# so it reads the summary it already parses rather than a second copy of the
+# same awk here.
+sh scripts/assert-tests-ran.sh --no-skips \
     cargo nextest run --profile privileged --run-ignored all --locked
 
 # Doctests are a separate harness: nextest does not run them, and rustdoc maps

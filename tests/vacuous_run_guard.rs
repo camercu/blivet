@@ -26,8 +26,9 @@ fn guard(inner: &str) -> Output {
 }
 
 /// The same, with `tools` ahead of `PATH` so a test can stand in for a program
-/// the script depends on, and `env` set for the run.
-fn guard_with(inner: &str, tools: Option<&std::path::Path>, env: &[(&str, &str)]) -> Output {
+/// the script depends on, and `options` passed to the guard ahead of the
+/// command.
+fn guard_with(inner: &str, tools: Option<&std::path::Path>, options: &[&str]) -> Output {
     let script = repo_root().join("scripts/assert-tests-ran.sh");
     assert!(
         script.is_file(),
@@ -37,6 +38,7 @@ fn guard_with(inner: &str, tools: Option<&std::path::Path>, env: &[(&str, &str)]
     let mut command = std::process::Command::new("sh");
     command
         .arg(&script)
+        .args(options)
         .arg("sh")
         .arg("-c")
         .arg(inner)
@@ -44,13 +46,6 @@ fn guard_with(inner: &str, tools: Option<&std::path::Path>, env: &[(&str, &str)]
     if let Some(tools) = tools {
         let path = std::env::var("PATH").unwrap_or_default();
         command.env("PATH", format!("{}:{path}", tools.display()));
-    }
-    // Cleared, not merely unset by default: the privileged tier exports this
-    // for its own run, so every test process under that tier inherits it and
-    // these fixtures would be judged against a demand they never made.
-    command.env_remove("ASSERT_NO_SKIPPED");
-    for (key, value) in env {
-        command.env(key, value);
     }
     command.output().expect("the guard script runs")
 }
@@ -266,7 +261,7 @@ fn a_run_asked_to_leave_nothing_out_rejects_a_skip() {
     let out = guard_with(
         &nextest_summary_with_skips("271", "33"),
         None,
-        &[("ASSERT_NO_SKIPPED", "1")],
+        &["--no-skips"],
     );
 
     // THEN the guard rejects it. "Tests ran" is not the claim here; "these
@@ -292,7 +287,7 @@ fn a_run_that_left_nothing_out_passes() {
     let out = guard_with(
         &nextest_summary_with_skips("271", "0"),
         None,
-        &[("ASSERT_NO_SKIPPED", "1")],
+        &["--no-skips"],
     );
 
     // THEN the guard accepts it

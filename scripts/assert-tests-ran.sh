@@ -5,9 +5,22 @@
 # proven nothing. Every container tier runs its suite through here, so that
 # outcome is a red job rather than a silent one.
 #
-# Invoked as `sh scripts/assert-tests-ran.sh <command>...`: Termux has no
-# /bin/sh for a shebang to name.
+# Invoked as `sh scripts/assert-tests-ran.sh [--no-skips] <command>...`: Termux
+# has no /bin/sh for a shebang to name.
 set -eu
+
+# An argument, not an environment variable. A variable set for this script is
+# inherited by the command it runs and by every process below it, so a test
+# that itself runs a test harness inherited the demand and failed on fixtures
+# that never made it — visible only inside the container that set it. Two test
+# files had to scrub the variable by hand to stay correct. An argument reaches
+# this script and stops here.
+no_skips=
+if [ "${1:-}" = "--no-skips" ]; then
+    no_skips=1
+    shift
+fi
+[ "$#" -gt 0 ] || { echo "FAIL: no test command was given." >&2; exit 1; }
 
 # A directory of its own, so concurrent runs cannot read each other's output
 # and conclude the wrong thing about their own. `mktemp -d` honours TMPDIR and
@@ -116,7 +129,7 @@ fi
 # says it covers. Only nextest reports a skip count, which is why this is asked
 # for rather than always checked — libtest's "ignored" is a different thing,
 # the tests the run deliberately did not request.
-if [ "${ASSERT_NO_SKIPPED:-}" = "1" ] && [ "$status" -eq 0 ]; then
+if [ "$no_skips" = 1 ] && [ "$status" -eq 0 ]; then
     skipped=$(awk '
         { gsub(/\033\[[0-9;]*m/, "") }
         /^ *Summary \[/ {
