@@ -37,20 +37,37 @@ fn run_tier(dir: &Path) -> Output {
         .expect("the tier script runs")
 }
 
+/// Where `cargo_reporting`'s stand-in records each command line it was handed.
+const ARGV_LOG: &str = "cargo-argv";
+
 /// A `cargo` that reports a run of `count` tests with `skipped` left out,
 /// answering as whichever harness the script asked for.
+///
+/// It also appends every command line it receives to [`ARGV_LOG`], so a test
+/// can assert which flags the tier asked for. The stand-in cannot answer
+/// differently per flag — it reports the same summary whatever it is handed —
+/// so the flags are invisible to the other tests here.
 fn cargo_reporting(dir: &Path, count: &str, skipped: &str) {
     stub(
         dir,
         "cargo",
         &format!(
-            "if [ \"$1\" = nextest ]; then\n  \
+            "printf '%s\\n' \"$*\" >> \"$(dirname \"$0\")/{ARGV_LOG}\"\n\
+             if [ \"$1\" = nextest ]; then\n  \
                printf '   Summary [   0.1s] {count} tests run: {count} passed, {skipped} skipped\\n'\n\
              else\n  \
                printf 'test result: ok. 16 passed; 0 failed; 2 ignored\\n'\n\
              fi\n"
         ),
     );
+}
+
+/// Every command line [`cargo_reporting`]'s stand-in was handed, in order.
+fn cargo_command_lines(dir: &Path) -> Vec<String> {
+    let log = dir.join(ARGV_LOG);
+    let text = std::fs::read_to_string(&log)
+        .unwrap_or_else(|e| panic!("the stand-in recorded nothing in {}: {e}", log.display()));
+    text.lines().map(str::to_owned).collect()
 }
 
 fn combined(out: &Output) -> String {
@@ -117,5 +134,40 @@ fn a_root_run_that_left_nothing_out_passes() {
         out.status.success(),
         "a root run that skipped nothing must pass; got:\n{}",
         combined(&out)
+    );
+}
+
+#[test]
+fn the_tier_asks_for_the_ignored_corpus() {
+    // GIVEN the tier as the Dockerfile runs it
+    let dir = tempfile::tempdir().unwrap();
+    stub(dir.path(), "id", "echo 0\n");
+    cargo_reporting(dir.path(), "311", "0");
+
+    let out = run_tier(dir.path());
+    assert!(
+        out.status.success(),
+        "the tier must reach its cargo invocations; got:\n{}",
+        combined(&out)
+    );
+
+    // THEN the test run asked for the ignored tests. Dropping the flag is
+    // caught in the real container by the skip count, but the count only
+    // moves because the flag is there, so nothing below this tier's own
+    // script pins the two together.
+    let lines = cargo_command_lines(dir.path());
+    let nextest = lines
+        .iter()
+        .find(|line| line.starts_with("nextest "))
+        .unwrap_or_else(|| {
+            panic!(
+                "the tier ran no nextest command; it ran:\n{}",
+                lines.join("\n")
+            )
+        });
+    assert!(
+        nextest.contains("--run-ignored all"),
+        "the privileged tier exists to run the ignored corpus, so its nextest \
+         command must ask for it; it asked for:\n{nextest}"
     );
 }
