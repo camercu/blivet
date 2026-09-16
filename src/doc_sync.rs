@@ -8,33 +8,30 @@
 
 use crate::DaemonizeError;
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs;
-use std::path::PathBuf;
 
-/// Every repository file these guards read.
+/// The text of a repository file these guards read, baked in at compile time.
 ///
 /// This module ships with the crate, so `cargo test` on a packaged or vendored
 /// copy runs it against only the files `Cargo.toml`'s `include` list carries.
-/// A guard here that reads anything else passes in the repository and panics
-/// for a consumer — which is why [`read`] refuses a path this list does not
-/// name, and why `tests/target_lists.rs` checks the list against `include`.
-/// A guard that needs an unpublished file belongs in `tests/`, which is not
-/// packaged.
-const INPUTS: [&str; 5] = [
-    "Cargo.toml",
-    "README.md",
-    "docs/SPEC.md",
-    "src/lib.rs",
-    "examples/echo_server.rs",
-];
-
-fn read(rel: &str) -> String {
-    assert!(
-        INPUTS.contains(&rel),
-        "{rel} is not in doc_sync::INPUTS, so it may not ship with the crate;          add it there (and to Cargo.toml's include list) or move the guard to          tests/"
-    );
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(rel);
-    fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()))
+/// A guard that reads the repository at run time passes here and panics for
+/// that consumer, which is what shipping a guard that read the justfile did.
+///
+/// `include_str!` moves the failure from the consumer's run to a compile
+/// error naming the missing file. A guard that needs an unpublished file
+/// belongs in `tests/`, which is not packaged.
+fn read(rel: &str) -> &'static str {
+    match rel {
+        "Cargo.toml" => include_str!("../Cargo.toml"),
+        "README.md" => include_str!("../README.md"),
+        "docs/SPEC.md" => include_str!("../docs/SPEC.md"),
+        "src/lib.rs" => include_str!("lib.rs"),
+        "examples/echo_server.rs" => include_str!("../examples/echo_server.rs"),
+        other => panic!(
+            "{other} is not one of the files doc_sync bakes in; add an \
+             include_str! arm for it (and the path to Cargo.toml's include \
+             list), or move the guard to tests/, which is not packaged"
+        ),
+    }
 }
 
 /// `rust-version` in `Cargo.toml` is the one MSRV; the README must echo it in

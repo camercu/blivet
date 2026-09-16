@@ -10,7 +10,8 @@
 //! These live in `tests/`, not beside the other doc guards in
 //! `src/doc_sync.rs`, because they read the justfile: `src/` ships with the
 //! crate and the justfile does not, so a guard there panics for anyone running
-//! `cargo test` on a packaged or vendored copy.
+//! `cargo test` on a packaged or vendored copy. `tests/packaging.rs` holds
+//! that rule for the whole shipped tree.
 
 use std::path::PathBuf;
 
@@ -160,80 +161,4 @@ fn the_best_effort_tier_is_type_checked() {
          resolves to the #[deprecated] stubs, and a deprecation is a warning: \
          {line}"
     );
-}
-
-/// The list of files inside `Cargo.toml`'s `include` array.
-fn included_paths(cargo_toml: &str) -> Vec<String> {
-    let mut paths = Vec::new();
-    let mut inside = false;
-    for line in cargo_toml.lines() {
-        let code = code_before(line, "#").trim();
-        if code.starts_with("include") && code.contains('[') {
-            inside = true;
-            continue;
-        }
-        if !inside {
-            continue;
-        }
-        if code.starts_with(']') {
-            break;
-        }
-        let entry = code.trim_end_matches(',').trim_matches('"');
-        if !entry.is_empty() {
-            paths.push(entry.trim_start_matches('/').to_string());
-        }
-    }
-    assert!(!paths.is_empty(), "parsed no include entries");
-    paths
-}
-
-/// True where `include` carries `path`.
-fn is_packaged(include: &[String], path: &str) -> bool {
-    // Cargo adds these whatever the allowlist says.
-    if path == "Cargo.toml" || path == "Cargo.lock" {
-        return true;
-    }
-    include
-        .iter()
-        .any(|entry| match entry.strip_suffix("/**/*.rs") {
-            Some(dir) => path.starts_with(&format!("{dir}/")) && path.ends_with(".rs"),
-            None => entry == path,
-        })
-}
-
-#[test]
-fn every_file_the_shipped_guards_read_is_packaged() {
-    // `src/doc_sync.rs` ships with the crate, so `cargo test` on a packaged or
-    // vendored copy runs it with only the `include` list present. A guard
-    // there that reads anything else passes here and panics for a consumer —
-    // which is what shipping a guard that read the justfile did. `read`
-    // refuses a path outside INPUTS; this checks INPUTS against `include`, so
-    // the two halves cannot drift.
-    let cargo_toml = read("Cargo.toml");
-    let include = included_paths(&cargo_toml);
-    let doc_sync = read("src/doc_sync.rs");
-
-    let start = doc_sync
-        .find("const INPUTS")
-        .expect("src/doc_sync.rs declares the files its guards read as INPUTS");
-    let end = doc_sync[start..]
-        .find("];")
-        .expect("INPUTS is an array literal")
-        + start;
-    let inputs: Vec<&str> = doc_sync[start..end]
-        .split('"')
-        .skip(1)
-        .step_by(2)
-        .filter(|s| !s.is_empty())
-        .collect();
-    assert!(!inputs.is_empty(), "parsed no INPUTS entries");
-
-    for input in inputs {
-        assert!(
-            is_packaged(&include, input),
-            "src/doc_sync.rs reads {input}, which Cargo.toml's include list \
-             does not carry: a packaged copy would panic. Add it to include, \
-             or move the guard to tests/, which is not packaged."
-        );
-    }
 }
