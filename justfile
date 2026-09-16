@@ -217,6 +217,30 @@ public-api-check:
     cargo +{{public_api_nightly}} public-api --simplified | diff -u public-api.txt - \
         || { echo "public API drifted from public-api.txt — review, then run 'just public-api-bless'"; exit 1; }
 
+# Test the crate as a consumer receives it
+#
+# `src/` ships and the rest of the repository does not, so a `#[cfg(test)]`
+# guard in `src/` that reaches outside `Cargo.toml`'s include list passes in a
+# checkout and fails for a consumer. That shipped once: a guard read the
+# justfile, which is not packaged. `src/doc_sync.rs` bakes its inputs in with
+# `include_str!` now, and `tests/packaging.rs` bans repository paths in shipped
+# sources — but both of those are checked by compiling the packaged file set,
+# which only this recipe does.
+package-test:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    root=$PWD
+    version=$(cargo metadata --format-version 1 --no-deps \
+        | jq -r '.packages[] | select(.name == "blivet") | .version')
+    cargo package --locked
+    work=$(mktemp -d)
+    trap 'rm -rf "$work"' EXIT
+    tar xf "target/package/blivet-$version.crate" -C "$work"
+    cd "$work/blivet-$version"
+    # Through the guard like every other tier: a packaged copy whose tests all
+    # vanished would otherwise report success having proven nothing.
+    sh "$root/scripts/assert-tests-ran.sh" cargo test --locked --lib
+
 # Run everything CI runs (except Docker)
 ci: check test
 
@@ -227,7 +251,7 @@ ci-rtk:
     RTK_CARGO="rtk cargo" just ci
 
 # Run the full CI suite including both container tiers
-ci-full: check test docker-test termux-test
+ci-full: check test package-test docker-test termux-test
 
 # Checks that .releaserc.json's plugins still pick the right release type and
 # render commits into the notes. A preset/plugin major mismatch otherwise
