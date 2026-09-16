@@ -27,21 +27,32 @@ fn manifest_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 }
 
-/// All requirement numbers declared in the SPEC (`- R<n>. ...`).
-fn spec_requirements() -> BTreeSet<u32> {
+/// Every requirement number the SPEC declares (`- R<n>. ...`), in the order it
+/// declares them, repeats included.
+///
+/// A set would collapse a repeat before anything could see it, and a repeat is
+/// the one thing [`spec_numbering_is_contiguous_and_unique`] exists to catch:
+/// two `- R42.` lines make every `// Covers: R42` tag ambiguous, and the
+/// coverage ratchet counts the pair once.
+fn spec_requirement_numbers() -> Vec<u32> {
     let spec = std::fs::read_to_string(manifest_dir().join("docs/SPEC.md")).unwrap();
-    let mut reqs = BTreeSet::new();
+    let mut reqs = Vec::new();
     for line in spec.lines() {
         let t = line.trim_start();
         if let Some(rest) = t.strip_prefix("- R") {
             if let Some(num) = rest.split('.').next() {
                 if let Ok(n) = num.parse::<u32>() {
-                    reqs.insert(n);
+                    reqs.push(n);
                 }
             }
         }
     }
     reqs
+}
+
+/// The distinct requirement numbers the SPEC declares.
+fn spec_requirements() -> BTreeSet<u32> {
+    spec_requirement_numbers().into_iter().collect()
 }
 
 /// Requirement numbers named in `// Covers: R..` tags across the test sources.
@@ -74,7 +85,21 @@ fn covered_requirements() -> BTreeSet<u32> {
 
 #[test]
 fn spec_numbering_is_contiguous_and_unique() {
-    let reqs = spec_requirements();
+    let numbers = spec_requirement_numbers();
+    let reqs: BTreeSet<u32> = numbers.iter().copied().collect();
+
+    let mut repeated: Vec<u32> = numbers
+        .iter()
+        .filter(|n| numbers.iter().filter(|m| m == n).count() > 1)
+        .copied()
+        .collect();
+    repeated.dedup();
+    assert!(
+        repeated.is_empty(),
+        "SPEC declares requirement number(s) more than once, so every \
+         `// Covers:` tag naming one is ambiguous: {repeated:?}"
+    );
+
     let max = *reqs.iter().max().expect("SPEC has requirements");
     let expected: BTreeSet<u32> = (1..=max).collect();
     let missing: Vec<u32> = expected.difference(&reqs).copied().collect();
