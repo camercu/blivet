@@ -1271,8 +1271,11 @@ verification points.
 - R84. All builder methods: `&mut self` → `&mut Self`, infallible.
 - R85. `daemonize_unchecked()` calls `validate()` before forking.
 - R86. `daemonize_unchecked()` is `pub unsafe fn`.
-- R87. `daemonize()` is `pub fn` on linux/macos/freebsd/netbsd/
-  openbsd; a `#[deprecated]` panic stub on other targets.
+- R87. `daemonize()` is `pub fn` wherever the capability table grants
+  `thread_count`; a `#[deprecated]` panic stub on other targets. The
+  requirement names the capability rather than the platforms: a list
+  here is a copy of the table that nothing checks, and it went stale on
+  Android once already.
 - R88. Crate root: `#![deny(unsafe_code)]`.
 - R89. Raw FFI is concentrated in `unsafe_ops`; the only `unsafe` outside
   it is the `fork()` call in `forker.rs` and `daemonize_unchecked` / its
