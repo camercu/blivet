@@ -13,6 +13,7 @@
 //! `cargo test` on a packaged or vendored copy. `tests/packaging.rs` holds
 //! that rule for the whole shipped tree.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 mod common;
@@ -163,31 +164,95 @@ fn the_best_effort_tier_is_type_checked() {
     );
 }
 
+/// The dependency list of every recipe in the justfile, keyed by recipe name.
+///
+/// A recipe header is a line that starts in column 0, names the recipe, then
+/// `:`, then the recipes it depends on. `:=` is an assignment, not a header.
+fn recipe_dependencies(justfile: &str) -> BTreeMap<&str, Vec<&str>> {
+    let mut graph = BTreeMap::new();
+    for line in justfile.lines() {
+        let code = code_before(line, "#");
+        if code.starts_with([' ', '\t']) || code.contains(":=") {
+            continue;
+        }
+        let Some((name, dependencies)) = code.split_once(':') else {
+            continue;
+        };
+        let name = name.trim();
+        if name.is_empty() || name.contains(char::is_whitespace) {
+            continue;
+        }
+        graph.insert(name, dependencies.split_whitespace().collect());
+    }
+    graph
+}
+
+/// Every recipe `just entry` ends up running, `entry` included.
+fn reachable_from<'a>(
+    entry: &'a str,
+    graph: &BTreeMap<&'a str, Vec<&'a str>>,
+) -> BTreeSet<&'a str> {
+    let mut reached = BTreeSet::new();
+    let mut pending = vec![entry];
+    while let Some(recipe) = pending.pop() {
+        if !reached.insert(recipe) {
+            continue;
+        }
+        pending.extend(graph.get(recipe).into_iter().flatten());
+    }
+    reached
+}
+
 /// The recipes above are only worth guarding if the gate still runs them.
 ///
 /// `every_target_list_carries_the_whole_table` and
 /// `the_best_effort_tier_is_type_checked` both assert what `check-cross` and
-/// `check-non-unix` *contain*. Neither asks whether `check` still depends on
-/// them, so deleting both from the dependency list leaves every guard here
-/// green while CI silently stops type-checking Android, FreeBSD, NetBSD and
-/// illumos — the failure this file's header blames for the Android break
-/// reaching a release.
+/// `check-non-unix` *contain*. Neither asks whether anything runs them, so
+/// deleting both from `check` leaves every guard here green while CI silently
+/// stops type-checking Android, FreeBSD, NetBSD and illumos — the failure this
+/// file's header blames for the Android break reaching a release.
+///
+/// Reachability, not one hop: an earlier version of this test asked only
+/// whether `check` still listed them, and dropping `check` from `ci` one link
+/// further up severed the same tier with the guard still green. Asking what
+/// `ci` reaches covers every link at once, however the recipes are rearranged.
 #[test]
-fn the_gate_still_depends_on_the_cross_recipes() {
+fn the_cross_recipes_are_reachable_from_the_gate() {
     let justfile = read("justfile");
-    let line = justfile
-        .lines()
-        .map(|l| code_before(l, "#"))
-        .find(|l| l.trim_start().starts_with("check:"))
-        .expect("the justfile has a `check:` recipe");
-    let dependencies: Vec<&str> = line.split_whitespace().skip(1).collect();
+    let graph = recipe_dependencies(&justfile);
+    let reached = reachable_from("ci", &graph);
 
+    assert!(
+        reached.contains("test"),
+        "`ci` reaches neither the test recipe nor, presumably, anything else: \
+         {reached:?}. The justfile's shape probably outgrew the parser above"
+    );
     for recipe in ["check-cross", "check-non-unix"] {
         assert!(
-            dependencies.contains(&recipe),
-            "`check` no longer depends on `{recipe}`, so nothing runs it and \
-             the guards over its contents prove nothing. Dependencies are: \
-             {dependencies:?}"
+            reached.contains(recipe),
+            "`just ci` no longer reaches `{recipe}`, so nothing runs it and the \
+             guards over its contents prove nothing. It reaches: {reached:?}"
         );
     }
+}
+
+/// And the gate is only worth guarding if CI still calls it.
+///
+/// `the_cross_recipes_are_reachable_from_the_gate` starts at `ci` because that
+/// is what the fast tier runs. Pointing that tier at a narrower recipe drops
+/// the whole static-check half of CI — format, lint, deny, doc, MSRV and both
+/// cross checks — and leaves the justfile, and so every guard reading it,
+/// untouched.
+#[test]
+fn the_fast_tier_still_runs_the_gate() {
+    let workflow = read(".github/workflows/ci.yml");
+    let runs_the_gate = workflow.lines().any(|line| {
+        let command = line.trim().strip_prefix("run:").unwrap_or(line);
+        command.split_whitespace().eq(["just", "ci"])
+    });
+    assert!(
+        runs_the_gate,
+        "no step in .github/workflows/ci.yml runs `just ci`, so the recipes \
+         the gate depends on are never run in CI, whatever the justfile says"
+    );
 }
