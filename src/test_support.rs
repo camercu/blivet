@@ -82,20 +82,38 @@ pub(crate) fn run_in_subprocess(test_name: &str) {
 /// `--include-ignored` is required: without it a test marked `#[ignore]` is
 /// skipped, the child exits 0, and the caller passes *vacuously* without ever
 /// running the body.
+///
+/// The child is judged on having run the test, not only on how it exited.
+/// `test_name` is a literal in the caller, and libtest exits 0 when its filter
+/// matches nothing, so a rename or a module move would otherwise turn the
+/// caller into a silent no-op that still reports ok — the vacuity
+/// `scripts/assert-tests-ran.sh` catches one level up, inside the test binary.
+/// A caller that expects the child to fail, or to die on a signal, still gets
+/// its own verdict from the returned [`Output`]; this only rules out the child
+/// having run nothing.
 pub(crate) fn rerun_in_subprocess(
     test_name: &str,
     marker: &str,
     value: impl AsRef<OsStr>,
 ) -> Output {
     let exe = std::env::current_exe().unwrap();
-    Command::new(exe)
+    let output = Command::new(exe)
         .arg("--exact")
         .arg(test_name)
         .arg("--include-ignored")
         .arg("--nocapture")
         .env(marker, value)
         .output()
-        .unwrap()
+        .unwrap();
+    // libtest announces the filtered count before it runs anything, so this
+    // holds even for a child that is killed part-way through its body.
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("running 1 test\n"),
+        "subprocess test {test_name} matched no test, so its body never ran. \
+         Has it been renamed or moved? {}",
+        subprocess_report(test_name, &output)
+    );
+    output
 }
 
 /// Renders a finished subprocess for a failure message: how it ended, and both
