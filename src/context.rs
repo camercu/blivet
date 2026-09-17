@@ -310,9 +310,9 @@ impl DaemonContext {
     ///
     /// # Platform support
     ///
-    /// Available on Linux, macOS, FreeBSD, NetBSD, and OpenBSD (it reads the
-    /// kernel thread count). On any other target it is a `#[deprecated]` stub
-    /// that panics — call
+    /// Available on Linux, Android, macOS, FreeBSD, NetBSD, and OpenBSD (it
+    /// reads the kernel thread count). On any other target it is a
+    /// `#[deprecated]` stub that panics — call
     /// [`drop_privileges_unchecked`](Self::drop_privileges_unchecked) there.
     ///
     /// # Panics
