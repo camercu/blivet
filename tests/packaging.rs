@@ -7,12 +7,19 @@
 //!
 //! `src/doc_sync.rs` bakes its inputs in with `include_str!` now, so a file
 //! outside `include` stops the compile rather than the consumer's test run.
-//! That fixes the guards that use it; the two tests here close the ways around
-//! it: naming the repository root through `CARGO_MANIFEST_DIR`, and naming a
-//! repository file by a relative path that resolves only in a checkout.
+//! That fixes the guards that use it; the two tests here scan for the two ways
+//! around it: naming the repository root through `CARGO_MANIFEST_DIR`, and
+//! naming a repository file by a relative literal that resolves only in a
+//! checkout.
 //!
 //! The set of files a consumer does not have is derived from `include`, so
 //! packaging a file drops it from the scan with no edit here.
+//!
+//! A text scan sees spellings, not paths, so a literal assembled at run time —
+//! `PathBuf::from("docs").join("daemonize.1.md")` — is out of its reach. The
+//! `package-test` recipe is what catches that: it runs the packaged file set,
+//! where the read fails for the same reason a consumer's would. These two are
+//! the fast local tier, not the last word.
 
 use std::path::{Path, PathBuf};
 
@@ -179,9 +186,12 @@ fn no_shipped_source_names_a_file_the_crate_does_not_ship() {
         for rel in &unshipped {
             // Quoted, so a comment that merely mentions the justfile is not an
             // offender; a path that reaches the filesystem is spelled as a
-            // literal.
-            if text.contains(&format!("\"{rel}\"")) {
-                offenders.push(format!("{} names \"{rel}\"", relative(&root, &path)));
+            // literal. `./justfile` and `justfile` name the same file, so both
+            // spellings count.
+            for spelling in [format!("\"{rel}\""), format!("\"./{rel}\"")] {
+                if text.contains(&spelling) {
+                    offenders.push(format!("{} names {spelling}", relative(&root, &path)));
+                }
             }
         }
     }
