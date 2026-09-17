@@ -209,11 +209,11 @@ probe test.
 
 One carve-out, so the Supported row means what it says. The guards that check
 this repository against itself test the repository, not the platform, and not
-every tier reaches them. The doc-vs-code guard lives in the library and runs
-wherever the library tests do, except on the Android device and the NetBSD VM,
-which run a cross-built binary with no sources beside it to read. The
-hardcoded-temp-path guard is an integration test, so only the tiers that build
-integration targets run it — Linux and macOS. Both run on every pull request.
+every tier reaches them. The doc-vs-code guard is a library test that bakes the
+files it reads into the binary, so it travels wherever the library tests go —
+the Android device and the NetBSD VM included. The hardcoded-temp-path guard is
+an integration test, so only the tiers that build integration targets run it —
+Linux and macOS. Both run on every pull request.
 
 "Any other Unix" is not a checkable class, and one member of it does not hold:
 `x86_64-pc-solaris` fails to compile, because `nix` gates `Flock` and
