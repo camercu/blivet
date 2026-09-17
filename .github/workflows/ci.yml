@@ -353,11 +353,7 @@ jobs:
             # matched nothing cannot report the claim as proven.
             TESTBIN=$(cat testbin-path.txt)
             test -x "$TESTBIN" || { echo "FAIL: test binary not found"; exit 1; }
-            # --skip doc_sync: those tests read the repo's own README and SPEC
-            # through env!("CARGO_MANIFEST_DIR"), baked at cross-compile time to
-            # the runner's path, which does not exist in the VM. They guard the
-            # repository, not the platform, and run on the host tier.
-            sh scripts/assert-tests-ran.sh "$TESTBIN" --skip doc_sync
+            sh scripts/assert-tests-ran.sh "$TESTBIN"
             echo "PASS: library tests on netbsd"
 
   omnios-smoke:

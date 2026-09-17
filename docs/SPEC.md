@@ -70,13 +70,13 @@ gating releases on a booted emulator stalled every commit in a push
 when one failed to start. What blocks on Android is therefore the libc
 and the linker, not the kernel.
 
-The Supported tier covers the tests that exercise the platform. The
-guards that check the repository against itself do not run everywhere:
-the doc-vs-code guard is a library test and runs wherever those do,
-except on the Android device and the NetBSD VM, which carry a
-cross-built binary without the sources it would read; the
-hardcoded-temp-path guard is an integration test, so it runs only on
-the tiers that build integration targets, Linux and macOS.
+The Supported tier covers the tests that exercise the platform. One
+guard that checks the repository against itself does not run
+everywhere: the hardcoded-temp-path guard is an integration test, so it
+runs only on the tiers that build integration targets, Linux and macOS.
+The doc-vs-code guard is a library test that bakes the files it reads
+into the binary, so it runs wherever the library suite does, the
+cross-built tiers included.
 
 ## Dependency policy
 
