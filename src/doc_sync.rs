@@ -25,6 +25,7 @@ fn read(rel: &str) -> &'static str {
         "README.md" => include_str!("../README.md"),
         "docs/SPEC.md" => include_str!("../docs/SPEC.md"),
         "src/lib.rs" => include_str!("lib.rs"),
+        "src/context.rs" => include_str!("context.rs"),
         "examples/echo_server.rs" => include_str!("../examples/echo_server.rs"),
         other => panic!(
             "{other} is not one of the files doc_sync bakes in; add an \
@@ -57,11 +58,21 @@ fn readme_msrv_matches_cargo_toml() {
     );
 }
 
-/// The README and the crate front page must name every supported platform.
+/// Every shipped file that spells the platform list out must name every
+/// supported platform.
 ///
 /// The list comes from the capability table in `build.rs`, the same table the
 /// `cfg` aliases come from, so adding a platform there is what makes this test
 /// demand the docs mention it.
+///
+/// `src/context.rs` is here because it was the one that went stale: Android
+/// reached the capability table, the README and the front page, and
+/// `drop_privileges`' own rustdoc kept telling docs.rs readers the method was a
+/// panicking stub there. ADR 0001 promises a platform is one table row rather
+/// than "4 prose edits with no backstop"; a copy of the list that no guard
+/// reads is one of those prose edits. A shipped file that grows a copy of the
+/// list belongs in [`FILES_LISTING_PLATFORMS`], and needs an `include_str!` arm
+/// in [`read`].
 ///
 /// This is the prose-level check, and a deliberately loose one: it asks only
 /// whether the name appears somewhere in the file, so an unrelated mention
@@ -72,17 +83,23 @@ fn readme_msrv_matches_cargo_toml() {
 /// platform is mentioned", not as "the platform is documented correctly".
 #[test]
 fn platform_list_consistent() {
-    let platforms = env!("BLIVET_PLATFORMS").split(',');
-    let readme = read("README.md");
-    let front_page = read("src/lib.rs");
-    for p in platforms {
-        assert!(readme.contains(p), "README omits supported platform {p}");
-        assert!(
-            front_page.contains(p),
-            "crate front page (lib.rs) omits supported platform {p}"
-        );
+    for file in FILES_LISTING_PLATFORMS {
+        let text = read(file);
+        for platform in env!("BLIVET_PLATFORMS").split(',') {
+            assert!(
+                text.contains(platform),
+                "{file} omits supported platform {platform}"
+            );
+        }
     }
 }
+
+/// The shipped files that spell the platform list out in prose.
+///
+/// See [`platform_list_consistent`], which is what holds them to the capability
+/// table.
+#[cfg(test)]
+const FILES_LISTING_PLATFORMS: &[&str] = &["README.md", "src/lib.rs", "src/context.rs"];
 
 /// The Supported row of the tier table, in `README.md` and `docs/SPEC.md`,
 /// must name exactly the platforms the capability table has.
