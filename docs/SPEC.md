@@ -22,12 +22,11 @@ files.
 > `nix` dependency or version match to set a umask. `nix` types stay
 > internal to the implementation.
 
-Dependencies: nix (0.31, features: `fs`, `signal`, `process`,
-`user`, `resource`), thiserror, libc, and clap behind the default-on
-`cli` feature — the `daemonize` binary needs an argument parser and the
-library does not, so a consumer building with `--no-default-features`
-compiles neither. Dev: tempfile, serial_test, relentless, signal-hook,
-mutants.
+`Cargo.toml` is the dependency list; the policy it follows is below.
+Two parts of it are contract rather than inventory: the public API
+exposes no third-party types, and the CLI's argument parser sits behind
+the default-on `cli` feature, so a consumer building with
+`--no-default-features` compiles neither it nor its subtree.
 
 ## Platform support
 
