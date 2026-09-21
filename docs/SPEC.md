@@ -23,8 +23,11 @@ files.
 > internal to the implementation.
 
 Dependencies: nix (0.31, features: `fs`, `signal`, `process`,
-`user`, `resource`), clap, thiserror, libc. Dev: tempfile,
-serial_test, relentless.
+`user`, `resource`), thiserror, libc, and clap behind the default-on
+`cli` feature — the `daemonize` binary needs an argument parser and the
+library does not, so a consumer building with `--no-default-features`
+compiles neither. Dev: tempfile, serial_test, relentless, signal-hook,
+mutants.
 
 ## Platform support
 
