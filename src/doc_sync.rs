@@ -34,29 +34,6 @@ fn read(rel: &str) -> &'static str {
     }
 }
 
-/// `rust-version` in `Cargo.toml` is the one MSRV; the README must echo it in
-/// both the badge and the "Minimum supported Rust version" section.
-#[test]
-fn readme_msrv_matches_cargo_toml() {
-    let cargo = read("Cargo.toml");
-    let msrv = cargo
-        .lines()
-        .find_map(|l| l.trim().strip_prefix("rust-version = "))
-        .expect("rust-version in Cargo.toml")
-        .trim()
-        .trim_matches('"');
-
-    let readme = read("README.md");
-    assert!(
-        readme.contains(&format!("MSRV-{msrv}-")),
-        "README MSRV badge should reference {msrv}"
-    );
-    assert!(
-        readme.contains(&format!("\n{msrv}\n")),
-        "README 'Minimum supported Rust version' section should state {msrv}"
-    );
-}
-
 /// Every shipped file that spells the platform list out must name every
 /// supported platform.
 ///
@@ -74,8 +51,8 @@ fn readme_msrv_matches_cargo_toml() {
 /// This is the prose-level check, and a deliberately loose one: it asks only
 /// whether the name appears somewhere in the file, so an unrelated mention
 /// satisfies it. The claims that matter are held tighter elsewhere — the tier
-/// tables by [`supported_tier_matches_the_capability_table`], which compares
-/// them as sets in both directions, and the front page's `cfg` example by
+/// tables are generated from the capability table by `tests/docgen.rs`, and the
+/// front page's `cfg` example is pinned by
 /// [`front_page_cfg_example_lists_every_target_os`]. Read a pass here as "the
 /// platform is mentioned", not as "the platform is documented correctly".
 #[test]
@@ -97,73 +74,6 @@ fn platform_list_consistent() {
 /// table.
 #[cfg(test)]
 const FILES_LISTING_PLATFORMS: &[&str] = &["README.md", "src/lib.rs"];
-
-/// The Supported row of the tier table, in `README.md` and `docs/SPEC.md`,
-/// must name exactly the platforms the capability table has.
-///
-/// [`platform_list_consistent`] checks one direction — that every supported
-/// platform is mentioned — which leaves the direction that matters more
-/// unguarded: a tier table may claim a platform `build.rs` has never heard of,
-/// and claiming support the project cannot back is the failure the tiering
-/// exists to prevent. Set equality closes both.
-#[test]
-fn supported_tier_matches_the_capability_table() {
-    let expected: BTreeSet<&str> = env!("BLIVET_PLATFORMS").split(',').collect();
-
-    for doc in ["README.md", "docs/SPEC.md"] {
-        let listed = supported_tier_row(&read(doc));
-        assert_eq!(
-            listed.iter().map(String::as_str).collect::<BTreeSet<_>>(),
-            expected,
-            "{doc}'s Supported tier row and the build.rs capability table must \
-             name the same platforms"
-        );
-    }
-}
-
-/// Platforms named in the Supported row's `Platforms` column.
-///
-/// The column is found by its header, in the nearest header row above the
-/// Supported row, rather than by position. Reading the last cell survives a
-/// column added on the left and breaks on one added on the right — a Notes or
-/// Since column, the likelier addition — and the break would read as
-/// `build.rs` disagreeing with a doc that in fact still agrees.
-fn supported_tier_row(doc: &str) -> Vec<String> {
-    let rows: Vec<Vec<&str>> = doc
-        .lines()
-        .map(str::trim)
-        .filter(|l| l.starts_with('|'))
-        .map(|l| l.split('|').map(str::trim).collect())
-        .collect();
-
-    let supported = rows
-        .iter()
-        .position(|cells| {
-            cells
-                .get(1)
-                .is_some_and(|c| c.trim_matches('*') == "Supported")
-        })
-        .expect("the tier table has a Supported row");
-
-    let column = rows[..supported]
-        .iter()
-        .rev()
-        .find_map(|cells| cells.iter().position(|c| *c == "Platforms"))
-        .expect("the tier table has a Platforms column above its Supported row");
-
-    rows[supported]
-        .get(column)
-        .unwrap_or_else(|| {
-            panic!(
-                "the Supported row has no cell under the Platforms column, got: {:?}",
-                rows[supported]
-            )
-        })
-        .split(',')
-        .map(|p| p.trim().to_string())
-        .filter(|p| !p.is_empty())
-        .collect()
-}
 
 /// The front page shows consumers how to gate the `daemonize` call for an
 /// exotic target. Consumers cannot see this crate's capability aliases, so that

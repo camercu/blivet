@@ -204,6 +204,16 @@ termux-test:
     docker build --platform linux/amd64 -f Dockerfile.termux -t blivet-termux .
     docker run --rm --platform linux/amd64 --init blivet-termux
 
+# Rewrite the machine-owned cells of README.md and docs/SPEC.md.
+#
+# Two facts in those documents are derived elsewhere and change when it does:
+# the platforms the capability table grants, and the MSRV. `tests/docgen.rs`
+# owns those cells and nothing else; the rest of both documents is hand-written
+# and is copied through untouched. The check that they are current is an
+# ordinary test, so `just test` already runs it.
+docs-bless:
+    {{cargo}} test --test docgen -- --ignored
+
 # Regenerate manpage from markdown source (requires pandoc).
 # The @VERSION@ placeholder is filled from Cargo.toml's package version, so the
 # man-page version is never hand-maintained.
