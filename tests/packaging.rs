@@ -243,3 +243,49 @@ fn the_cli_parser_is_an_optional_dependency() {
         );
     }
 }
+
+/// Calls that reach the filesystem while a test is running.
+const RUN_TIME_READS: &[&str] = &["std::fs::", "fs::read", "File::open", "read_to_string"];
+
+/// The shipped doc guard reads text baked in at compile time, never the
+/// repository.
+///
+/// `src/doc_sync.rs` ships with the crate and checks the crate's own README, so
+/// it runs on a packaged or vendored copy that has no repository around it. A
+/// run-time read there passes every tier that runs in a checkout and panics for
+/// the consumer — which is what shipping a guard that read the justfile once
+/// did. `include_str!` turns that into a compile error naming the missing file
+/// instead.
+///
+/// Narrow on purpose. The library reaches the filesystem constantly and must —
+/// pidfiles, lockfiles, `/proc` — so the rule is not "no shipped source reads
+/// files". It is "the module whose whole job is checking the repository does
+/// not read the repository", and `doc_sync` is the only such module left in
+/// `src/`: every other doc guard now lives in `tests/`, which is not packaged
+/// and may read whatever it likes. A `doc_sync` that no longer exists needs no
+/// rule, so its absence is not a failure.
+#[test]
+fn the_shipped_doc_guard_reads_baked_in_text_only() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/doc_sync.rs");
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return;
+    };
+
+    let offenders: Vec<String> = text
+        .lines()
+        .enumerate()
+        .filter(|(_, line)| {
+            let code = line.split_once("//").map_or(*line, |(code, _)| code);
+            RUN_TIME_READS.iter().any(|call| code.contains(call))
+        })
+        .map(|(i, line)| format!("src/doc_sync.rs:{}: {}", i + 1, line.trim()))
+        .collect();
+
+    assert!(
+        offenders.is_empty(),
+        "the shipped doc guard reaches the filesystem while running, so it \
+         passes in a checkout and panics for anyone running `cargo test` on a \
+         packaged or vendored copy: {offenders:?}. Bake the text in with \
+         include_str!, or move the guard to tests/, which is not packaged."
+    );
+}
