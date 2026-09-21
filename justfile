@@ -157,8 +157,20 @@ check-non-unix:
     fi
     echo "non-Unix target fails with exactly one diagnostic"
 
+# Type-check the library the way a consumer who wants no CLI gets it.
+#
+# `cli` is on by default, so every other recipe here compiles clap and none of
+# them would notice the library itself growing a dependency on it. Without this
+# the feature is a claim in the manifest that nothing ever compiles.
+#
+# --all-targets: the integration tests reach the CLI through Cargo's
+# CARGO_BIN_EXE_daemonize, and a binary skipped for unmet required-features is
+# the case that would break them.
+check-no-default-features:
+    RUSTFLAGS="-D warnings" {{cargo}} check --no-default-features --all-targets {{locked}}
+
 # Run all static checks
-check: fmt-check lint lint-deny doc msrv-check check-cross check-non-unix
+check: fmt-check lint lint-deny doc msrv-check check-cross check-non-unix check-no-default-features
 
 # Run tests (excludes ignored root/Linux tests)
 #
