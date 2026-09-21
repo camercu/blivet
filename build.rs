@@ -11,17 +11,34 @@
 //! `docs/adr/0001-capability-based-platform-gating.md`.
 //!
 //! The table below is also the single source of truth for the documented
-//! platform list: it is exported as `BLIVET_PLATFORMS`, and the doc-drift guard
-//! in `src/doc_sync.rs` reads that rather than keeping a copy of its own.
+//! platform list. The crate front page's "Platform support" section is written
+//! from it here and included by `src/lib.rs`, so no prose states it; the
+//! Supported row of the tier tables in `README.md` and `docs/SPEC.md` is
+//! written from `BLIVET_PLATFORMS` by `tests/docgen.rs`.
 
 /// Where a platform's live thread count is read from.
+///
+/// The payload on `KernelQuery` is how the documentation names the call, so the
+/// generated platform table cannot disagree with the table below about which
+/// platform reads its count from where. `ProcFs` needs no payload: there is one
+/// procfs path and every procfs platform uses it.
 #[derive(PartialEq)]
 enum ThreadCount {
     /// The `Threads:` line of `/proc/self/status`.
     ProcFs,
     /// The per-OS kernel query in `unsafe_ops` — `proc_pidinfo` on macOS, a
     /// `sysctl` on each BSD.
-    KernelQuery,
+    KernelQuery(&'static str),
+}
+
+impl ThreadCount {
+    /// How the documentation names this source.
+    fn source(&self) -> &'static str {
+        match self {
+            Self::ProcFs => "`/proc/self/status`",
+            Self::KernelQuery(call) => call,
+        }
+    }
 }
 
 /// What one target OS can do.
@@ -112,7 +129,7 @@ const PLATFORMS: &[Platform] = &[
     Platform {
         target_os: "macos",
         name: "macOS",
-        thread_count: Some(ThreadCount::KernelQuery),
+        thread_count: Some(ThreadCount::KernelQuery("`proc_pidinfo`")),
         fd_dir: Some("/dev/fd"),
         rt_signals_reserved: false,
         faccessat_lacks_eaccess: false,
@@ -120,7 +137,7 @@ const PLATFORMS: &[Platform] = &[
     Platform {
         target_os: "freebsd",
         name: "FreeBSD",
-        thread_count: Some(ThreadCount::KernelQuery),
+        thread_count: Some(ThreadCount::KernelQuery("`sysctl`")),
         fd_dir: None,
         rt_signals_reserved: false,
         faccessat_lacks_eaccess: false,
@@ -128,7 +145,7 @@ const PLATFORMS: &[Platform] = &[
     Platform {
         target_os: "netbsd",
         name: "NetBSD",
-        thread_count: Some(ThreadCount::KernelQuery),
+        thread_count: Some(ThreadCount::KernelQuery("`sysctl`")),
         fd_dir: None,
         rt_signals_reserved: false,
         faccessat_lacks_eaccess: false,
@@ -136,7 +153,7 @@ const PLATFORMS: &[Platform] = &[
     Platform {
         target_os: "openbsd",
         name: "OpenBSD",
-        thread_count: Some(ThreadCount::KernelQuery),
+        thread_count: Some(ThreadCount::KernelQuery("`sysctl`")),
         fd_dir: None,
         rt_signals_reserved: false,
         faccessat_lacks_eaccess: false,
@@ -208,12 +225,14 @@ fn main() {
     let fd_dir = platform.and_then(|p| p.fd_dir).unwrap_or("");
     println!("cargo::rustc-env=BLIVET_FD_DIR={fd_dir}");
 
-    // Two views of the same table, both consumed by the doc-drift guard in
-    // `src/doc_sync.rs`: display names for the prose platform lists, and
-    // `target_os` values for the `cfg` example the front page shows consumers
-    // (who cannot see this crate's capability aliases and must gate by OS).
+    // Two views of the same table. Display names go to `tests/docgen.rs`, which
+    // owns the Supported row of the tier tables in README.md and docs/SPEC.md;
+    // `target_os` values go to the doc guard over the `cfg` example the front
+    // page shows consumers (who cannot see this crate's capability aliases and
+    // must gate by OS).
     let names: Vec<&str> = PLATFORMS.iter().map(|p| p.name).collect();
     println!("cargo::rustc-env=BLIVET_PLATFORMS={}", names.join(","));
+    write_platform_support_doc();
     let oses: Vec<&str> = PLATFORMS.iter().map(|p| p.target_os).collect();
     println!(
         "cargo::rustc-env=BLIVET_SUPPORTED_TARGET_OS={}",
@@ -226,4 +245,33 @@ fn main() {
     // `TARGET` nor `CARGO_CFG_TARGET_OS` reaches anywhere but a build script.
     let target = std::env::var("TARGET").expect("cargo sets TARGET");
     println!("cargo::rustc-env=BLIVET_TARGET={target}");
+}
+
+/// Write the crate front page's "Platform support" section.
+///
+/// The front page used to spell the list and the per-platform mechanism out in
+/// prose, in two places, and both went stale on Android. Generating the section
+/// from the table means there is one copy and nothing to compare it with:
+/// `src/lib.rs` includes this file, so a row added above reaches the rendered
+/// docs with no prose edit at all.
+fn write_platform_support_doc() {
+    let out = std::path::PathBuf::from(std::env::var("OUT_DIR").expect("cargo sets OUT_DIR"))
+        .join("platform_support.md");
+    let mut doc = String::from(
+        "The checked entry points need the kernel's own count of this process's\n\
+         live threads, so they exist wherever that count can be read:\n\n\
+         | Platform | Thread count read from |\n| --- | --- |\n",
+    );
+    for platform in PLATFORMS {
+        if let Some(source) = &platform.thread_count {
+            doc.push_str(&format!("| {} | {} |\n", platform.name, source.source()));
+        }
+    }
+    doc.push_str(
+        "\nOn any other target they are `#[deprecated]` stubs that panic. Use\n\
+         [`daemonize_unchecked`] and\n\
+         [`drop_privileges_unchecked`](DaemonContext::drop_privileges_unchecked)\n\
+         there, having established single-threadedness yourself.\n",
+    );
+    std::fs::write(&out, doc).unwrap_or_else(|e| panic!("write {}: {e}", out.display()));
 }
