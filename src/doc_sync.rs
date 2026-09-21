@@ -25,7 +25,6 @@ fn read(rel: &str) -> &'static str {
         "README.md" => include_str!("../README.md"),
         "docs/SPEC.md" => include_str!("../docs/SPEC.md"),
         "src/lib.rs" => include_str!("lib.rs"),
-        "src/context.rs" => include_str!("context.rs"),
         "examples/echo_server.rs" => include_str!("../examples/echo_server.rs"),
         other => panic!(
             "{other} is not one of the files doc_sync bakes in; add an \
@@ -65,14 +64,12 @@ fn readme_msrv_matches_cargo_toml() {
 /// `cfg` aliases come from, so adding a platform there is what makes this test
 /// demand the docs mention it.
 ///
-/// `src/context.rs` is here because it was the one that went stale: Android
-/// reached the capability table, the README and the front page, and
-/// `drop_privileges`' own rustdoc kept telling docs.rs readers the method was a
-/// panicking stub there. ADR 0001 promises a platform is one table row rather
-/// than "4 prose edits with no backstop"; a copy of the list that no guard
-/// reads is one of those prose edits. A shipped file that grows a copy of the
-/// list belongs in [`FILES_LISTING_PLATFORMS`], and needs an `include_str!` arm
-/// in [`read`].
+/// `src/context.rs` used to be here. It went stale on Android, and the fix
+/// was to add it to this guard; the better fix, and the one in place now, was
+/// to stop it stating the list at all — it names the capability and points at
+/// the front page. A file that must state the list belongs here, and needs an
+/// `include_str!` arm in [`read`]; a file that can name the rule instead
+/// belongs nowhere near this test.
 ///
 /// This is the prose-level check, and a deliberately loose one: it asks only
 /// whether the name appears somewhere in the file, so an unrelated mention
@@ -99,7 +96,7 @@ fn platform_list_consistent() {
 /// See [`platform_list_consistent`], which is what holds them to the capability
 /// table.
 #[cfg(test)]
-const FILES_LISTING_PLATFORMS: &[&str] = &["README.md", "src/lib.rs", "src/context.rs"];
+const FILES_LISTING_PLATFORMS: &[&str] = &["README.md", "src/lib.rs"];
 
 /// The Supported row of the tier table, in `README.md` and `docs/SPEC.md`,
 /// must name exactly the platforms the capability table has.
