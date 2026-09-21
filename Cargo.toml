@@ -33,6 +33,15 @@ include = [
 [[bin]]
 name = "daemonize"
 path = "src/main.rs"
+required-features = ["cli"]
+
+# The `daemonize` binary is the only thing that needs an argument parser, and
+# clap's subtree is 13 of the 24 crates a library-only consumer would otherwise
+# compile. `cli` is on by default so `cargo install blivet` and docs.rs are
+# unaffected; a library consumer turns it off with `default-features = false`.
+[features]
+default = ["cli"]
+cli = ["dep:clap"]
 
 [package.metadata.docs.rs]
 # Render the capability-gated paths for the supported Unix targets, not just
@@ -48,7 +57,7 @@ targets = [
 
 [dependencies]
 nix = { version = "0.31", features = ["fs", "signal", "process", "user", "resource"] }
-clap = { version = "4", features = ["derive"] }
+clap = { version = "4", features = ["derive"], optional = true }
 thiserror = "2"
 libc = "0.2"
 

@@ -203,6 +203,14 @@ fn reachable_from<'a>(
     reached
 }
 
+/// The recipes a type-check tier depends on, and that nothing else replaces.
+///
+/// A recipe here is one whose whole purpose is to compile a configuration no
+/// other recipe compiles, so dropping it from the gate costs the coverage
+/// silently — nothing goes red, the configuration simply stops being built.
+const RECIPES_THE_GATE_MUST_REACH: &[&str] =
+    &["check-cross", "check-non-unix", "check-no-default-features"];
+
 /// The recipes above are only worth guarding if the gate still runs them.
 ///
 /// `every_target_list_carries_the_whole_table` and
@@ -227,11 +235,13 @@ fn the_cross_recipes_are_reachable_from_the_gate() {
         "`ci` reaches neither the test recipe nor, presumably, anything else: \
          {reached:?}. The justfile's shape probably outgrew the parser above"
     );
-    for recipe in ["check-cross", "check-non-unix"] {
+    for recipe in RECIPES_THE_GATE_MUST_REACH {
         assert!(
-            reached.contains(recipe),
-            "`just ci` no longer reaches `{recipe}`, so nothing runs it and the \
-             guards over its contents prove nothing. It reaches: {reached:?}"
+            reached.contains(*recipe),
+            "`just ci` no longer reaches `{recipe}`, so nothing runs it: the \
+             configuration it exists to compile silently stops being built, \
+             and the guards over its contents prove nothing. `ci` reaches: \
+             {reached:?}"
         );
     }
 }
