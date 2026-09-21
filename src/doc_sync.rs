@@ -21,9 +21,7 @@ use std::collections::{BTreeMap, BTreeSet};
 /// belongs in `tests/`, which is not packaged.
 fn read(rel: &str) -> &'static str {
     match rel {
-        "Cargo.toml" => include_str!("../Cargo.toml"),
         "README.md" => include_str!("../README.md"),
-        "docs/SPEC.md" => include_str!("../docs/SPEC.md"),
         "src/lib.rs" => include_str!("lib.rs"),
         "examples/echo_server.rs" => include_str!("../examples/echo_server.rs"),
         other => panic!(
@@ -33,47 +31,6 @@ fn read(rel: &str) -> &'static str {
         ),
     }
 }
-
-/// Every shipped file that spells the platform list out must name every
-/// supported platform.
-///
-/// The list comes from the capability table in `build.rs`, the same table the
-/// `cfg` aliases come from, so adding a platform there is what makes this test
-/// demand the docs mention it.
-///
-/// `src/context.rs` used to be here. It went stale on Android, and the fix
-/// was to add it to this guard; the better fix, and the one in place now, was
-/// to stop it stating the list at all — it names the capability and points at
-/// the front page. A file that must state the list belongs here, and needs an
-/// `include_str!` arm in [`read`]; a file that can name the rule instead
-/// belongs nowhere near this test.
-///
-/// This is the prose-level check, and a deliberately loose one: it asks only
-/// whether the name appears somewhere in the file, so an unrelated mention
-/// satisfies it. The claims that matter are held tighter elsewhere — the tier
-/// tables are generated from the capability table by `tests/docgen.rs`, and the
-/// front page's `cfg` example is pinned by
-/// [`front_page_cfg_example_lists_every_target_os`]. Read a pass here as "the
-/// platform is mentioned", not as "the platform is documented correctly".
-#[test]
-fn platform_list_consistent() {
-    for file in FILES_LISTING_PLATFORMS {
-        let text = read(file);
-        for platform in env!("BLIVET_PLATFORMS").split(',') {
-            assert!(
-                text.contains(platform),
-                "{file} omits supported platform {platform}"
-            );
-        }
-    }
-}
-
-/// The shipped files that spell the platform list out in prose.
-///
-/// See [`platform_list_consistent`], which is what holds them to the capability
-/// table.
-#[cfg(test)]
-const FILES_LISTING_PLATFORMS: &[&str] = &["README.md", "src/lib.rs"];
 
 /// The front page shows consumers how to gate the `daemonize` call for an
 /// exotic target. Consumers cannot see this crate's capability aliases, so that

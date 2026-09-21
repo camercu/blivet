@@ -35,13 +35,11 @@
 //! There are two entry points:
 //!
 //! - [`daemonize`] is the safe default: it verifies the process is
-//!   single-threaded for you, so no `unsafe` is needed. It is available on
-//!   **Linux, Android, macOS, FreeBSD, NetBSD, and OpenBSD**, each using the
-//!   kernel's own thread count (`/proc/self/status` on Linux and Android,
-//!   `proc_pidinfo` on macOS, `sysctl` on the BSDs). On any other target it is
-//!   a `#[deprecated]` stub
-//!   that never daemonizes — a hard compile error under `-D warnings` /
-//!   `#![deny(deprecated)]`; use [`daemonize_unchecked`] there.
+//!   single-threaded for you, so no `unsafe` is needed. It exists wherever the
+//!   kernel's own thread count can be read — see
+//!   [Platform support](#platform-support). On any other target it is a
+//!   `#[deprecated]` stub that never daemonizes — a hard compile error under
+//!   `-D warnings` / `#![deny(deprecated)]`; use [`daemonize_unchecked`] there.
 //! - [`daemonize_unchecked`] is `unsafe` and available on all Unix platforms:
 //!   you must guarantee the process is single-threaded at the call site (see
 //!   [Threads and async runtimes](#threads-and-async-runtimes)).
@@ -74,6 +72,10 @@
 //! # Ok(())
 //! # }
 //! ```
+//!
+//! # Platform support
+//!
+#![doc = include_str!(concat!(env!("OUT_DIR"), "/platform_support.md"))]
 //!
 //! # Threads and async runtimes
 //!
@@ -342,14 +344,12 @@ pub(crate) fn assert_single_threaded(caller: &str) {
 ///
 /// # Platform support
 ///
-/// Available on **Linux, Android, macOS, FreeBSD, NetBSD, and OpenBSD**, each
-/// using the kernel's own thread count (`/proc/self/status` on Linux and
-/// Android, `proc_pidinfo` on macOS, `sysctl` on the BSDs). On any other target
-/// it is a `#[deprecated]`
-/// stub that never daemonizes — calling it warns with guidance (and is a hard
-/// compile error under `-D warnings` / `#![deny(deprecated)]`), and panics if
-/// invoked anyway; call [`daemonize_unchecked`] yourself there inside an
-/// `unsafe` block.
+/// Available wherever the kernel's own thread count can be read — the crate
+/// front page lists those platforms and where each reads its count from. On any
+/// other target this is a `#[deprecated]` stub that never daemonizes — calling
+/// it warns with guidance (and is a hard compile error under `-D warnings` /
+/// `#![deny(deprecated)]`), and panics if invoked anyway; call
+/// [`daemonize_unchecked`] yourself there inside an `unsafe` block.
 ///
 /// # Errors
 ///
