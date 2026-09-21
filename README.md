@@ -88,10 +88,15 @@ loops only *after* `drop_privileges()` returns. See [Safety](#safety) for why.
 ```sh
 cargo install blivet   # the `daemonize` CLI -- verify with `daemonize --version`
 cargo add blivet       # the library
+cargo add blivet --no-default-features   # the library without the CLI's parser
 ```
 
 The crate is `blivet`; the installed binary is `daemonize`. See
 [Library](#library) for the API, or [CLI](#cli) for command-line use.
+
+The `cli` feature is on by default and carries `clap`, which the `daemonize`
+binary needs and the library does not. Turning it off takes a library-only
+build from 24 crates to 11; `cargo install blivet` is unaffected either way.
 
 ## Library
 
