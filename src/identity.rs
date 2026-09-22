@@ -130,14 +130,36 @@ mod tests {
 
     // Covers: R63
     #[test]
-    fn resolve_user_numeric_unassigned_is_rejected() {
+    fn resolve_user_numeric_reports_what_the_passwd_database_says() {
         // Switching to a user needs the passwd entry's primary GID and home
-        // directory, so an id with no entry cannot be honoured and must not be
-        // accepted silently.
-        match resolve_user("4242424") {
-            Err(DaemonizeError::UserNotFound(_)) => {}
-            Err(other) => panic!("expected UserNotFound, got {other:?}"),
-            Ok(user) => panic!("an unassigned uid resolved to {}", user.name),
+        // directory, so a numeric user is looked up rather than taken at face
+        // value, and an id the database does not know cannot be honoured.
+        //
+        // Which ids those are is not universal: bionic synthesises an entry for
+        // ids in Android's AID ranges, so the same number that is unassigned on
+        // Linux resolves there. So ask the database first and hold the crate to
+        // its answer — that is the requirement, and it is testable on every
+        // platform. A test that simply expected rejection passed everywhere the
+        // library is developed and failed on the bionic tier.
+        const UID: u32 = 4_242_424;
+        let known = User::from_uid(Uid::from_raw(UID))
+            .expect("the passwd database answers")
+            .is_some();
+
+        match (known, resolve_user(&UID.to_string())) {
+            (true, Ok(user)) => assert_eq!(
+                user.uid.as_raw(),
+                UID,
+                "resolved the wrong uid for an id the database knows"
+            ),
+            (false, Err(DaemonizeError::UserNotFound(_))) => {}
+            (false, Ok(user)) => panic!(
+                "the database has no entry for {UID}, but it resolved to {:?}",
+                user.name
+            ),
+            (_, Err(e)) => {
+                panic!("the database has an entry for {UID}, but resolving it failed: {e:?}")
+            }
         }
     }
 

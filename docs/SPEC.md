@@ -1253,10 +1253,13 @@ verification points.
 - R61. `drop_privileges()` with group only: sets GID, no setuid.
 - R62. `drop_privileges()` with neither: no-op.
 - R63. A numeric string user (e.g. "1000") is resolved through
-  `getpwuid()`, so an id with no passwd entry is a `UserNotFound`
-  error: switching to a user needs the entry's primary GID and home
-  directory, which the number does not carry. See R142 for groups,
-  which differ.
+  `getpwuid()` and the crate reports what the passwd database says, so
+  an id the database does not know is a `UserNotFound` error: switching
+  to a user needs the entry's primary GID and home directory, which the
+  number does not carry. Which ids are unknown is the platform's
+  business, not the crate's — bionic synthesises entries for Android's
+  AID ranges, where an id unassigned on Linux resolves. See R142 for
+  groups, which differ.
 - R64. `drop_privileges()` chowns pidfile, lockfile, stdout, stderr to
   target user/group before switching.
 - R65. The chown phase is a no-op when neither user nor group is set.
