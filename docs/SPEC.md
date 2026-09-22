@@ -1434,3 +1434,9 @@ verification points.
   a GID without a group entry is ordinary on Unix. This is deliberately
   not symmetric with R63; the asymmetry is in what each side needs, not
   in how strict each side is.
+- R143. Both paths that write to the notification pipe without a
+  successful `notify_parent()` — `report_error()` and `Drop` — remove
+  the pidfile *before* writing. The parent unblocking is the
+  synchronization point an observer waits on, so any state it must see
+  has to be true by then; an observer that wakes on the byte never sees
+  the pidfile.
