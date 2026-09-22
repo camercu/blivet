@@ -770,6 +770,43 @@ mod tests {
         );
     }
 
+    // The wrapper's whole value is that a caller names no signal constants, so
+    // both signals it picks are part of the contract. SIGTERM had a test and
+    // SIGINT did not, which left half the set free to be dropped silently —
+    // and Ctrl-C is the half a developer meets first.
+    #[test]
+    fn cleanup_on_term_signals_installs_sigint_handler() {
+        const PIDFILE_ENV: &str = "__BLIVET_INT_CLEANUP_PIDFILE";
+
+        if let Ok(path) = std::env::var(PIDFILE_ENV) {
+            std::fs::write(&path, "123").unwrap();
+            let mut cfg = DaemonConfig::new();
+            cfg.pidfile(&path);
+            let ctx = ctx(&cfg, None, None);
+            ctx.cleanup_on_term_signals().unwrap();
+            nix::sys::signal::raise(nix::sys::signal::Signal::SIGINT).unwrap();
+            std::thread::sleep(std::time::Duration::from_secs(5));
+            unreachable!("should have been killed by the re-raised SIGINT");
+        }
+
+        use std::os::unix::process::ExitStatusExt;
+        let dir = tempfile::tempdir().unwrap();
+        let pidfile = dir.path().join("daemon.pid");
+        const NAME: &str = "context::tests::cleanup_on_term_signals_installs_sigint_handler";
+        let output = crate::test_support::rerun_in_subprocess(NAME, PIDFILE_ENV, &pidfile);
+
+        assert_eq!(
+            output.status.signal(),
+            Some(libc::SIGINT),
+            "child should terminate via the re-raised SIGINT; {}",
+            crate::test_support::subprocess_report(NAME, &output)
+        );
+        assert!(
+            !pidfile.exists(),
+            "handler should have removed the pidfile before re-raising"
+        );
+    }
+
     // Same self-spawn pattern as above, through the convenience wrapper: it
     // must actually install handlers for the standard termination signals,
     // not just return Ok.
