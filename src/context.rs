@@ -547,20 +547,33 @@ impl DaemonContext {
     /// the terminal `_exit`. Split out so the observable sequence is testable
     /// in-process (calling `report_error` directly would kill the test).
     ///
-    /// **Order matters:** cleanup runs *before* the parent is signaled. The
-    /// parent unblocking is the synchronization point a caller waits on (e.g.
-    /// the shell that ran `daemonize`, or a test observing the process exit),
-    /// so any side effect that must be visible by then has to happen first.
-    /// Signaling before cleanup let an observer see the parent exit while the
-    /// pidfile was still being removed — a race.
+    /// **Order matters**, and [`cleanup_then_signal`](Self::cleanup_then_signal)
+    /// is where it is decided: cleanup runs *before* the parent is signaled.
+    /// The parent unblocking is the synchronization point a caller waits on
+    /// (e.g. the shell that ran `daemonize`, or a test observing the process
+    /// exit), so any side effect that must be visible by then has to happen
+    /// first. Signaling before cleanup let an observer see the parent exit
+    /// while the pidfile was still being removed — a race.
     fn cleanup_and_signal_error(&mut self, err: &DaemonizeError) -> u8 {
+        self.cleanup_then_signal(|pipe| pipe.signal_error(err));
+        err.exit_code()
+    }
+
+    /// Removes the pidfile, then tells the parent what happened.
+    ///
+    /// Both paths that write to the notification pipe without a successful
+    /// `notify_parent` — [`report_error`](Self::report_error) and [`Drop`] —
+    /// go through here, so there is one ordering to get right instead of two
+    /// that can drift apart. They did drift: `Drop` signalled first for long
+    /// enough that a parent could wake to a pidfile still on disk, ten lines
+    /// below the comment forbidding exactly that.
+    fn cleanup_then_signal(&mut self, signal: impl FnOnce(NotifyPipe)) {
         if self.config.cleanup_on_drop {
             self.cleanup();
         }
         if let Some(pipe) = self.notify_pipe.take() {
-            pipe.signal_error(err);
+            signal(pipe);
         }
-        err.exit_code()
     }
 
     /// Reports an application-level failure to the parent process and exits.
@@ -595,12 +608,7 @@ impl DaemonContext {
 
 impl Drop for DaemonContext {
     fn drop(&mut self) {
-        if let Some(pipe) = self.notify_pipe.take() {
-            pipe.signal_unnotified();
-        }
-        if self.config.cleanup_on_drop {
-            self.cleanup();
-        }
+        self.cleanup_then_signal(NotifyPipe::signal_unnotified);
     }
 }
 
@@ -865,6 +873,46 @@ mod tests {
             std::str::from_utf8(&buf[1..]).unwrap(),
             "daemon exited without signaling readiness"
         );
+    }
+
+    // Covers: R143
+    #[test]
+    fn drop_removes_pidfile_before_signaling_parent() {
+        // The parent wakes on the pipe byte, so anything that must be true by
+        // then has to happen before the write. An observer that checks the
+        // instant the byte arrives can never see the pidfile when the order is
+        // right: the unlink happens-before the write, which happens-before the
+        // read. `Drop` had the two the wrong way round and nothing noticed,
+        // because the sibling test below asserts only that the pidfile is gone
+        // once the call has returned, by which time either order has removed
+        // it. Both paths share `cleanup_then_signal`, so this pins both for as
+        // long as they do.
+        for _ in 0..20 {
+            let dir = tempfile::tempdir().unwrap();
+            let pidfile = dir.path().join("daemon.pid");
+            std::fs::write(&pidfile, "123").unwrap();
+
+            let (rd, wr) = make_pipe();
+            let mut cfg = DaemonConfig::new();
+            cfg.pidfile(&pidfile);
+
+            let observer = {
+                let pidfile = pidfile.clone();
+                std::thread::spawn(move || {
+                    let mut byte = [0u8; 1];
+                    let mut pipe = std::fs::File::from(rd);
+                    pipe.read_exact(&mut byte).expect("the failure byte");
+                    pidfile.exists()
+                })
+            };
+
+            drop(ctx(&cfg, None, Some(NotifyPipe::new(wr))));
+
+            assert!(
+                !observer.join().unwrap(),
+                "the parent woke to a pidfile that was still on disk"
+            );
+        }
     }
 
     // Covers: R118
