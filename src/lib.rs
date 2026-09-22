@@ -578,14 +578,22 @@ fn run_post_fork(
         None => None,
     };
 
-    // Step 8: Write pidfile. From here on the sequence owes the outside world
-    // a removal if it does not finish — see `PidfileOnAbort`.
+    // Step 8: Write pidfile. The debt is owed from the moment this process may
+    // touch the path, not from the moment the write succeeds: step 7 has
+    // already created the file whenever the lockfile is the derived one, and
+    // `write_pidfile` creates and truncates it otherwise — so a write that
+    // fails half way leaves an empty file that names no process at all. Arm
+    // first, disarm at step 14 — see `PidfileOnAbort`.
+    //
+    // Arming here and not before step 7 is what keeps a lock conflict from
+    // deleting the incumbent's pidfile: that aborts above this block, holding
+    // no lock. Past step 7 the lock is ours, so the file is ours to remove.
     let mut pidfile_on_abort = PidfileOnAbort { path: None };
     if let Some(ref pidfile_path) = config.pidfile {
-        steps::write_pidfile(pidfile_path, lockfile_path.zip(lockfile.as_ref()))?;
         if config.cleanup_on_drop {
             pidfile_on_abort.path = Some(pidfile_path);
         }
+        steps::write_pidfile(pidfile_path, lockfile_path.zip(lockfile.as_ref()))?;
     }
 
     // Step 9: Reset signal dispositions
@@ -957,6 +965,38 @@ mod tests {
             }
             other => panic!("expected SystemError to propagate, got {other:?}"),
         }
+    }
+
+    // Covers: R145
+    #[test]
+    fn pidfile_write_failure_leaves_no_pidfile() {
+        run_in_subprocess("tests::pidfile_write_failure_leaves_no_pidfile_subprocess");
+    }
+
+    #[test]
+    #[ignore]
+    fn pidfile_write_failure_leaves_no_pidfile_subprocess() {
+        if !is_subprocess() {
+            return;
+        }
+        steps::failpoints::PIDFILE_WRITE_FAILS.store(true, std::sync::atomic::Ordering::Relaxed);
+        let dir = crate::test_support::tmp_dir();
+        let pidfile = dir.join(format!("pidwrite-{}.pid", std::process::id()));
+        let _ = std::fs::remove_file(&pidfile);
+        let mut config = DaemonConfig::new();
+        config.foreground(true).close_fds(false).pidfile(&pidfile);
+        let mut forker = NullForker::new(vec![], Ok(()));
+        match run_inner(&config, &mut forker) {
+            Err(DaemonizeError::PidfileError(msg)) => {
+                assert!(msg.contains("write"), "message names the operation: {msg}");
+            }
+            other => panic!("expected PidfileError to propagate, got {other:?}"),
+        }
+        assert!(
+            !pidfile.exists(),
+            "step 8 failed after creating the pidfile and left it behind, \
+             empty, naming no process at all"
+        );
     }
 
     // Covers: R134, R145
