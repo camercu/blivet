@@ -252,9 +252,22 @@ must live in directories not writable by untrusted users — otherwise a
 planted symlink could redirect the privileged chown onto an arbitrary
 file.
 
-The switch phase resolves each spec — if the string parses as a `u32`,
-treat it as a numeric UID/GID; otherwise resolve via `getpwnam()`/
-`getgrnam()`. Four combinations:
+The switch phase resolves each spec. A string that does not parse as a
+`u32` is a name, resolved via `getpwnam()`/`getgrnam()`. A string that
+does parse is an id, and the two sides then differ, because what the
+crate needs from each differs:
+
+- A numeric **user** is still looked up, via `getpwuid()`. Switching to
+  a user means `initgroups()` and `setgid()` with that user's primary
+  group, and setting `HOME` — none of which the number carries. An id
+  with no passwd entry cannot supply them and is a `UserNotFound`
+  error.
+- A numeric **group** is used as the GID directly, with no `getgrgid()`
+  lookup. `setgid()` needs nothing but the number, and a GID with no
+  group entry is ordinary on Unix, so refusing one would reject a
+  legitimate configuration.
+
+Four combinations:
 
 - Neither user nor group: no-op.
 - User only: resolve user via `getpwnam()`, `initgroups(username,
@@ -1239,7 +1252,11 @@ verification points.
   GID via independent group, supplementary groups via user.
 - R61. `drop_privileges()` with group only: sets GID, no setuid.
 - R62. `drop_privileges()` with neither: no-op.
-- R63. Numeric string user/group (e.g. "1000") resolved as UID/GID.
+- R63. A numeric string user (e.g. "1000") is resolved through
+  `getpwuid()`, so an id with no passwd entry is a `UserNotFound`
+  error: switching to a user needs the entry's primary GID and home
+  directory, which the number does not carry. See R142 for groups,
+  which differ.
 - R64. `drop_privileges()` chowns pidfile, lockfile, stdout, stderr to
   target user/group before switching.
 - R65. The chown phase is a no-op when neither user nor group is set.
@@ -1411,3 +1428,9 @@ verification points.
   answered by the existence and directory checks that run first, so
   they never arrive; they are named rather than translated all the
   same.
+- R142. A numeric string group (e.g. "1000") is used as the GID
+  directly, with no `getgrgid()` lookup, so a GID with no group entry
+  is accepted. `setgid()` needs nothing the number does not carry, and
+  a GID without a group entry is ordinary on Unix. This is deliberately
+  not symmetric with R63; the asymmetry is in what each side needs, not
+  in how strict each side is.
