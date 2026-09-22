@@ -511,6 +511,43 @@ pub(crate) unsafe fn daemonize_inner(
     }
 }
 
+/// Removes the pidfile this process wrote if the sequence never reaches the end.
+///
+/// Steps 9–13 all run after step 8 has written the pidfile, and any of them can
+/// fail. In daemon mode the abort path signals the parent and `_exit`s, and in
+/// foreground mode the error returns to the caller; neither builds a
+/// [`DaemonContext`], so no drop-time cleanup ever runs. Without this the file
+/// is left naming a process that never started — what `kill $(cat …)`, a status
+/// script, or systemd's `PIDFile=` reads next, and after PID reuse some other
+/// process entirely.
+///
+/// Armed only *after* the write, so a failure before step 8 — a lock conflict
+/// above all, where the pidfile on disk belongs to the daemon already running —
+/// cannot remove a file this process does not own. Gated on
+/// [`cleanup_on_drop`](DaemonConfig::cleanup_on_drop), matching the drop-time
+/// cleanup that [`DaemonContext::report_error`] replicates for the same reason.
+#[cfg(unix)]
+struct PidfileOnAbort<'a> {
+    path: Option<&'a std::path::Path>,
+}
+
+#[cfg(unix)]
+impl PidfileOnAbort<'_> {
+    /// The sequence reached the end; the [`DaemonContext`] owns the pidfile now.
+    fn disarm(&mut self) {
+        self.path = None;
+    }
+}
+
+#[cfg(unix)]
+impl Drop for PidfileOnAbort<'_> {
+    fn drop(&mut self) {
+        if let Some(path) = self.path {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+}
+
 /// Steps 4–14: apply the configuration in the final daemon process.
 ///
 /// Forker-free and fallible: every step returns its error rather than touching
@@ -541,9 +578,14 @@ fn run_post_fork(
         None => None,
     };
 
-    // Step 8: Write pidfile
+    // Step 8: Write pidfile. From here on the sequence owes the outside world
+    // a removal if it does not finish — see `PidfileOnAbort`.
+    let mut pidfile_on_abort = PidfileOnAbort { path: None };
     if let Some(ref pidfile_path) = config.pidfile {
         steps::write_pidfile(pidfile_path, lockfile_path.zip(lockfile.as_ref()))?;
+        if config.cleanup_on_drop {
+            pidfile_on_abort.path = Some(pidfile_path);
+        }
     }
 
     // Step 9: Reset signal dispositions
@@ -576,7 +618,9 @@ fn run_post_fork(
         steps::close_inherited_fds(&skip_fds)?;
     }
 
-    // Step 14: Return DaemonContext (clones the config-derived fields it needs)
+    // Step 14: Return DaemonContext (clones the config-derived fields it needs).
+    // The context owns the pidfile from here, so the abort guard stands down.
+    pidfile_on_abort.disarm();
     Ok(DaemonContext::new(config, lockfile, pipe_wr.take()))
 }
 
@@ -915,7 +959,7 @@ mod tests {
         }
     }
 
-    // Covers: R134
+    // Covers: R134, R145
     #[test]
     fn sigaction_failure_propagates() {
         run_in_subprocess("tests::sigaction_failure_propagates_subprocess");
@@ -928,8 +972,11 @@ mod tests {
             return;
         }
         steps::failpoints::SIGACTION_FAILS.store(true, std::sync::atomic::Ordering::Relaxed);
+        let dir = crate::test_support::tmp_dir();
+        let pidfile = dir.join(format!("sigaction-{}.pid", std::process::id()));
+        let _ = std::fs::remove_file(&pidfile);
         let mut config = DaemonConfig::new();
-        config.foreground(true).close_fds(false);
+        config.foreground(true).close_fds(false).pidfile(&pidfile);
         let mut forker = NullForker::new(vec![], Ok(()));
         match run_inner(&config, &mut forker) {
             Err(DaemonizeError::SystemError(msg)) => {
@@ -940,9 +987,14 @@ mod tests {
             }
             other => panic!("expected SystemError to propagate, got {other:?}"),
         }
+        assert!(
+            !pidfile.exists(),
+            "a sequence that aborted after step 8 left its pidfile behind, \
+             naming a process that never started"
+        );
     }
 
-    // Covers: R134
+    // Covers: R134, R145
     #[test]
     fn sigprocmask_failure_propagates() {
         run_in_subprocess("tests::sigprocmask_failure_propagates_subprocess");
@@ -955,8 +1007,11 @@ mod tests {
             return;
         }
         steps::failpoints::SIGPROCMASK_FAILS.store(true, std::sync::atomic::Ordering::Relaxed);
+        let dir = crate::test_support::tmp_dir();
+        let pidfile = dir.join(format!("sigprocmask-{}.pid", std::process::id()));
+        let _ = std::fs::remove_file(&pidfile);
         let mut config = DaemonConfig::new();
-        config.foreground(true).close_fds(false);
+        config.foreground(true).close_fds(false).pidfile(&pidfile);
         let mut forker = NullForker::new(vec![], Ok(()));
         match run_inner(&config, &mut forker) {
             Err(DaemonizeError::SystemError(msg)) => {
@@ -967,9 +1022,14 @@ mod tests {
             }
             other => panic!("expected SystemError to propagate, got {other:?}"),
         }
+        assert!(
+            !pidfile.exists(),
+            "a sequence that aborted after step 8 left its pidfile behind, \
+             naming a process that never started"
+        );
     }
 
-    // Covers: R105
+    // Covers: R105, R145
     #[test]
     fn getrlimit_failure_propagates() {
         run_in_subprocess("tests::getrlimit_failure_propagates_subprocess");
@@ -986,8 +1046,11 @@ mod tests {
         // any fd is closed, so the subprocess's descriptors survive.
         steps::failpoints::FD_LISTING_UNAVAILABLE.store(true, std::sync::atomic::Ordering::Relaxed);
         steps::failpoints::GETRLIMIT_FAILS.store(true, std::sync::atomic::Ordering::Relaxed);
+        let dir = crate::test_support::tmp_dir();
+        let pidfile = dir.join(format!("getrlimit-{}.pid", std::process::id()));
+        let _ = std::fs::remove_file(&pidfile);
         let mut config = DaemonConfig::new();
-        config.foreground(true).close_fds(true);
+        config.foreground(true).close_fds(true).pidfile(&pidfile);
         let mut forker = NullForker::new(vec![], Ok(()));
         match run_inner(&config, &mut forker) {
             Err(DaemonizeError::SystemError(msg)) => {
@@ -998,6 +1061,11 @@ mod tests {
             }
             other => panic!("expected SystemError to propagate, got {other:?}"),
         }
+        assert!(
+            !pidfile.exists(),
+            "a sequence that aborted after step 8 left its pidfile behind, \
+             naming a process that never started"
+        );
     }
 
     // Covers: R131
@@ -1034,7 +1102,7 @@ mod tests {
         assert!(matches!(second, Err(DaemonizeError::LockConflict { .. })));
     }
 
-    // Covers: R134
+    // Covers: R134, R145
     #[test]
     fn foreground_lock_conflict_returns_err() {
         run_in_subprocess("tests::foreground_lock_conflict_returns_err_subprocess");
@@ -1052,10 +1120,22 @@ mod tests {
         let mut config = DaemonConfig::new();
         config.foreground(true).close_fds(false).pidfile(&pidfile);
         let mut forker = NullForker::new(vec![], Ok(()));
+        // The running daemon's own pidfile, which this attempt must not touch.
+        std::fs::write(&pidfile, "999999\n").expect("the incumbent's pidfile");
+
         let result = run_inner(&config, &mut forker);
         assert!(
             matches!(result, Err(DaemonizeError::LockConflict { .. })),
             "foreground mode should surface setup errors as Err, not exit"
+        );
+        // The abort guard removes the pidfile a failed sequence wrote. This
+        // sequence failed at step 7, before step 8 wrote anything, so the file
+        // on disk belongs to the daemon already running — deleting it would
+        // strand whoever is supervising it.
+        assert_eq!(
+            std::fs::read_to_string(&pidfile).expect("the incumbent's pidfile survives"),
+            "999999\n",
+            "a lock conflict removed the running daemon's pidfile"
         );
     }
 

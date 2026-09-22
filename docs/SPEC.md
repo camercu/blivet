@@ -1440,3 +1440,14 @@ verification points.
   synchronization point an observer waits on, so any state it must see
   has to be true by then; an observer that wakes on the byte never sees
   the pidfile.
+- R144. `validate()` rejects any configured path that is later opened for
+  writing — pidfile, stdout, stderr, lockfile — when it is a directory.
+  Only the pidfile was checked once, so pointing `stdout` at a directory
+  passed validation and failed with `EISDIR` in the forked daemon; a
+  user's mistake belongs pre-fork, where nothing has happened yet.
+- R145. A daemonization sequence that fails *after* the pidfile is
+  written removes it before aborting, in daemon and foreground mode
+  alike, gated on `cleanup_on_drop` like the drop-time cleanup it stands
+  in for. No `DaemonContext` exists on that path, so nothing else would.
+  A failure *before* the write removes nothing: on a lock conflict the
+  pidfile on disk belongs to the daemon already running.
