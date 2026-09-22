@@ -212,7 +212,7 @@ termux-test:
 # and is copied through untouched. The check that they are current is an
 # ordinary test, so `just test` already runs it.
 docs-bless:
-    {{cargo}} test --test docgen -- --ignored
+    __BLIVET_DOCS_BLESS=1 {{cargo}} test --test docgen -- --ignored
 
 # Regenerate manpage from markdown source (requires pandoc).
 # The @VERSION@ placeholder is filled from Cargo.toml's package version, so the

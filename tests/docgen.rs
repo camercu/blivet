@@ -121,10 +121,24 @@ fn generated_doc_cells_are_current() {
     }
 }
 
+/// Set by `just docs-bless`, and by nothing else, so that a run of the ignored
+/// corpus cannot write to the repository.
+///
+/// `#[ignore]` is not enough on its own: `scripts/privileged-test.sh` runs the
+/// suite with `--run-ignored all`, which is the whole point of that tier, and
+/// this test would then rewrite whatever the developer had in their working
+/// tree and leave `git status` clean. `src/steps.rs` guards the same hazard the
+/// same way for its subprocess-only body.
+const BLESS_ENV: &str = "__BLIVET_DOCS_BLESS";
+
 /// Rewrite the machine-owned cells. Run by `just docs-bless`.
 #[test]
 #[ignore = "writes to the repository; run it with `just docs-bless`"]
 fn bless_generated_doc_cells() {
+    if std::env::var(BLESS_ENV).is_err() {
+        println!("not blessing: {BLESS_ENV} is unset, so this is not `just docs-bless`");
+        return;
+    }
     let platforms = supported_platforms();
     let msrv = msrv();
     for doc in GENERATED_DOCS {
