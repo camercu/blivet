@@ -486,13 +486,22 @@ a reason permission does not describe. See R141.
 
 ### Path comparison
 
-All overlap and sameness checks use `std::fs::canonicalize()` on both
-operands. If either path does not exist, fall back to byte-equal
-`PathBuf` comparison.
+All overlap and sameness checks resolve both operands to one identity
+before comparing them. An existing file resolves through
+`std::fs::canonicalize()`. A file that does not exist yet — the normal
+case, since a first run creates its own pidfile and logs — resolves as
+its canonical parent directory plus its file name, so two spellings of
+one directory (a `..` round trip, or a symlinked parent such as
+`/var/run` -> `/run`) still name one file. Byte equality applies only
+to a path with no file name or with a parent that does not resolve
+either.
 
-> Overlap detection is best-effort for not-yet-created files. The
-> actual failure mode (fd interference) would produce a clear runtime
-> error.
+Overlap detection therefore holds before the files exist, which is
+when it matters: the failure it prevents is silent. Two spellings of
+one path get two `O_TRUNC` opens with independent offsets, so the
+pidfile is truncated to nothing by the stdout redirect, or stdout and
+stderr overwrite each other — and the daemon starts and exits 0
+either way. See R115.
 
 ### Lockfile derivation
 
@@ -1335,7 +1344,10 @@ verification points.
   `allow_hyphen_values`.
 - R113. All CLI validation occurs before daemonization.
 - R114. Library does not accept a program path or call exec.
-- R115. Path comparison: `canonicalize()` with byte-equality fallback.
+- R115. Path comparison resolves both operands to one identity before
+  comparing, whether or not the file exists yet: `canonicalize()` when
+  it does, canonical parent directory plus file name when it does not,
+  byte equality only when neither is available.
 - R116. `ProgramNotFound` and `ExecFailed` are produced only by CLI.
 - R117. `DaemonContext::Drop` writes exit code `1` and failure message
   to pipe if `notify_pipe` is still `Some`.
