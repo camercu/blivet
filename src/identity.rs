@@ -128,6 +128,29 @@ mod tests {
         assert_eq!(user.name, "root");
     }
 
+    // Covers: R63
+    #[test]
+    fn resolve_user_numeric_unassigned_is_rejected() {
+        // Switching to a user needs the passwd entry's primary GID and home
+        // directory, so an id with no entry cannot be honoured and must not be
+        // accepted silently.
+        match resolve_user("4242424") {
+            Err(DaemonizeError::UserNotFound(_)) => {}
+            Err(other) => panic!("expected UserNotFound, got {other:?}"),
+            Ok(user) => panic!("an unassigned uid resolved to {}", user.name),
+        }
+    }
+
+    // Covers: R142
+    #[test]
+    fn resolve_group_numeric_unassigned_is_accepted() {
+        // Deliberately not symmetric with the user side: setgid() needs nothing
+        // the number does not carry, and a GID with no group entry is ordinary
+        // on Unix, so refusing one would reject a legitimate configuration.
+        let gid = resolve_group_gid("4242424").expect("an unassigned gid is usable");
+        assert_eq!(gid.as_raw(), 4242424);
+    }
+
     // Covers: R59
     #[test]
     fn resolve_user_name() {
