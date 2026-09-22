@@ -299,7 +299,8 @@ impl DaemonConfig {
     ///   a NUL byte
     /// - Any configured path (pidfile, stdout, stderr, lockfile) is not absolute
     /// - The chdir path is not absolute, does not exist, or is not a directory
-    /// - The pidfile path is a directory
+    /// - Any configured path that is opened for writing (pidfile, stdout,
+    ///   stderr, lockfile) is a directory
     /// - Parent directories of configured paths are not writable — by
     ///   permission, or because the filesystem is read-only — or the probe
     ///   could not answer at all (the errno is named)
@@ -329,25 +330,22 @@ impl DaemonConfig {
         // Check pidfile
         if let Some(ref p) = self.pidfile {
             validate_path(p, "pidfile")?;
-            if p.is_dir() {
-                return Err(DaemonizeError::ValidationError(format!(
-                    "pidfile path is a directory: {}",
-                    p.display()
-                )));
-            }
             validate_parent_writable(p, "pidfile")?;
+            reject_directory(p, "pidfile")?;
         }
 
         // Check stdout
         if let Some(ref p) = self.stdout {
             validate_path(p, "stdout")?;
             validate_parent_writable(p, "stdout")?;
+            reject_directory(p, "stdout")?;
         }
 
         // Check stderr
         if let Some(ref p) = self.stderr {
             validate_path(p, "stderr")?;
             validate_parent_writable(p, "stderr")?;
+            reject_directory(p, "stderr")?;
         }
 
         // Check lockfile (the derived case re-checks the pidfile; harmless)
@@ -355,6 +353,7 @@ impl DaemonConfig {
         if let Some(p) = lockfile {
             validate_path(p, "lockfile")?;
             validate_parent_writable(p, "lockfile")?;
+            reject_directory(p, "lockfile")?;
         }
 
         // Path overlap checks: lockfile/pidfile must not equal stdout/stderr.
@@ -461,6 +460,26 @@ const EFFECTIVE_ACCESS: nix::fcntl::AtFlags = nix::fcntl::AtFlags::AT_EACCESS;
 /// answer for.
 #[cfg(blivet_faccessat_lacks_eaccess)]
 const EFFECTIVE_ACCESS: nix::fcntl::AtFlags = nix::fcntl::AtFlags::empty();
+
+/// Rejects a path that is a directory.
+///
+/// Runs after the parent-writability check so that `/` — the one absolute path
+/// with no parent — keeps reporting the parent problem it always reported.
+///
+/// Every path this runs on is opened for writing later. Only the pidfile was
+/// checked, so pointing `stdout` at a directory passed validation and failed
+/// with `EISDIR` at step 12 — in the forked daemon, after step 8 had already
+/// written the pidfile. A user's mistake belongs pre-fork, where it is a
+/// `ValidationError` and nothing has happened yet.
+fn reject_directory(path: &std::path::Path, label: &str) -> Result<(), DaemonizeError> {
+    if path.is_dir() {
+        return Err(DaemonizeError::ValidationError(format!(
+            "{label} path is a directory: {}",
+            path.display()
+        )));
+    }
+    Ok(())
+}
 
 fn validate_parent_writable(path: &std::path::Path, name: &str) -> Result<(), DaemonizeError> {
     use nix::unistd::AccessFlags;
@@ -755,6 +774,32 @@ mod tests {
             );
         }
         let _ = std::fs::remove_file(&parent_file);
+    }
+
+    // Covers: R144
+    #[test]
+    fn validate_rejects_a_directory_where_a_file_is_opened() {
+        // The pidfile had this check and the output paths did not, so a plain
+        // mistake — pointing -o at a directory — reached step 12 in the forked
+        // daemon, where `open` fails with EISDIR after the pidfile is already
+        // on disk. Pre-fork is where a user error belongs.
+        let dir = tempfile::tempdir().unwrap();
+        for label in ["pidfile", "stdout", "stderr", "lockfile"] {
+            let mut cfg = DaemonConfig::new();
+            match label {
+                "pidfile" => cfg.pidfile(dir.path()),
+                "stdout" => cfg.stdout(dir.path()),
+                "stderr" => cfg.stderr(dir.path()),
+                _ => cfg.lockfile(dir.path()),
+            };
+            match cfg.validate() {
+                Err(DaemonizeError::ValidationError(msg)) => assert!(
+                    msg.contains("is a directory") && msg.contains(label),
+                    "{label}: expected a directory complaint naming it, got {msg}"
+                ),
+                other => panic!("{label}: a directory was accepted: {other:?}"),
+            }
+        }
     }
 
     #[test]

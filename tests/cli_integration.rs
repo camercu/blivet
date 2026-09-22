@@ -260,6 +260,43 @@ fn validation_error_nonabsolute_pidfile() {
     assert_eq!(output.status.code(), Some(64));
 }
 
+// Covers: R144, R145
+#[test]
+fn output_path_that_is_a_directory_is_rejected_before_anything_happens() {
+    // The consumer-visible form of the bug this pair of requirements closes:
+    // `-o` pointed at a directory used to pass validation, fork, write the
+    // pidfile at step 8, then fail with EISDIR at step 12 — leaving a pidfile
+    // naming a process that never started.
+    let dir = tempfile::tempdir().unwrap();
+    let outdir = dir.path().join("outdir");
+    std::fs::create_dir(&outdir).unwrap();
+    let pidfile = dir.path().join("daemon.pid");
+
+    let output = daemonize_cmd()
+        .args([
+            "-p",
+            pidfile.to_str().unwrap(),
+            "-o",
+            outdir.to_str().unwrap(),
+            "--",
+            "sleep",
+            "30",
+        ])
+        .output()
+        .unwrap();
+
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "a directory as stdout is a usage error, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        !pidfile.exists(),
+        "nothing should have been written: the run never got past validation"
+    );
+}
+
 // Covers: R51, R113, R116
 #[test]
 fn program_not_found_exits_66() {
