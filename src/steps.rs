@@ -31,6 +31,12 @@ pub(crate) mod failpoints {
     pub(crate) static GETRLIMIT_FAILS: AtomicBool = AtomicBool::new(false);
     pub(crate) static FD_LISTING_UNAVAILABLE: AtomicBool = AtomicBool::new(false);
 
+    /// Fails the pidfile write *after* the file has been created and
+    /// truncated, which is the shape of a real `ENOSPC`/`EIO`. The step-9-13
+    /// failpoints cannot reach this: by the time they fire, step 8 has already
+    /// returned `Ok`.
+    pub(crate) static PIDFILE_WRITE_FAILS: AtomicBool = AtomicBool::new(false);
+
     /// Stands in for the fd limit `getrlimit` would report, or 0 to use the
     /// real one.
     ///
@@ -163,6 +169,7 @@ pub(crate) fn write_pidfile(
             .map_err(|e| DaemonizeError::PidfileError(format!("seek: {e}")))?;
         nix::unistd::ftruncate(flock.as_fd(), 0)
             .map_err(|e| DaemonizeError::PidfileError(format!("truncate: {e}")))?;
+        inject_pidfile_write_failure()?;
         write_all_fd(flock.as_fd(), content.as_bytes())
             .map_err(|e| DaemonizeError::PidfileError(format!("write: {e}")))?;
     } else {
@@ -176,11 +183,25 @@ pub(crate) fn write_pidfile(
         .map_err(|e| {
             DaemonizeError::PidfileError(format!("open {}: {e}", pidfile_path.display()))
         })?;
+        inject_pidfile_write_failure()?;
         write_all_fd(&fd, content.as_bytes()).map_err(|e| {
             DaemonizeError::PidfileError(format!("write {}: {e}", pidfile_path.display()))
         })?;
     }
 
+    Ok(())
+}
+
+/// Stands in for a write that fails once the pidfile already exists and is
+/// empty. Compiled away outside tests.
+#[inline]
+fn inject_pidfile_write_failure() -> Result<(), DaemonizeError> {
+    #[cfg(test)]
+    if failpoints::injected(&failpoints::PIDFILE_WRITE_FAILS) {
+        return Err(DaemonizeError::PidfileError(
+            "write: injected failure".to_string(),
+        ));
+    }
     Ok(())
 }
 
