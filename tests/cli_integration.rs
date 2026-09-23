@@ -3,7 +3,7 @@ mod helpers;
 use helpers::*;
 use std::os::unix::fs::PermissionsExt;
 use std::process::Command;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 fn daemonize_cmd() -> Command {
     Command::new(daemonize_bin())
@@ -721,38 +721,51 @@ fn truncate_mode_overwrites_existing() {
 
 // --- Parent notification timing (R39, R42) ---
 
-// Covers: R39, R42, R108
+// Covers: R39, R42
 #[test]
 fn parent_waits_for_exec_before_exiting() {
+    // The daemon is held short of exec by pointing its stdout at a FIFO:
+    // opening a FIFO for writing blocks until something opens it for reading.
+    // While the daemon is held the parent must still be waiting.
+    //
+    // The bounded wait is an absence check, not synchronisation: a correct
+    // parent cannot exit while the daemon is held, however slow the machine,
+    // so it can only fail on a parent that stopped waiting.
     let dir = tempfile::tempdir().unwrap();
-    let pidfile = dir.path().join("test.pid");
+    let fifo = dir.path().join("stdout.fifo");
+    nix::unistd::mkfifo(&fifo, nix::sys::stat::Mode::S_IRWXU).unwrap();
 
-    // Time how long the parent takes to return — it should block until
-    // exec succeeds (EOF on pipe) or the daemon signals readiness.
-    let start = Instant::now();
-    let output = daemonize_cmd()
-        .args(["-p", pidfile.to_str().unwrap(), "--", "sleep", "30"])
-        .output()
+    let mut parent = daemonize_cmd()
+        .args(["-o", fifo.to_str().unwrap(), "--", "true"])
+        .stdout(std::process::Stdio::null())
+        .spawn()
         .unwrap();
-    let elapsed = start.elapsed();
+    let (exited, exit) = std::sync::mpsc::channel();
+    std::thread::spawn(move || exited.send(parent.wait()));
+    let early = exit.recv_timeout(Duration::from_millis(300));
 
-    assert!(output.status.success(), "should succeed");
+    // Release the daemon before asserting anything, so a failure does not
+    // strand it on the FIFO: it opens its stdout, execs `true`, and the exec
+    // closes the notification pipe, which is what the parent waits for.
+    let mut drained = Vec::new();
+    std::io::Read::read_to_end(&mut std::fs::File::open(&fifo).unwrap(), &mut drained).unwrap();
 
-    // Parent should return relatively quickly (exec closes pipe via CLOEXEC)
     assert!(
-        elapsed < Duration::from_secs(10),
-        "parent should not hang (took {elapsed:?})"
+        early.is_err(),
+        "the parent exited while the daemon was still held before exec: {early:?}"
     );
-
-    let pid = wait_for_pidfile(&pidfile).expect("pidfile should appear");
-    kill_process(pid);
+    let status = exit.recv().unwrap().unwrap();
+    assert!(
+        status.success(),
+        "the parent should exit 0 once exec succeeds: {status}"
+    );
 }
 
 // --- Exec failure reporting (R43, R44) ---
 
-// Covers: R43, R109
+// Covers: R55
 #[test]
-fn exec_failure_reports_to_parent() {
+fn non_executable_program_is_rejected_before_fork() {
     let dir = tempfile::tempdir().unwrap();
 
     // Use an absolute path to a file that exists but isn't executable
@@ -774,7 +787,7 @@ fn exec_failure_reports_to_parent() {
     );
 }
 
-// Covers: R44
+// Covers: R43, R44, R108, R109
 #[test]
 fn reported_error_after_fork_removes_pidfile() {
     // A post-fork failure reaches report_error, which _exits and bypasses Drop.
@@ -806,6 +819,13 @@ fn reported_error_after_fork_removes_pidfile() {
         Some(66),
         "missing interpreter should exit 66 (exec ENOENT → ProgramNotFound), stderr: {}",
         String::from_utf8_lossy(&output.stderr)
+    );
+    // R43: the exit status alone is not the report — the message must reach
+    // the parent's stderr too, naming what failed.
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains(script.to_str().unwrap()),
+        "the parent's stderr should name the program that failed to exec: {stderr:?}"
     );
     assert!(
         !pidfile.exists(),
