@@ -327,60 +327,45 @@ impl DaemonConfig {
             )));
         }
 
-        // Check pidfile
-        if let Some(ref p) = self.pidfile {
-            validate_path(p, "pidfile")?;
-            validate_parent_writable(p, "pidfile")?;
-            reject_directory(p, "pidfile")?;
-        }
-
-        // Check stdout
-        if let Some(ref p) = self.stdout {
-            validate_path(p, "stdout")?;
-            validate_parent_writable(p, "stdout")?;
-            reject_directory(p, "stdout")?;
-        }
-
-        // Check stderr
-        if let Some(ref p) = self.stderr {
-            validate_path(p, "stderr")?;
-            validate_parent_writable(p, "stderr")?;
-            reject_directory(p, "stderr")?;
-        }
-
-        // Check lockfile (the derived case re-checks the pidfile; harmless)
+        // Every path this process writes to, in the order it is checked. An
+        // owned file is one the sequence creates and keeps (the pidfile, the
+        // lockfile); a stream is one stdout or stderr is redirected into.
+        // Adding a writable path means adding a row here, which gives it every
+        // per-path check and every overlap check at once — a path that skips
+        // one cannot be written (R144).
         let lockfile = self.effective_lockfile();
-        if let Some(p) = lockfile {
-            validate_path(p, "lockfile")?;
-            validate_parent_writable(p, "lockfile")?;
-            reject_directory(p, "lockfile")?;
+        let writable = [
+            (self.pidfile.as_ref(), "pidfile", Role::Owned),
+            (self.stdout.as_ref(), "stdout", Role::Stream),
+            (self.stderr.as_ref(), "stderr", Role::Stream),
+            // The derived case re-checks the pidfile; harmless.
+            (lockfile, "lockfile", Role::Owned),
+        ];
+        for (path, name, _) in writable {
+            if let Some(path) = path {
+                validate_path(path, name)?;
+                validate_parent_writable(path, name)?;
+                reject_directory(path, name)?;
+            }
         }
 
-        // Path overlap checks: lockfile/pidfile must not equal stdout/stderr.
-        // Pidfile pairs come first so a derived lockfile (== pidfile) is
+        // No owned file may also be a stream: the redirect's O_TRUNC would
+        // empty it. An owned file may equal another owned file (the pidfile is
+        // its own lockfile by default), and stdout may share stderr's file.
+        // Owned rows come in table order, so a derived lockfile (== pidfile) is
         // reported as the pidfile the user actually configured.
-        let overlap_checks = [
-            (
-                self.pidfile.as_ref(),
-                "pidfile",
-                self.stdout.as_ref(),
-                "stdout",
-            ),
-            (
-                self.pidfile.as_ref(),
-                "pidfile",
-                self.stderr.as_ref(),
-                "stderr",
-            ),
-            (lockfile, "lockfile", self.stdout.as_ref(), "stdout"),
-            (lockfile, "lockfile", self.stderr.as_ref(), "stderr"),
-        ];
-        for (first, first_name, second, second_name) in overlap_checks {
-            if let (Some(first), Some(second)) = (first, second) {
-                if paths_same(first, second) {
+        let rows = |role: Role| {
+            writable
+                .iter()
+                .filter(move |(_, _, r)| *r == role)
+                .filter_map(|(path, name, _)| path.map(|p| (p, *name)))
+        };
+        for (owned, owned_name) in rows(Role::Owned) {
+            for (stream, stream_name) in rows(Role::Stream) {
+                if paths_same(owned, stream) {
                     return Err(DaemonizeError::ValidationError(format!(
-                        "{first_name} and {second_name} must not be the same path: {}",
-                        first.display()
+                        "{owned_name} and {stream_name} must not be the same path: {}",
+                        owned.display()
                     )));
                 }
             }
@@ -460,6 +445,16 @@ const EFFECTIVE_ACCESS: nix::fcntl::AtFlags = nix::fcntl::AtFlags::AT_EACCESS;
 /// answer for.
 #[cfg(blivet_faccessat_lacks_eaccess)]
 const EFFECTIVE_ACCESS: nix::fcntl::AtFlags = nix::fcntl::AtFlags::empty();
+
+/// What a writable path is to the sequence, which decides the overlaps it may
+/// not have — see `DaemonConfig::validate`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Role {
+    /// Created and kept by the sequence: the pidfile, the lockfile.
+    Owned,
+    /// Redirected into by stdout or stderr.
+    Stream,
+}
 
 /// Rejects a path that is a directory.
 ///
