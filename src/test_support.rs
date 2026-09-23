@@ -130,7 +130,8 @@ pub(crate) fn subprocess_report(test_name: &str, output: &Output) -> String {
 /// Directory for test paths that reach the filesystem, honouring `TMPDIR`.
 ///
 /// `/tmp` is not universal — Android and Termux ship without it — so no test
-/// names that path directly; `tests/location_independence.rs` enforces that.
+/// names that path directly. The bionic tier is where that fails: it runs the
+/// library tests on a system with no `/tmp` at all.
 /// `std::env::temp_dir()` reads `TMPDIR` and falls back to `/tmp` only where
 /// the platform says so, which means a platform without `/tmp` must set
 /// `TMPDIR` (the Android CI jobs point it at `/data/local/tmp`).
