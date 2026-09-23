@@ -169,12 +169,10 @@ fn covers_tags_reference_real_requirements() {
 #[test]
 fn requirement_coverage_does_not_regress() {
     // Ratchet: raise this as coverage grows; it must never be lowered.
-    //
-    // The remaining untagged requirements are structural/compile-time (derives,
-    // `#![deny(unsafe_code)]`, unsafe confinement, type signatures, internal
-    // step ordering, panic-on-OS-failure) with no discrete runtime test —
-    // see `report_uncovered_requirements` for the current list.
-    const BASELINE: usize = 123;
+    // `report_uncovered_requirements` lists what remains. Read each one before
+    // deciding it has no runtime test: some that looked structural turned out
+    // to be behaviours a test already observed, untagged.
+    const BASELINE: usize = 125;
     let covered = covered_requirements().len();
     assert!(
         covered >= BASELINE,

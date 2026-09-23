@@ -912,7 +912,7 @@ mod tests {
         );
     }
 
-    // Covers: R66, R68
+    // Covers: R66, R68, R121
     #[test]
     fn foreground_mode_skips_fork() {
         run_in_subprocess("tests::foreground_mode_skips_fork_subprocess");
@@ -921,15 +921,35 @@ mod tests {
     #[test]
     #[ignore]
     fn foreground_mode_skips_fork_subprocess() {
+        use nix::sys::stat::fstat;
+
         if !is_subprocess() {
             return;
         }
         let mut config = DaemonConfig::new();
         config.foreground(true).close_fds(false);
-        let mut forker = NullForker::new(vec![], Ok(()));
+        // No fork is scripted, so a fork panics; setsid is scripted to fail,
+        // so a setsid surfaces as an error. Either would fail the run.
+        let mut forker = NullForker::new(
+            vec![],
+            Err(DaemonizeError::SetsidFailed(
+                "foreground must not setsid".into(),
+            )),
+        );
+        let stdout_before = fstat(std::io::stdout()).unwrap();
+
         let result = run_inner(&config, &mut forker);
         let ctx = result.expect("foreground daemonize_inner should succeed");
         assert!(ctx.lockfile_fd().is_none());
+
+        // Step 6 leaves stdout inherited in foreground mode, rather than
+        // pointing it at /dev/null.
+        let stdout_after = fstat(std::io::stdout()).unwrap();
+        assert_eq!(
+            (stdout_before.st_dev, stdout_before.st_ino),
+            (stdout_after.st_dev, stdout_after.st_ino),
+            "foreground mode redirected stdout"
+        );
     }
 
     // The three SystemError-producing steps cannot be made to fail from inside
@@ -1198,7 +1218,7 @@ mod tests {
         assert!(ctx.notify_parent().is_ok());
     }
 
-    // Covers: R69
+    // Covers: R69, R122
     #[test]
     fn close_fds_false_preserves_fds() {
         run_in_subprocess("tests::close_fds_false_preserves_fds_subprocess");
