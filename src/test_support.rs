@@ -69,7 +69,7 @@ pub(crate) fn run_in_subprocess(test_name: &str) {
 ///
 /// The child's body branches on `marker`, so the same test source is both the
 /// caller and the isolated run. Every re-invocation in the crate goes through
-/// here; `tests/self_reinvocation.rs` enforces that.
+/// here, for the capture described below.
 ///
 /// The child's output is captured, not inherited. A child writing straight to
 /// the parent's stdout interleaves with it, and with the other children running
