@@ -1482,3 +1482,123 @@ fn user_and_group_switch_is_permitted_to_root_alone() {
 fn group_only_switch_is_permitted_to_root_alone() {
     assert_switch_status(&["-g", "65534"]);
 }
+
+// --- Step 12: a stream must not be a file the daemon owns (R146) ---
+//
+// Validation compares paths before the files exist, and no comparison of
+// spellings can see every way two names reach one file. Step 12 compares the
+// files themselves once it has them open. Hard links make a same-file pair on
+// every filesystem; the dangling symlink is the shape the path check cannot
+// resolve because its target does not exist yet.
+
+fn assert_rejected_as_same_file(output: &std::process::Output) {
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(64), "stderr: {stderr}");
+    assert!(
+        stderr.contains("same file"),
+        "stderr should say why: {stderr}"
+    );
+}
+
+// Covers: R146
+#[test]
+fn stdout_through_a_dangling_symlink_to_the_pidfile_is_rejected() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("out.log");
+    let link = dir.path().join("link");
+    std::os::unix::fs::symlink(&out, &link).unwrap();
+
+    let output = daemonize_cmd()
+        .args(["-p", link.to_str().unwrap(), "-o", out.to_str().unwrap()])
+        .args(["--", "echo", "hello"])
+        .output()
+        .unwrap();
+
+    assert_rejected_as_same_file(&output);
+    let left = std::fs::read_to_string(&out).unwrap_or_default();
+    assert!(
+        !left.contains("hello"),
+        "the program's output reached the pidfile: {left:?}"
+    );
+}
+
+// Covers: R146
+#[test]
+fn stdout_hard_linked_to_the_pidfile_is_rejected() {
+    let dir = tempfile::tempdir().unwrap();
+    let pidfile = dir.path().join("daemon.pid");
+    let out = dir.path().join("out.log");
+    std::fs::write(&pidfile, "stale\n").unwrap();
+    std::fs::hard_link(&pidfile, &out).unwrap();
+
+    let output = daemonize_cmd()
+        .args(["-p", pidfile.to_str().unwrap(), "-o", out.to_str().unwrap()])
+        .args(["--", "echo", "hello"])
+        .output()
+        .unwrap();
+
+    assert_rejected_as_same_file(&output);
+}
+
+// Covers: R146
+#[test]
+fn stdout_hard_linked_to_the_lockfile_is_rejected() {
+    let dir = tempfile::tempdir().unwrap();
+    let lockfile = dir.path().join("daemon.lock");
+    let out = dir.path().join("out.log");
+    std::fs::write(&lockfile, "").unwrap();
+    std::fs::hard_link(&lockfile, &out).unwrap();
+
+    let output = daemonize_cmd()
+        .args([
+            "-l",
+            lockfile.to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
+        ])
+        .args(["--", "echo", "hello"])
+        .output()
+        .unwrap();
+
+    assert_rejected_as_same_file(&output);
+}
+
+// Covers: R146
+#[test]
+fn stdout_and_stderr_on_one_file_share_a_descriptor() {
+    // Two names for one file must not get two descriptors with independent
+    // offsets, where each stream overwrites the other's bytes.
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("out.log");
+    let err = dir.path().join("err.log");
+    std::fs::write(&out, "").unwrap();
+    std::fs::hard_link(&out, &err).unwrap();
+
+    let output = daemonize_cmd()
+        .args([
+            "-f",
+            "-o",
+            out.to_str().unwrap(),
+            "-e",
+            err.to_str().unwrap(),
+        ])
+        .args([
+            "--",
+            "/bin/sh",
+            "-c",
+            "echo OUT-ONE; echo ERR-TWO >&2; echo OUT-THREE",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        std::fs::read_to_string(&out).unwrap(),
+        "OUT-ONE\nERR-TWO\nOUT-THREE\n",
+        "the two streams overwrote each other"
+    );
+}

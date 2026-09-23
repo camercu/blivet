@@ -532,6 +532,11 @@ only when both paths in a pair are `Some`.
 > independent file descriptions. Overlap would cause one open to
 > interfere with the other.
 
+Validation compares the paths (R115), so a plain overlap is a usage
+error before anything forks. Step 12 compares the files themselves once
+they are open (R146), and refuses the overlaps no path comparison can
+see.
+
 ### User/group validation
 
 `validate()` checks only that euid is 0 when either a user or group is
@@ -694,18 +699,30 @@ responsibility (via `drop_privileges()`), files are created as the
 current user (typically root); `drop_privileges()` chowns them to the
 target user before switching.
 
-Open with `O_WRONLY | O_CREAT` and `O_TRUNC` or `O_APPEND` per the
-append flag. Mode 0644 (subject to umask from step 4). `dup2` to the
-target fd, close the source fd. Open failure or `dup2` failure returns
-`OutputFileError` (via the notification pipe).
+Open each configured file with `O_WRONLY | O_CREAT`, plus `O_APPEND`
+per the append flag, but without `O_TRUNC`: nothing on disk changes
+until the files have been compared. Mode 0644 (subject to umask from
+step 4). Open failure returns `OutputFileError` (via the notification
+pipe).
+
+Then compare the open files by device and inode (R146):
+
+- A stream that is the pidfile or the lockfile, under any name, is
+  refused with `ValidationError` before anything is truncated.
+  Validation compares paths before the files exist, and no comparison
+  of spellings sees every way two names reach one file — a symlink
+  whose target does not exist yet, a case-insensitive filesystem, a
+  hard link. This is where the files themselves are compared.
+- If stdout and stderr are one file, stderr takes stdout's descriptor,
+  so the two share one file description and write offset rather than
+  overwriting each other.
+
+Only then, unless appending, truncate each distinct regular file once
+— a FIFO or a device such as `/dev/null` has nothing to truncate — and
+`dup2` each descriptor to its target fd. `dup2` failure returns
+`OutputFileError`.
 
 The append flag applies uniformly to both stdout and stderr.
-
-**Same-path optimization:** if stdout and stderr resolve to the same
-path (per the path comparison method), open the file once for stdout
-(fd 1) and `dup2` fd 1 to fd 2 — do not close fd 1. Both descriptors
-share the same file description and write offset. `dup2` failure
-returns `OutputFileError`.
 
 > Opening all three fds as `/dev/null` in step 6, then reopening
 > configured files in step 12, ensures output is captured from the
@@ -1469,3 +1486,8 @@ verification points.
   empty pidfile. A failure before then removes nothing: after a lock
   conflict, or an `open` the system refused, the file on disk belongs
   to someone else.
+- R146. Step 12 compares the files it opened by device and inode
+  before truncating any of them: a stdout or stderr file that is the
+  pidfile or the lockfile, under any name, is refused with
+  `ValidationError`; stdout and stderr that are one file share a
+  descriptor.
