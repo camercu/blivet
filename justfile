@@ -72,8 +72,8 @@ openbsd_rust := "1.90"
 # `cargo build --locked --tests` and so builds every dev-dependency. It is a
 # release-gating tier, so a dev-dep landing between this and `openbsd_rust`
 # would pass the cheap guard below and break the expensive one. Headroom is
-# zero today: heapless declares exactly this. `tests/toolchain_floors.rs` holds
-# the Dockerfile's `FROM rust:` to it.
+# zero today: heapless declares exactly this. `docker-test` passes it to the
+# Dockerfile's `FROM`, so the image cannot build on another version.
 docker_rust := "1.87"
 
 # Fail if a resolved dependency declares a rust-version too high for the
@@ -223,7 +223,7 @@ mutants base="origin/main":
 
 # Build and run Docker container for root + Linux-specific tests
 docker-test:
-    docker build -t blivet-test .
+    docker build --build-arg RUST_VERSION={{docker_rust}} -t blivet-test .
     docker run --rm --init --privileged blivet-test
 
 # Run the library tests against bionic, Android's libc, in a Termux container.
