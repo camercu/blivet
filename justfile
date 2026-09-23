@@ -196,6 +196,19 @@ test:
     RUSTFLAGS="-D warnings" {{cargo}} nextest run --profile gate {{locked}}
     RUSTFLAGS="-D warnings" {{cargo}} test {{locked}} --doc
 
+# Mutation-test the code changed since `base`: every mutant in a changed line
+# must make some test fail. A survivor is code no test constrains — the
+# vacuous test that review keeps missing, found by what the tests do rather
+# than how they are written. Uncommitted changes count, so this runs before a
+# commit as well as in CI. A whole-crate sweep is plain `cargo mutants`.
+mutants base="origin/main":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    diff=$(mktemp)
+    trap 'rm -f "$diff"' EXIT
+    git diff "$(git merge-base {{base}} HEAD)" > "$diff"
+    cargo mutants ${CARGO_LOCKED:+--cargo-arg=$CARGO_LOCKED} --in-diff "$diff"
+
 # Build and run Docker container for root + Linux-specific tests
 docker-test:
     docker build -t blivet-test .

@@ -16,6 +16,7 @@ pkgs.mkShell {
     pandoc
     cargo-deny
     cargo-llvm-cov
+    cargo-mutants
     cargo-nextest
     cargo-public-api
   ];

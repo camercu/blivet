@@ -14,10 +14,6 @@ slow-timeout = { period = "5s", terminate-after = 1 }
 # containers — a flaky gate, which is the thing moving to nextest was meant to
 # stop.
 #
-# Considered: making this the default and giving cargo-mutants its own profile,
-# so the aggressive timeout is opt-in rather than inherited. Declined for now —
-# cargo-mutants is not in shell.nix and cannot be run here, so the change could
-# not be verified on the path it would affect.
 [profile.gate]
 # Report a test as slow at the integration poll bound, kill it at four times
 # that, so a genuinely hung test still cannot wedge the run.
