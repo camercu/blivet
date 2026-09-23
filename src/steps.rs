@@ -37,6 +37,11 @@ pub(crate) mod failpoints {
     /// returned `Ok`.
     pub(crate) static PIDFILE_WRITE_FAILS: AtomicBool = AtomicBool::new(false);
 
+    /// Fails the standalone pidfile `open` itself, before this process has
+    /// touched the file — an `EACCES`, say, that root would not hit. What is on
+    /// disk then is not this process's to remove.
+    pub(crate) static PIDFILE_OPEN_FAILS: AtomicBool = AtomicBool::new(false);
+
     /// Stands in for the fd limit `getrlimit` would report, or 0 to use the
     /// real one.
     ///
@@ -146,50 +151,85 @@ pub(crate) fn open_and_lock(path: &Path) -> Result<Flock<OwnedFd>, DaemonizeErro
     })
 }
 
-/// Step 8: Write PID to pidfile.
+/// Step 8, first half: take hold of the pidfile, without writing it yet.
 ///
-/// If the pidfile is the same path as the lockfile, seeks to 0, truncates,
-/// and writes to the already-locked fd. Otherwise opens, writes, and closes.
+/// The split is where ownership starts. Once this returns, the file on disk is
+/// this process's — it holds the lock on it, or has just created or truncated
+/// it — and a sequence that aborts afterwards owes its removal. If this fails,
+/// the file is untouched and not this process's to remove: a standalone `open`
+/// refused with `EACCES` leaves an existing pidfile exactly as it was.
+pub(crate) fn open_pidfile<'a>(
+    pidfile_path: &'a Path,
+    lockfile: Option<(&Path, &'a Flock<OwnedFd>)>,
+) -> Result<Pidfile<'a>, DaemonizeError> {
+    // The lockfile is the pidfile: step 7 already opened and locked it.
+    if let Some((lp, flock)) = lockfile {
+        if paths_same(pidfile_path, lp) {
+            return Ok(Pidfile::Locked(flock));
+        }
+    }
+
+    #[cfg(test)]
+    if failpoints::injected(&failpoints::PIDFILE_OPEN_FAILS) {
+        return Err(DaemonizeError::PidfileError(format!(
+            "open {}: injected failure",
+            pidfile_path.display()
+        )));
+    }
+    // Open explicitly with mode 0644 (R98); std::fs::write would create the
+    // file 0666 & ~umask, violating the mandated pidfile permissions.
+    let fd = open(
+        pidfile_path,
+        OFlag::O_WRONLY | OFlag::O_CREAT | OFlag::O_TRUNC | OFlag::O_CLOEXEC,
+        Mode::from_bits_truncate(0o644),
+    )
+    .map_err(|e| DaemonizeError::PidfileError(format!("open {}: {e}", pidfile_path.display())))?;
+    Ok(Pidfile::Opened {
+        fd,
+        path: pidfile_path,
+    })
+}
+
+/// A pidfile this process has taken hold of — see [`open_pidfile`].
+pub(crate) enum Pidfile<'a> {
+    /// The pidfile is the lockfile, already open and locked by step 7.
+    Locked(&'a Flock<OwnedFd>),
+    /// A standalone pidfile, created or truncated by [`open_pidfile`].
+    Opened { fd: OwnedFd, path: &'a Path },
+}
+
+impl Pidfile<'_> {
+    /// Step 8, second half: write this process's PID, replacing any content.
+    pub(crate) fn write_pid(self) -> Result<(), DaemonizeError> {
+        let content = format!("{}\n", std::process::id());
+        match self {
+            Pidfile::Locked(flock) => {
+                nix::unistd::lseek(flock.as_fd(), 0, Whence::SeekSet)
+                    .map_err(|e| DaemonizeError::PidfileError(format!("seek: {e}")))?;
+                nix::unistd::ftruncate(flock.as_fd(), 0)
+                    .map_err(|e| DaemonizeError::PidfileError(format!("truncate: {e}")))?;
+                inject_pidfile_write_failure()?;
+                write_all_fd(flock.as_fd(), content.as_bytes())
+                    .map_err(|e| DaemonizeError::PidfileError(format!("write: {e}")))
+            }
+            Pidfile::Opened { fd, path } => {
+                inject_pidfile_write_failure()?;
+                write_all_fd(&fd, content.as_bytes()).map_err(|e| {
+                    DaemonizeError::PidfileError(format!("write {}: {e}", path.display()))
+                })
+            }
+        }
+    }
+}
+
+/// Step 8 in one call, for the tests that exercise the step rather than the
+/// abort bookkeeping around it.
+#[cfg(test)]
 pub(crate) fn write_pidfile(
     pidfile_path: &Path,
     lockfile: Option<(&Path, &Flock<OwnedFd>)>,
 ) -> Result<(), DaemonizeError> {
-    let pid = std::process::id();
-    let content = format!("{pid}\n");
-
-    // Check if pidfile is the same as lockfile
-    let shared = match lockfile {
-        Some((lp, flock)) if paths_same(pidfile_path, lp) => Some(flock),
-        _ => None,
-    };
-
-    if let Some(flock) = shared {
-        // Write to already-locked fd: seek, truncate, write
-        nix::unistd::lseek(flock.as_fd(), 0, Whence::SeekSet)
-            .map_err(|e| DaemonizeError::PidfileError(format!("seek: {e}")))?;
-        nix::unistd::ftruncate(flock.as_fd(), 0)
-            .map_err(|e| DaemonizeError::PidfileError(format!("truncate: {e}")))?;
-        inject_pidfile_write_failure()?;
-        write_all_fd(flock.as_fd(), content.as_bytes())
-            .map_err(|e| DaemonizeError::PidfileError(format!("write: {e}")))?;
-    } else {
-        // Open explicitly with mode 0644 (R98); std::fs::write would create the
-        // file 0666 & ~umask, violating the mandated pidfile permissions.
-        let fd = open(
-            pidfile_path,
-            OFlag::O_WRONLY | OFlag::O_CREAT | OFlag::O_TRUNC | OFlag::O_CLOEXEC,
-            Mode::from_bits_truncate(0o644),
-        )
-        .map_err(|e| {
-            DaemonizeError::PidfileError(format!("open {}: {e}", pidfile_path.display()))
-        })?;
-        inject_pidfile_write_failure()?;
-        write_all_fd(&fd, content.as_bytes()).map_err(|e| {
-            DaemonizeError::PidfileError(format!("write {}: {e}", pidfile_path.display()))
-        })?;
-    }
-
-    Ok(())
+    open_pidfile(pidfile_path, lockfile)?.write_pid()
 }
 
 /// Stands in for a write that fails once the pidfile already exists and is

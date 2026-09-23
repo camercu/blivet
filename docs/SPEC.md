@@ -1460,9 +1460,12 @@ verification points.
   Only the pidfile was checked once, so pointing `stdout` at a directory
   passed validation and failed with `EISDIR` in the forked daemon; a
   user's mistake belongs pre-fork, where nothing has happened yet.
-- R145. A daemonization sequence that fails *after* the pidfile is
-  written removes it before aborting, in daemon and foreground mode
-  alike, gated on `cleanup_on_drop` like the drop-time cleanup it stands
-  in for. No `DaemonContext` exists on that path, so nothing else would.
-  A failure *before* the write removes nothing: on a lock conflict the
-  pidfile on disk belongs to the daemon already running.
+- R145. A daemonization sequence that fails once it owns the pidfile
+  — holds its lock, or has created or truncated it — removes it before
+  aborting, in daemon and foreground mode alike, gated on
+  `cleanup_on_drop` like the drop-time cleanup it stands in for. No
+  `DaemonContext` exists on that path, so nothing else would. That
+  includes a write that fails half way, which would otherwise leave an
+  empty pidfile. A failure before then removes nothing: after a lock
+  conflict, or an `open` the system refused, the file on disk belongs
+  to someone else.
