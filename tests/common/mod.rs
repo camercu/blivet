@@ -29,16 +29,3 @@ pub fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
         }
     }
 }
-
-/// The code part of `line`, where `marker` begins a comment.
-///
-/// A guard that scans sources judges a line on its code alone. Otherwise
-/// `let d = tmp_dir(); // not /tmp` is accused of the very thing it avoids, and
-/// no comment could name the rule it documents. A whole-line comment yields the
-/// empty string and so matches nothing.
-///
-/// A `marker` inside a string literal ends the scan early. That is a hole
-/// rather than a hazard: it exempts a line, it never accuses one.
-pub fn code_before<'a>(line: &'a str, marker: &str) -> &'a str {
-    line.split_once(marker).map_or(line, |(code, _)| code)
-}
