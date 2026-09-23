@@ -170,8 +170,20 @@ check-non-unix:
 # --all-targets: the integration tests reach the CLI through Cargo's
 # CARGO_BIN_EXE_daemonize, and a binary skipped for unmet required-features is
 # the case that would break them.
+#
+# Compiling without the feature does not show clap is gone: an unconditional
+# clap compiles fine. So the recipe also asks cargo for the resolved graph —
+# what a consumer builds, not how the manifest is worded — and fails if clap is
+# in it. Plain cargo there, since its output is parsed.
 check-no-default-features:
+    #!/usr/bin/env bash
+    set -euo pipefail
     RUSTFLAGS="-D warnings" {{cargo}} check --no-default-features --all-targets {{locked}}
+    graph=$(cargo tree {{locked}} -p blivet --no-default-features -e normal --prefix none)
+    if grep -q '^clap ' <<<"$graph"; then
+        echo "the library without its cli feature still builds clap" >&2
+        exit 1
+    fi
 
 # Run all static checks
 check: fmt-check lint lint-deny doc msrv-check check-cross check-non-unix check-no-default-features
