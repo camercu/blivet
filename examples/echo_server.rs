@@ -56,27 +56,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Daemonize first, while still single-threaded. `daemonize` is the safe
     // entry point: it verifies the single-threaded requirement for us. It only
-    // exists where the thread count is readable, so this is the gate a real
-    // consumer writes — the crate front page shows the same one. Calling it
-    // unconditionally would build on a supported platform and fail on any
-    // other, where it resolves to a `#[deprecated]` stub.
-    #[cfg(any(
-        target_os = "linux",
-        target_os = "android",
-        target_os = "macos",
-        target_os = "freebsd",
-        target_os = "netbsd",
-        target_os = "openbsd"
-    ))]
+    // exists where the thread count is readable; anywhere else it is a
+    // `#[deprecated]` stub, so the call is gated. This example is built with
+    // the crate, so it gates on the crate's own `blivet_thread_count`
+    // capability. A consumer cannot see that and gates on operating systems
+    // instead — the crate front page, under "Choosing an entry point", shows
+    // that `cfg`, generated from the same platform table.
+    #[cfg(blivet_thread_count)]
     let mut ctx = blivet::daemonize(&config)?;
-    #[cfg(not(any(
-        target_os = "linux",
-        target_os = "android",
-        target_os = "macos",
-        target_os = "freebsd",
-        target_os = "netbsd",
-        target_os = "openbsd"
-    )))]
+    #[cfg(not(blivet_thread_count))]
     // SAFETY: no threads have been spawned yet — this is the first thing main
     // does, and the serve loop below only starts after daemonizing.
     let mut ctx = unsafe { blivet::daemonize_unchecked(&config)? };

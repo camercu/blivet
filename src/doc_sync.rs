@@ -9,8 +9,9 @@
 //! So it is guarded, and the guard sits here rather than in `tests/` for one
 //! reason: [`variant_is_covered`] is an exhaustive match, which is a
 //! compile-time ratchet on a new variant, and past `#[non_exhaustive]` that
-//! only compiles inside the crate. Every other doc guard moved out — see
-//! `tests/doc_guards.rs` and `tests/docgen.rs`.
+//! only compiles inside the crate. The rest of the documentation that restates
+//! the source is generated from it instead — see `build.rs` and
+//! `tests/docgen.rs`.
 //!
 //! The README is baked in with `include_str!`, never read at run time. This
 //! module ships with the crate, so a run-time read would pass here and panic
