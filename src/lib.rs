@@ -55,23 +55,7 @@
 //! # }
 //! ```
 //!
-//! To also compile on an exotic target without thread-count support, gate the
-//! call so the deprecated stub is never built:
-//!
-//! ```no_run
-//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! # let config = blivet::DaemonConfig::new();
-//! #[cfg(any(target_os = "linux", target_os = "android", target_os = "macos",
-//!           target_os = "freebsd", target_os = "netbsd", target_os = "openbsd"))]
-//! let mut ctx = blivet::daemonize(&config)?;
-//! #[cfg(not(any(target_os = "linux", target_os = "android", target_os = "macos",
-//!               target_os = "freebsd", target_os = "netbsd", target_os = "openbsd")))]
-//! // SAFETY: no threads spawned before this point.
-//! let mut ctx = unsafe { blivet::daemonize_unchecked(&config)? };
-//! # ctx.notify_parent()?;
-//! # Ok(())
-//! # }
-//! ```
+#![doc = include_str!(concat!(env!("OUT_DIR"), "/entry_point_cfg.md"))]
 //!
 //! # Platform support
 //!

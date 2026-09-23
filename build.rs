@@ -227,12 +227,12 @@ fn main() {
 
     // Two views of the same table. Display names go to `tests/docgen.rs`, which
     // owns the Supported row of the tier tables in README.md and docs/SPEC.md;
-    // `target_os` values go to the doc guard over the `cfg` example the front
-    // page shows consumers (who cannot see this crate's capability aliases and
-    // must gate by OS).
+    // `target_os` values go to `tests/target_lists.rs`, which holds the target
+    // lists that cannot be generated to the table.
     let names: Vec<&str> = PLATFORMS.iter().map(|p| p.name).collect();
     println!("cargo::rustc-env=BLIVET_PLATFORMS={}", names.join(","));
     write_platform_support_doc();
+    write_entry_point_cfg_doc();
     let oses: Vec<&str> = PLATFORMS.iter().map(|p| p.target_os).collect();
     println!(
         "cargo::rustc-env=BLIVET_SUPPORTED_TARGET_OS={}",
@@ -245,6 +245,39 @@ fn main() {
     // `TARGET` nor `CARGO_CFG_TARGET_OS` reaches anywhere but a build script.
     let target = std::env::var("TARGET").expect("cargo sets TARGET");
     println!("cargo::rustc-env=BLIVET_TARGET={target}");
+}
+
+/// Write the front page's example of gating the checked entry point by OS.
+///
+/// A consumer cannot see this crate's capability aliases, so the example has
+/// to name operating systems — which makes it a copy of the table unless it is
+/// written from the table. Written here, a row gaining or losing a thread count
+/// changes the example with it, and rustdoc still compiles it as a doctest.
+fn write_entry_point_cfg_doc() {
+    let out = std::path::PathBuf::from(std::env::var("OUT_DIR").expect("cargo sets OUT_DIR"))
+        .join("entry_point_cfg.md");
+    let clauses: String = PLATFORMS
+        .iter()
+        .filter(|p| p.thread_count.is_some())
+        .map(|p| format!("    target_os = \"{}\",\n", p.target_os))
+        .collect();
+    let doc = format!(
+        "To also compile on an exotic target without thread-count support, gate the\n\
+         call so the deprecated stub is never built:\n\n\
+         ```no_run\n\
+         # fn main() -> Result<(), Box<dyn std::error::Error>> {{\n\
+         # let config = blivet::DaemonConfig::new();\n\
+         #[cfg(any(\n{clauses}))]\n\
+         let mut ctx = blivet::daemonize(&config)?;\n\
+         #[cfg(not(any(\n{clauses})))]\n\
+         // SAFETY: no threads spawned before this point.\n\
+         let mut ctx = unsafe {{ blivet::daemonize_unchecked(&config)? }};\n\
+         # ctx.notify_parent()?;\n\
+         # Ok(())\n\
+         # }}\n\
+         ```\n"
+    );
+    std::fs::write(&out, doc).unwrap_or_else(|e| panic!("write {}: {e}", out.display()));
 }
 
 /// Write the crate front page's "Platform support" section.
