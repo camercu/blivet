@@ -587,12 +587,21 @@ fn run_post_fork(
     // lock conflict at step 7, leaves a file that belongs to someone else.
     // Arm between the two halves, disarm at step 14 — see `PidfileOnAbort`.
     let mut pidfile_on_abort = PidfileOnAbort { path: None };
+    // The files the sequence now holds, which step 12 must not redirect into.
+    // The pidfile goes first: a derived lockfile is the same file, and the
+    // user configured it as the pidfile.
+    let mut owned = Vec::new();
     if let Some(ref pidfile_path) = config.pidfile {
         let pidfile = steps::open_pidfile(pidfile_path, lockfile_path.zip(lockfile.as_ref()))?;
         if config.cleanup_on_drop {
             pidfile_on_abort.path = Some(pidfile_path);
         }
-        pidfile.write_pid()?;
+        owned.push(("pidfile", pidfile.write_pid()?));
+    }
+    if let Some(ref lockfile) = lockfile {
+        let id = steps::file_id(&**lockfile)
+            .map_err(|e| DaemonizeError::LockfileError(format!("fstat: {e}")))?;
+        owned.push(("lockfile", id));
     }
 
     // Step 9: Reset signal dispositions
@@ -610,6 +619,7 @@ fn run_post_fork(
             config.stdout.as_deref(),
             config.stderr.as_deref(),
             config.append,
+            &owned,
         )?;
     }
 
