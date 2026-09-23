@@ -1,7 +1,8 @@
 //! Requirement traceability enforcement.
 //!
 //! Acceptance criteria live in `docs/SPEC.md` as `- R<n>. ...` lines. Tests
-//! declare which they cover with a uniform tag directly above the test:
+//! declare which they cover with a `// Covers:` line comment on the test —
+//! above it, or among its attributes:
 //!
 //! ```ignore
 //! // Covers: R17, R18
@@ -11,6 +12,8 @@
 //!
 //! These tests keep the annotations honest and consistent:
 //! - SPEC numbering is contiguous and unique.
+//! - A tag counts only on a test function, so a tag in prose, in a string, or
+//!   left behind by a deleted test covers nothing.
 //! - Every `Covers:` tag names a real requirement (no typos / stale refs).
 //! - Coverage never regresses below a committed baseline (ratchet).
 //!
@@ -67,20 +70,63 @@ fn covered_requirements() -> BTreeSet<u32> {
         let Ok(text) = std::fs::read_to_string(&file) else {
             continue;
         };
-        for line in text.lines() {
-            let Some(idx) = line.find("Covers:") else {
-                continue;
-            };
-            for token in line[idx + "Covers:".len()..].split(|c: char| !c.is_ascii_alphanumeric()) {
-                if let Some(num) = token.strip_prefix('R') {
-                    if let Ok(n) = num.parse::<u32>() {
-                        covered.insert(n);
-                    }
+        covered.extend(covering_tags(&text));
+    }
+    covered
+}
+
+/// The requirement numbers one source file's `Covers:` tags name.
+///
+/// A tag counts only when it is a plain `// Covers:` line comment on a test: it
+/// shares one block of attributes and comments with a `fn` that carries a test
+/// attribute. So a tag in documentation, in a string, above a helper, or left
+/// behind by a deleted test names nothing — typing a number is not covering it.
+fn covering_tags(text: &str) -> BTreeSet<u32> {
+    let lines: Vec<&str> = text.lines().map(str::trim).collect();
+    let mut covered = BTreeSet::new();
+    for (at, line) in lines.iter().enumerate() {
+        let Some(list) = line.strip_prefix("// Covers:") else {
+            continue;
+        };
+        if !tags_a_test(&lines, at) {
+            continue;
+        }
+        for token in list.split(|c: char| !c.is_ascii_alphanumeric()) {
+            if let Some(num) = token.strip_prefix('R') {
+                if let Ok(n) = num.parse::<u32>() {
+                    covered.insert(n);
                 }
             }
         }
     }
     covered
+}
+
+/// Whether the tag on line `tag` belongs to a test function.
+///
+/// The tag, the item's attributes and any comments form one run of lines with
+/// nothing else between them, so the run is walked both ways from the tag: the
+/// attributes may sit above it or below it. The run must end in a `fn`, and one
+/// of its attributes must mark that `fn` as a test.
+fn tags_a_test(lines: &[&str], tag: usize) -> bool {
+    let in_run = |l: &&str| l.is_empty() || l.starts_with("//") || l.starts_with("#[");
+    let is_test_attr = |l: &&str| *l == "#[test]" || l.contains("::test]") || l.contains("::test(");
+
+    let above = lines[..tag].iter().rev().take_while(|l| in_run(l));
+    let rest = &lines[tag + 1..];
+    let run_below = rest.iter().take_while(|l| in_run(l)).count();
+    let item = rest.get(run_below).copied().unwrap_or_default();
+
+    is_fn(item) && above.chain(&rest[..run_below]).any(is_test_attr)
+}
+
+/// Whether `line` opens a function item.
+fn is_fn(line: &str) -> bool {
+    let mut line = line;
+    for qualifier in ["pub(crate) ", "pub ", "async ", "unsafe "] {
+        line = line.strip_prefix(qualifier).unwrap_or(line);
+    }
+    line.starts_with("fn ")
 }
 
 #[test]
@@ -128,7 +174,7 @@ fn requirement_coverage_does_not_regress() {
     // `#![deny(unsafe_code)]`, unsafe confinement, type signatures, internal
     // step ordering, panic-on-OS-failure) with no discrete runtime test —
     // see `report_uncovered_requirements` for the current list.
-    const BASELINE: usize = 119;
+    const BASELINE: usize = 123;
     let covered = covered_requirements().len();
     assert!(
         covered >= BASELINE,
@@ -148,5 +194,51 @@ fn report_uncovered_requirements() {
         covered.len(),
         spec.len(),
         uncovered
+    );
+}
+
+// ---- the tag parser, on the shapes it must accept and reject ----
+
+fn tags(text: &str) -> Vec<u32> {
+    covering_tags(text).into_iter().collect()
+}
+
+#[test]
+fn a_tag_above_a_test_counts() {
+    assert_eq!(tags("// Covers: R3, R4\n#[test]\nfn t() {}\n"), [3, 4]);
+}
+
+#[test]
+fn a_tag_among_the_test_attributes_counts() {
+    // src/steps.rs writes its tag between the attributes and the fn.
+    let text = "#[test]\n#[serial]\n// Covers: R9\nfn t() {}\n";
+    assert_eq!(tags(text), [9]);
+}
+
+#[test]
+fn a_tag_in_documentation_does_not_count() {
+    // This file's own module docs show the convention inside an ignored
+    // fence; showing a tag is not covering a requirement.
+    let text = "//! ```ignore\n//! // Covers: R17\n//! #[test]\n//! fn t() {}\n//! ```\n";
+    assert_eq!(tags(text), Vec::<u32>::new());
+}
+
+#[test]
+fn a_tag_above_a_function_that_is_not_a_test_does_not_count() {
+    assert_eq!(tags("// Covers: R5\nfn helper() {}\n"), Vec::<u32>::new());
+}
+
+#[test]
+fn a_tag_whose_test_was_deleted_does_not_count() {
+    // The comment outlived the test: the next item is something else.
+    let text = "// Covers: R6\n\nconst X: u8 = 0;\n\n#[test]\nfn t() {}\n";
+    assert_eq!(tags(text), Vec::<u32>::new());
+}
+
+#[test]
+fn a_tag_inside_a_string_does_not_count() {
+    assert_eq!(
+        tags("#[test]\nfn t() {\n    let _ = \"// Covers: R7\";\n}\n"),
+        Vec::<u32>::new()
     );
 }
