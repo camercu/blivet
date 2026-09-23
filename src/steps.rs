@@ -569,6 +569,7 @@ mod tests {
     use std::path::PathBuf;
 
     use super::*;
+    use crate::test_support::{is_subprocess, run_in_subprocess};
     use serial_test::serial;
 
     /// Guard that saves file descriptors on creation and restores them on drop.
@@ -1036,14 +1037,14 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let stdout_path = dir.path().join("stdout.log");
 
-        // Truncate mode
-        std::fs::write(&stdout_path, "old content\n").unwrap();
+        // Truncate mode. The old content is longer than the new, so a skipped
+        // truncate leaves a tail behind instead of being overwritten exactly.
+        std::fs::write(&stdout_path, "old content, longer than what replaces it\n").unwrap();
         redirect_output(Some(&stdout_path), None, false, &[]).unwrap();
         std::io::stdout().write_all(b"new content\n").unwrap();
         std::io::stdout().flush().unwrap();
         let content = std::fs::read_to_string(&stdout_path).unwrap();
-        assert!(!content.contains("old content"), "should have truncated");
-        assert!(content.contains("new content"));
+        assert_eq!(content, "new content\n", "should have truncated");
 
         // Append mode
         redirect_output(Some(&stdout_path), None, true, &[]).unwrap();
@@ -1086,6 +1087,44 @@ mod tests {
         assert!(content.contains("stderr content"));
     }
 
+    #[test]
+    #[serial]
+    fn execute_redirect_truncates_a_separate_stderr_file() {
+        let _restore = SavedFds::new(&[1, 2]);
+        let dir = tempfile::tempdir().unwrap();
+        let stdout_path = dir.path().join("stdout.log");
+        let stderr_path = dir.path().join("stderr.log");
+        std::fs::write(&stderr_path, "stale stderr from a previous run\n").unwrap();
+
+        redirect_output(Some(&stdout_path), Some(&stderr_path), false, &[]).unwrap();
+
+        assert_eq!(std::fs::read_to_string(&stderr_path).unwrap(), "");
+    }
+
+    /// With stdout closed, `open` hands back fd 1 itself. The redirect must
+    /// still leave fd 1 pointing at the file afterwards, not closed.
+    #[test]
+    fn execute_redirect_into_a_closed_stdout_slot() {
+        run_in_subprocess("steps::tests::execute_redirect_into_a_closed_stdout_slot_subprocess");
+    }
+
+    #[test]
+    #[ignore]
+    fn execute_redirect_into_a_closed_stdout_slot_subprocess() {
+        if !is_subprocess() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let stdout_path = dir.path().join("stdout.log");
+        nix::unistd::close(1).unwrap();
+
+        redirect_output(Some(&stdout_path), None, false, &[]).unwrap();
+
+        let written = nix::unistd::write(std::io::stdout(), b"reached\n");
+        assert_eq!(written, Ok(8), "fd 1 is not open after the redirect");
+        assert_eq!(std::fs::read_to_string(&stdout_path).unwrap(), "reached\n");
+    }
+
     // Covers: R146
     #[test]
     #[serial]
@@ -1101,9 +1140,11 @@ mod tests {
 
         let result = redirect_output(Some(&pidfile), None, false, &owned);
 
+        let named = pidfile.display().to_string();
         assert!(
-            matches!(&result, Err(DaemonizeError::ValidationError(m)) if m.contains("same file")),
-            "{result:?}"
+            matches!(&result, Err(DaemonizeError::ValidationError(m))
+                if m.contains("same file") && m.contains(&named)),
+            "the refusal should name the stream's file: {result:?}"
         );
         assert_eq!(std::fs::read_to_string(&pidfile).unwrap(), "4242\n");
     }
