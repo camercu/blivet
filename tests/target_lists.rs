@@ -90,6 +90,11 @@ fn checked_targets(justfile: &str) -> Vec<String> {
     targets
 }
 
+/// One list of target triples that must carry the whole capability table:
+/// what holds the list, the triples in it, and the `target_os` values allowed
+/// to be absent from it with the reason each one is.
+type TargetListConsumer<'a> = (&'a str, &'a [String], &'a [(&'a str, &'a str)]);
+
 #[test]
 fn every_target_list_carries_the_whole_table() {
     let cargo_toml = read("Cargo.toml");
@@ -97,8 +102,7 @@ fn every_target_list_carries_the_whole_table() {
     let docs_rs = docs_rs_targets(&cargo_toml);
     let checked = checked_targets(&justfile);
 
-    // (what carries the list, the triples in it, [(target_os, why absent)]).
-    let consumers: [(&str, &[String], &[(&str, &str)]); 2] = [
+    let consumers: [TargetListConsumer; 2] = [
         (
             "Cargo.toml's docs.rs target list",
             &docs_rs,
