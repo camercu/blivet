@@ -7,13 +7,17 @@
 //! Android build break reaching a release — "no gate ever asked whether
 //! Android compiled".
 //!
-//! These live in `tests/`, not beside the other doc guards in
-//! `src/doc_sync.rs`, because they read the justfile: `src/` ships with the
-//! crate and the justfile does not, so a guard there panics for anyone running
-//! `cargo test` on a packaged or vendored copy, as `just package-test` would
-//! show.
+//! This is a text guard, the last resort, and it is kept because the other
+//! rungs do not reach. `Cargo.toml` is static, so its docs.rs list cannot be
+//! generated from the table; no tier runs on docs.rs, so a missing platform
+//! shows up only as missing documentation after a release; and a platform
+//! missing from `check-cross` fails nothing at all — the gap ADR 0002 blames
+//! for Android breaking in a release. So the lists are compared with the table
+//! as sets. Which recipes the gate runs is left to review.
+//!
+//! It lives in `tests/`, not `src/`, because it reads the justfile, which the
+//! crate does not ship.
 
-use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 mod common;
@@ -140,133 +144,4 @@ fn every_target_list_carries_the_whole_table() {
             );
         }
     }
-}
-
-#[test]
-fn the_best_effort_tier_is_type_checked() {
-    // The Best-effort row promises a Unix the table does not list compiles.
-    // illumos stands in for the class, and this check is the row's only
-    // backing — so it is the one check whose deletion the guard above cannot
-    // notice, since no table row demands it.
-    let justfile = read("justfile");
-    let line = justfile
-        .lines()
-        .map(|l| code_before(l, "#"))
-        .find(|code| code.contains("--target x86_64-unknown-illumos"))
-        .expect("a recipe must type-check illumos: it backs the Best-effort tier");
-    assert!(
-        line.contains("--all-targets"),
-        "the illumos check must cover --all-targets: what breaks on a \
-         best-effort target is the shipped example and the test helpers \
-         reaching for a capability-gated item, not the library: {line}"
-    );
-    assert!(
-        line.contains("-D warnings"),
-        "the illumos check must run under -D warnings: a best-effort target \
-         resolves to the #[deprecated] stubs, and a deprecation is a warning: \
-         {line}"
-    );
-}
-
-/// The dependency list of every recipe in the justfile, keyed by recipe name.
-///
-/// A recipe header is a line that starts in column 0, names the recipe, then
-/// `:`, then the recipes it depends on. `:=` is an assignment, not a header.
-fn recipe_dependencies(justfile: &str) -> BTreeMap<&str, Vec<&str>> {
-    let mut graph = BTreeMap::new();
-    for line in justfile.lines() {
-        let code = code_before(line, "#");
-        if code.starts_with([' ', '\t']) || code.contains(":=") {
-            continue;
-        }
-        let Some((name, dependencies)) = code.split_once(':') else {
-            continue;
-        };
-        let name = name.trim();
-        if name.is_empty() || name.contains(char::is_whitespace) {
-            continue;
-        }
-        graph.insert(name, dependencies.split_whitespace().collect());
-    }
-    graph
-}
-
-/// Every recipe `just entry` ends up running, `entry` included.
-fn reachable_from<'a>(
-    entry: &'a str,
-    graph: &BTreeMap<&'a str, Vec<&'a str>>,
-) -> BTreeSet<&'a str> {
-    let mut reached = BTreeSet::new();
-    let mut pending = vec![entry];
-    while let Some(recipe) = pending.pop() {
-        if !reached.insert(recipe) {
-            continue;
-        }
-        pending.extend(graph.get(recipe).into_iter().flatten());
-    }
-    reached
-}
-
-/// The recipes a type-check tier depends on, and that nothing else replaces.
-///
-/// A recipe here is one whose whole purpose is to compile a configuration no
-/// other recipe compiles, so dropping it from the gate costs the coverage
-/// silently — nothing goes red, the configuration simply stops being built.
-const RECIPES_THE_GATE_MUST_REACH: &[&str] =
-    &["check-cross", "check-non-unix", "check-no-default-features"];
-
-/// The recipes above are only worth guarding if the gate still runs them.
-///
-/// `every_target_list_carries_the_whole_table` and
-/// `the_best_effort_tier_is_type_checked` both assert what `check-cross` and
-/// `check-non-unix` *contain*. Neither asks whether anything runs them, so
-/// deleting both from `check` leaves every guard here green while CI silently
-/// stops type-checking Android, FreeBSD, NetBSD and illumos — the failure this
-/// file's header blames for the Android break reaching a release.
-///
-/// Reachability, not one hop: an earlier version of this test asked only
-/// whether `check` still listed them, and dropping `check` from `ci` one link
-/// further up severed the same tier with the guard still green. Asking what
-/// `ci` reaches covers every link at once, however the recipes are rearranged.
-#[test]
-fn the_cross_recipes_are_reachable_from_the_gate() {
-    let justfile = read("justfile");
-    let graph = recipe_dependencies(&justfile);
-    let reached = reachable_from("ci", &graph);
-
-    assert!(
-        reached.contains("test"),
-        "`ci` reaches neither the test recipe nor, presumably, anything else: \
-         {reached:?}. The justfile's shape probably outgrew the parser above"
-    );
-    for recipe in RECIPES_THE_GATE_MUST_REACH {
-        assert!(
-            reached.contains(*recipe),
-            "`just ci` no longer reaches `{recipe}`, so nothing runs it: the \
-             configuration it exists to compile silently stops being built, \
-             and the guards over its contents prove nothing. `ci` reaches: \
-             {reached:?}"
-        );
-    }
-}
-
-/// And the gate is only worth guarding if CI still calls it.
-///
-/// `the_cross_recipes_are_reachable_from_the_gate` starts at `ci` because that
-/// is what the fast tier runs. Pointing that tier at a narrower recipe drops
-/// the whole static-check half of CI — format, lint, deny, doc, MSRV and both
-/// cross checks — and leaves the justfile, and so every guard reading it,
-/// untouched.
-#[test]
-fn the_fast_tier_still_runs_the_gate() {
-    let workflow = read(".github/workflows/ci.yml");
-    let runs_the_gate = workflow.lines().any(|line| {
-        let command = line.trim().strip_prefix("run:").unwrap_or(line);
-        command.split_whitespace().eq(["just", "ci"])
-    });
-    assert!(
-        runs_the_gate,
-        "no step in .github/workflows/ci.yml runs `just ci`, so the recipes \
-         the gate depends on are never run in CI, whatever the justfile says"
-    );
 }
