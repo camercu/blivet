@@ -860,17 +860,19 @@ fn exec_target_gets_default_sigpipe() {
 
 // Covers: R32, R51
 #[test]
-fn chdir_nonexistent_exits_71() {
+fn chdir_nonexistent_exits_64() {
     let output = daemonize_cmd()
         .args(["-c", "/nonexistent_daemonize_dir_12345", "--", "sleep", "1"])
         .output()
         .unwrap();
 
-    // ChdirFailed (71) or ValidationError (64) — depends on when the check runs
-    let code = output.status.code().unwrap();
-    assert!(
-        code == 64 || code == 71,
-        "nonexistent chdir should exit 64 or 71, got {code}"
+    // R32: validation rejects it before the fork, so it is a usage error (64),
+    // never the post-fork ChdirFailed (71) it would become if the check moved.
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
     );
 }
 
@@ -909,7 +911,7 @@ fn assert_switch_status(args: &[&str]) {
 
 // Covers: R51
 #[test]
-fn lockfile_nonwritable_parent_exits_73_or_64() {
+fn lockfile_nonwritable_parent_exits_64() {
     let output = daemonize_cmd()
         .args([
             "-l",
@@ -921,10 +923,13 @@ fn lockfile_nonwritable_parent_exits_73_or_64() {
         .output()
         .unwrap();
 
-    let code = output.status.code().unwrap();
-    assert!(
-        code == 64 || code == 73,
-        "lockfile with bad parent should exit 64 or 73, got {code}"
+    // Validation rejects it before the fork: a usage error (64), never the
+    // post-fork CantCreat (73) it would become if the check moved.
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
     );
 }
 
