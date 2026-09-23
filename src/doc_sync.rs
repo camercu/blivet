@@ -16,7 +16,8 @@
 //! module ships with the crate, so a run-time read would pass here and panic
 //! for anyone running `cargo test` on a packaged or vendored copy — which is
 //! exactly what shipping a guard that read the justfile once did.
-//! `tests/packaging.rs` holds that rule.
+//! `just package-test` runs this on the packaged copy, so such a read fails
+//! there.
 
 use crate::DaemonizeError;
 use std::collections::BTreeMap;
