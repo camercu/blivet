@@ -17,10 +17,15 @@ const POLL_INTERVAL: Duration = Duration::from_millis(10);
 const POLL_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Poll `f` at fixed 10ms intervals until it yields `Some`, or give up.
-fn poll_until<T>(mut f: impl FnMut() -> Option<T>) -> Option<T> {
+fn poll_until<T>(f: impl FnMut() -> Option<T>) -> Option<T> {
+    poll_for(POLL_TIMEOUT, f)
+}
+
+/// Poll `f` at fixed 10ms intervals until it yields `Some`, or `bound` passes.
+fn poll_for<T>(bound: Duration, mut f: impl FnMut() -> Option<T>) -> Option<T> {
     retry(move |_| f())
         .wait(wait::fixed(POLL_INTERVAL))
-        .stop(stop::elapsed(POLL_TIMEOUT))
+        .stop(stop::elapsed(bound))
         .call()
         .ok()
 }
@@ -123,20 +128,29 @@ pub fn wait_for_pidfile(path: &Path) -> Option<u32> {
     })
 }
 
-/// Wait for a process to die.
-pub fn wait_for_exit(pid: u32) -> bool {
-    poll_until(|| {
-        let dead = unsafe { libc::kill(pid as i32, 0) } != 0;
-        dead.then_some(())
-    })
-    .is_some()
-}
+/// How long [`kill_process`] lets a process handle `SIGTERM` before `SIGKILL`.
+///
+/// It bounds only the unusual case — a target that ignores `SIGTERM`, or an
+/// orphan nothing reaps (the containers run with `--init` so something does).
+/// Every target the suite starts exits on `SIGTERM`, and polling returns the
+/// moment it has.
+const TERM_GRACE: Duration = Duration::from_secs(2);
 
-/// Kill a process (best-effort).
+/// Stop a process: `SIGTERM`, then `SIGKILL` if it is still there after
+/// [`TERM_GRACE`].
+///
+/// This waits by polling, like every other wait in this module. A fixed sleep
+/// here cost each of its call sites the whole sleep whether or not the process
+/// had already gone.
 pub fn kill_process(pid: u32) {
     unsafe { libc::kill(pid as i32, libc::SIGTERM) };
-    std::thread::sleep(std::time::Duration::from_millis(100));
-    unsafe { libc::kill(pid as i32, libc::SIGKILL) };
+    let gone = poll_for(TERM_GRACE, || {
+        let gone = unsafe { libc::kill(pid as i32, 0) } != 0;
+        gone.then_some(())
+    });
+    if gone.is_none() {
+        unsafe { libc::kill(pid as i32, libc::SIGKILL) };
+    }
 }
 
 /// Poll a file until it contains `expected`, returning its full content.
