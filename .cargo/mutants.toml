@@ -31,6 +31,7 @@ test_tool = "nextest"
 exclude_re = [
     # -- equivalent bitflag mutants --
     'replace \| with \^ in open_and_lock$',
-    'replace \| with \^ in plan_output_redirect$',
+    'replace \| with \^ in open_pidfile$',
+    'replace \| with \^ in open_stream$',
     'replace \| with \^ in thread_count$',
 ]
