@@ -72,11 +72,10 @@ gating releases on a booted emulator stalled every commit in a push
 when one failed to start. What blocks on Android is therefore the libc
 and the linker, not the kernel.
 
-The Supported tier covers the tests that exercise the platform. The
-guards that check the repository against itself are integration tests —
-the doc-vs-code guards and the hardcoded-temp-path guard — so they run
-only on the tiers that build integration targets, Linux and macOS. The
-exception is the exit-code table, checked against the error type by a
+The Supported tier covers the tests that exercise the platform. Tests
+that check the repository against itself are integration tests, so they
+run only on the tiers that build integration targets, Linux and macOS.
+The exception is the exit-code table, checked against the error type by a
 library test because the check is an exhaustive match that only
 compiles inside the crate; it bakes the README in and so runs wherever
 the library suite does.
