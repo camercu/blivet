@@ -29,16 +29,14 @@ pub(crate) fn paths_same(a: &Path, b: &Path) -> bool {
 }
 
 /// A path as `(canonical parent directory, file name)`, or `None` when it names
-/// no file or its parent does not exist.
+/// no file or its parent does not resolve.
+///
+/// Callers hold absolute paths — validation refuses any other (R30) — so a
+/// bare file name, whose parent is empty and so never resolves, falls back to
+/// byte equality rather than being read against the working directory.
 fn resolve_in_parent(path: &Path) -> Option<(PathBuf, &OsStr)> {
     let name = path.file_name()?;
-    let parent = match path.parent() {
-        // A bare file name is relative to the working directory.
-        Some(p) if p.as_os_str().is_empty() => Path::new("."),
-        Some(p) => p,
-        None => return None,
-    };
-    Some((std::fs::canonicalize(parent).ok()?, name))
+    Some((std::fs::canonicalize(path.parent()?).ok()?, name))
 }
 
 #[cfg(test)]
