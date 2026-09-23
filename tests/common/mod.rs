@@ -30,11 +30,6 @@ pub fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
-/// The code part of a Rust `line`: everything before a trailing `//`.
-pub fn code_of(line: &str) -> &str {
-    code_before(line, "//")
-}
-
 /// The code part of `line`, where `marker` begins a comment.
 ///
 /// A guard that scans sources judges a line on its code alone. Otherwise
@@ -46,38 +41,4 @@ pub fn code_of(line: &str) -> &str {
 /// rather than a hazard: it exempts a line, it never accuses one.
 pub fn code_before<'a>(line: &'a str, marker: &str) -> &'a str {
     line.split_once(marker).map_or(line, |(code, _)| code)
-}
-
-/// Every line of `files` whose code satisfies `is_offender`, rendered for a
-/// failure message as `  <path relative to `root`>:<line number>: <line>`.
-///
-/// A file whose name is `exempt` is skipped. A guard has to name the thing it
-/// bans, in the scan and in the failure message both, so it would otherwise
-/// accuse itself.
-///
-/// The predicate sees the line's code, never its comments — see [`code_of`].
-/// An unreadable file contributes nothing; it is not source the guard can
-/// judge.
-pub fn offending_lines(
-    root: &Path,
-    files: &[PathBuf],
-    exempt: &str,
-    is_offender: impl Fn(&str) -> bool,
-) -> Vec<String> {
-    let mut offenders = Vec::new();
-    for file in files {
-        if file.file_name().is_some_and(|n| n == exempt) {
-            continue;
-        }
-        let Ok(text) = std::fs::read_to_string(file) else {
-            continue;
-        };
-        let rel = file.strip_prefix(root).unwrap_or(file).display();
-        for (i, line) in text.lines().enumerate() {
-            if is_offender(code_of(line)) {
-                offenders.push(format!("  {rel}:{}: {}", i + 1, line.trim()));
-            }
-        }
-    }
-    offenders
 }
