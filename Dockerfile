@@ -1,4 +1,8 @@
-FROM rust:1.87-slim-bookworm
+# The rustc floor the justfile's `docker_rust` names, passed in by
+# `just docker-test`, so this tier and `msrv-check` read one number. No
+# default: a build that does not pass it fails here instead of guessing.
+ARG RUST_VERSION
+FROM rust:${RUST_VERSION}-slim-bookworm
 
 # Install tools used by integration test helpers
 RUN apt-get update && apt-get install -y --no-install-recommends \
