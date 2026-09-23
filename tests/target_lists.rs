@@ -10,8 +10,8 @@
 //! These live in `tests/`, not beside the other doc guards in
 //! `src/doc_sync.rs`, because they read the justfile: `src/` ships with the
 //! crate and the justfile does not, so a guard there panics for anyone running
-//! `cargo test` on a packaged or vendored copy. `tests/packaging.rs` holds
-//! that rule for the whole shipped tree.
+//! `cargo test` on a packaged or vendored copy, as `just package-test` would
+//! show.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;

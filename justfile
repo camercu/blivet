@@ -294,10 +294,9 @@ public-api-check:
 # `src/` ships and the rest of the repository does not, so a `#[cfg(test)]`
 # guard in `src/` that reaches outside `Cargo.toml`'s include list passes in a
 # checkout and fails for a consumer. That shipped once: a guard read the
-# justfile, which is not packaged. `src/doc_sync.rs` bakes its inputs in with
-# `include_str!` now, and `tests/packaging.rs` bans repository paths in shipped
-# sources — but both of those are checked by compiling the packaged file set,
-# which only this recipe does.
+# justfile, which is not packaged. This recipe is what catches that: it
+# unpacks the crate as published and runs its tests there, where a read of a
+# file the crate does not ship fails the way a consumer's would.
 package-test:
     #!/usr/bin/env bash
     set -euo pipefail

@@ -17,7 +17,8 @@
 //! - `just docs-bless` rewrites the documents from the source.
 //!
 //! This lives in `tests/`, not in `src/`: it reads and writes repository files,
-//! and a shipped source may not do that — `tests/packaging.rs` enforces it.
+//! and a shipped source cannot: it would fail for anyone testing the packaged
+//! crate, which `just package-test` does.
 
 use std::path::{Path, PathBuf};
 
