@@ -163,10 +163,8 @@ config.foreground(true).close_fds(false); // keep supervisor-passed fds
 ### Entry points
 
 - **`daemonize(&config)`** -- the safe, recommended entry point. It verifies the
-  process is single-threaded, then daemonizes. Available on **Linux, Android,
-  macOS, FreeBSD, NetBSD, and OpenBSD** (it reads the kernel thread count:
-  `/proc/self/status` on Linux and Android, `proc_pidinfo` on macOS, `sysctl`
-  on the BSDs).
+  process is single-threaded, then daemonizes. Available wherever the kernel's
+  thread count can be read — see [Platform support](#platform-support).
   On any other target it is a `#[deprecated]` stub that panics; use the
   unchecked form below.
 - **`unsafe { daemonize_unchecked(&config) }`** -- the escape hatch, on all Unix
