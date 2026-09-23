@@ -5,7 +5,7 @@
 //! collected here rather than inlined because each is independently testable.
 
 use std::os::fd::{AsFd, AsRawFd, OwnedFd};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use nix::fcntl::{open, Flock, FlockArg, OFlag};
 use nix::sys::stat::Mode;
@@ -59,28 +59,40 @@ pub(crate) mod failpoints {
     }
 }
 
-// ---- Plan/Execute types for redirect_output ----
+// ---- File identity, for step 12's same-file checks ----
 
-/// Describes what to do with a single output stream (stdout or stderr).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum StreamAction {
-    /// Leave the stream as-is (already redirected to /dev/null).
-    None,
-    /// Open a file and redirect the target fd to it.
-    OpenAndRedirect {
-        path: PathBuf,
-        flags: OFlag,
-        target_fd: i32,
-    },
-    /// Dup the already-redirected stdout onto stderr (same-path case).
-    DupStdoutToStderr,
+/// A file's identity: the device and inode `fstat` reports. Two paths, or two
+/// descriptors, name the same file exactly when these match — however they
+/// were spelled, through whatever symlinks, on whatever filesystem.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct FileId {
+    dev: libc::dev_t,
+    ino: libc::ino_t,
 }
 
-/// Plan for redirecting stdout and stderr.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct OutputRedirectPlan {
-    pub(crate) stdout: StreamAction,
-    pub(crate) stderr: StreamAction,
+/// The identity of the open file `fd`.
+pub(crate) fn file_id(fd: impl AsFd) -> Result<FileId, nix::errno::Errno> {
+    let st = nix::sys::stat::fstat(fd)?;
+    Ok(FileId {
+        dev: st.st_dev,
+        ino: st.st_ino,
+    })
+}
+
+/// What step 12 does with the streams it has opened — see
+/// [`plan_output_redirect`].
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct RedirectPlan {
+    /// stderr is the same file as stdout, so it takes stdout's descriptor
+    /// rather than a second one with an offset of its own.
+    pub(crate) stderr_shares_stdout: bool,
+}
+
+/// A stream that turned out to be a file the sequence owns.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct Collision {
+    pub(crate) stream: &'static str,
+    pub(crate) owned: &'static str,
 }
 
 /// Step 4: Set process umask.
@@ -200,7 +212,10 @@ pub(crate) enum Pidfile<'a> {
 
 impl Pidfile<'_> {
     /// Step 8, second half: write this process's PID, replacing any content.
-    pub(crate) fn write_pid(self) -> Result<(), DaemonizeError> {
+    ///
+    /// Returns the identity of the file written, so step 12 can refuse a
+    /// stream that is this file under another name (R146).
+    pub(crate) fn write_pid(self) -> Result<FileId, DaemonizeError> {
         let content = format!("{}\n", std::process::id());
         match self {
             Pidfile::Locked(flock) => {
@@ -210,12 +225,17 @@ impl Pidfile<'_> {
                     .map_err(|e| DaemonizeError::PidfileError(format!("truncate: {e}")))?;
                 inject_pidfile_write_failure()?;
                 write_all_fd(flock.as_fd(), content.as_bytes())
-                    .map_err(|e| DaemonizeError::PidfileError(format!("write: {e}")))
+                    .map_err(|e| DaemonizeError::PidfileError(format!("write: {e}")))?;
+                file_id(flock.as_fd())
+                    .map_err(|e| DaemonizeError::PidfileError(format!("fstat: {e}")))
             }
             Pidfile::Opened { fd, path } => {
                 inject_pidfile_write_failure()?;
                 write_all_fd(&fd, content.as_bytes()).map_err(|e| {
                     DaemonizeError::PidfileError(format!("write {}: {e}", path.display()))
+                })?;
+                file_id(&fd).map_err(|e| {
+                    DaemonizeError::PidfileError(format!("fstat {}: {e}", path.display()))
                 })
             }
         }
@@ -229,7 +249,7 @@ pub(crate) fn write_pidfile(
     pidfile_path: &Path,
     lockfile: Option<(&Path, &Flock<OwnedFd>)>,
 ) -> Result<(), DaemonizeError> {
-    open_pidfile(pidfile_path, lockfile)?.write_pid()
+    open_pidfile(pidfile_path, lockfile)?.write_pid().map(drop)
 }
 
 /// Stands in for a write that fails once the pidfile already exists and is
@@ -282,53 +302,26 @@ pub(crate) fn set_env_vars(env: &[(String, String)]) {
     }
 }
 
-/// Build an [`OutputRedirectPlan`] describing how to redirect stdout/stderr.
+/// Decides step 12 from the identities of the files it opened.
 ///
-/// This is pure logic with no side effects — it decides *what* to do based on
-/// the configured paths and append flag, without touching any file descriptors.
+/// Pure: no descriptor is touched here. A stream that is a file the sequence
+/// owns — the pidfile, the lockfile — is refused, because redirecting into it
+/// would overwrite what the owner wrote. stdout and stderr may share a file,
+/// in which case they share a descriptor.
 pub(crate) fn plan_output_redirect(
-    stdout: Option<&Path>,
-    stderr: Option<&Path>,
-    append: bool,
-) -> OutputRedirectPlan {
-    let mut flags = OFlag::O_WRONLY | OFlag::O_CREAT;
-    if append {
-        flags |= OFlag::O_APPEND;
-    } else {
-        flags |= OFlag::O_TRUNC;
-    }
-
-    let same_path = match (stdout, stderr) {
-        (Some(out), Some(err)) => paths_same(out, err),
-        _ => false,
-    };
-
-    let stdout_action = match stdout {
-        Some(path) => StreamAction::OpenAndRedirect {
-            path: path.to_path_buf(),
-            flags,
-            target_fd: 1,
-        },
-        None => StreamAction::None,
-    };
-
-    let stderr_action = if same_path {
-        StreamAction::DupStdoutToStderr
-    } else {
-        match stderr {
-            Some(path) => StreamAction::OpenAndRedirect {
-                path: path.to_path_buf(),
-                flags,
-                target_fd: 2,
-            },
-            None => StreamAction::None,
+    stdout: Option<FileId>,
+    stderr: Option<FileId>,
+    owned: &[(&'static str, FileId)],
+) -> Result<RedirectPlan, Collision> {
+    for (stream, id) in [("stdout", stdout), ("stderr", stderr)] {
+        let Some(id) = id else { continue };
+        if let Some((owned, _)) = owned.iter().find(|(_, o)| *o == id) {
+            return Err(Collision { stream, owned });
         }
-    };
-
-    OutputRedirectPlan {
-        stdout: stdout_action,
-        stderr: stderr_action,
     }
+    Ok(RedirectPlan {
+        stderr_shares_stdout: stdout.is_some() && stdout == stderr,
+    })
 }
 
 /// Duplicate `source` onto a stdio target fd (0=stdin, 1=stdout, 2=stderr).
@@ -341,44 +334,55 @@ fn dup2_stdio(source: impl AsFd, target_fd: i32) -> Result<(), nix::errno::Errno
     }
 }
 
-/// Execute a single [`StreamAction`], performing the actual fd operations.
-fn execute_stream_action(action: &StreamAction) -> Result<(), DaemonizeError> {
-    match action {
-        StreamAction::None => Ok(()),
-        StreamAction::OpenAndRedirect {
-            path,
-            flags,
-            target_fd,
-        } => {
-            let mode = Mode::from_bits_truncate(0o644);
-            let fd = open(path, *flags, mode).map_err(|e| {
-                DaemonizeError::OutputFileError(format!("cannot open {}: {e}", path.display()))
-            })?;
-            if fd.as_raw_fd() != *target_fd {
-                dup2_stdio(&fd, *target_fd).map_err(|e| {
-                    DaemonizeError::OutputFileError(format!("dup2 fd {target_fd}: {e}"))
-                })?;
-                // fd drops here, closing the original descriptor.
-            } else {
-                // fd IS the target — don't close it on drop.
-                std::mem::forget(fd);
-            }
-            Ok(())
-        }
-        StreamAction::DupStdoutToStderr => {
-            dup2_stdio(std::io::stdout(), 2).map_err(|e| {
-                DaemonizeError::OutputFileError(format!("dup2 stdout -> stderr: {e}"))
-            })?;
-            Ok(())
-        }
-    }
+/// A stream's file, opened but not yet truncated or redirected.
+struct OpenStream<'a> {
+    path: &'a Path,
+    fd: OwnedFd,
+    id: FileId,
+    regular: bool,
 }
 
-/// Execute an [`OutputRedirectPlan`], performing all fd operations.
-pub(crate) fn execute_output_redirect(plan: &OutputRedirectPlan) -> Result<(), DaemonizeError> {
-    execute_stream_action(&plan.stdout)?;
-    execute_stream_action(&plan.stderr)?;
-    Ok(())
+/// Opens `path` for a stream without truncating it: nothing on disk may
+/// change until [`plan_output_redirect`] has seen what the file is.
+fn open_stream(path: &Path, append: bool) -> Result<OpenStream<'_>, DaemonizeError> {
+    let mut flags = OFlag::O_WRONLY | OFlag::O_CREAT | OFlag::O_CLOEXEC;
+    if append {
+        flags |= OFlag::O_APPEND;
+    }
+    let fail = |e| DaemonizeError::OutputFileError(format!("cannot open {}: {e}", path.display()));
+    let fd = open(path, flags, Mode::from_bits_truncate(0o644)).map_err(fail)?;
+    // With a stdio slot closed, `open` can return 1 or 2 itself; the dup2
+    // onto that slot would then be a no-op and dropping the stream would
+    // close the redirect. `try_clone` duplicates to 3 or above, so the stream
+    // never occupies a slot it is about to be copied into.
+    let fd = if fd.as_raw_fd() <= 2 {
+        fd.try_clone()
+            .map_err(|e| DaemonizeError::OutputFileError(format!("dup {}: {e}", path.display())))?
+    } else {
+        fd
+    };
+    let st = nix::sys::stat::fstat(&fd).map_err(fail)?;
+    Ok(OpenStream {
+        path,
+        id: FileId {
+            dev: st.st_dev,
+            ino: st.st_ino,
+        },
+        // A FIFO or a device (`-o /dev/null`) has no length to truncate:
+        // `ftruncate` refuses one, where `O_TRUNC` used to ignore it.
+        regular: st.st_mode & libc::S_IFMT == libc::S_IFREG,
+        fd,
+    })
+}
+
+/// Empties a stream's file, as `O_TRUNC` would have when it was opened.
+fn truncate(stream: &OpenStream) -> Result<(), DaemonizeError> {
+    if !stream.regular {
+        return Ok(());
+    }
+    nix::unistd::ftruncate(&stream.fd, 0).map_err(|e| {
+        DaemonizeError::OutputFileError(format!("truncate {}: {e}", stream.path.display()))
+    })
 }
 
 /// Step 12: Redirect stdout/stderr to configured files.
@@ -387,15 +391,58 @@ pub(crate) fn execute_output_redirect(plan: &OutputRedirectPlan) -> Result<(), D
 /// created with the original (often root) ownership;
 /// [`drop_privileges`](crate::DaemonContext::drop_privileges) chowns them to
 /// the target user afterward.
-/// Same-path optimization: if stdout and stderr resolve to the same path,
-/// open once for stdout and dup2 to stderr.
+///
+/// Both files are opened first and compared by identity with each other and
+/// with `owned` — the files the sequence holds, by the name to report them
+/// under. Only then is anything truncated, so a stream that is the pidfile
+/// under another name is refused before a byte of it changes (R146).
 pub(crate) fn redirect_output(
     stdout: Option<&Path>,
     stderr: Option<&Path>,
     append: bool,
+    owned: &[(&'static str, FileId)],
 ) -> Result<(), DaemonizeError> {
-    let plan = plan_output_redirect(stdout, stderr, append);
-    execute_output_redirect(&plan)
+    let out = stdout.map(|p| open_stream(p, append)).transpose()?;
+    let err = stderr.map(|p| open_stream(p, append)).transpose()?;
+
+    let plan = plan_output_redirect(
+        out.as_ref().map(|s| s.id),
+        err.as_ref().map(|s| s.id),
+        owned,
+    )
+    .map_err(|c| {
+        let path = if c.stream == "stdout" { &out } else { &err };
+        let path = path.as_ref().map_or(Path::new(""), |s| s.path);
+        DaemonizeError::ValidationError(format!(
+            "{} and {} must not be the same file: {}",
+            c.owned,
+            c.stream,
+            path.display()
+        ))
+    })?;
+
+    if !append {
+        if let Some(out) = &out {
+            truncate(out)?;
+        }
+        if let Some(err) = err.as_ref().filter(|_| !plan.stderr_shares_stdout) {
+            truncate(err)?;
+        }
+    }
+    if let Some(out) = &out {
+        dup2_stdio(&out.fd, 1)
+            .map_err(|e| DaemonizeError::OutputFileError(format!("dup2 fd 1: {e}")))?;
+    }
+    let stderr_source = if plan.stderr_shares_stdout {
+        out.as_ref()
+    } else {
+        err.as_ref()
+    };
+    if let Some(source) = stderr_source {
+        dup2_stdio(&source.fd, 2)
+            .map_err(|e| DaemonizeError::OutputFileError(format!("dup2 fd 2: {e}")))?;
+    }
+    Ok(())
 }
 
 /// Write all bytes to a file descriptor, looping on partial writes.
@@ -519,6 +566,7 @@ pub(crate) fn close_inherited_fds(skip_fds: &[i32]) -> Result<(), DaemonizeError
 #[cfg(test)]
 mod tests {
     use std::io::Write;
+    use std::path::PathBuf;
 
     use super::*;
     use serial_test::serial;
@@ -893,91 +941,76 @@ mod tests {
 
     // --- Step 12: redirect output (pure plan tests) ---
 
-    #[test]
-    fn plan_stdout_only_truncate() {
-        let path = PathBuf::from("/a/out.log");
-        let plan = plan_output_redirect(Some(&path), None, false);
-        assert_eq!(
-            plan.stdout,
-            StreamAction::OpenAndRedirect {
-                path: path.clone(),
-                flags: OFlag::O_WRONLY | OFlag::O_CREAT | OFlag::O_TRUNC,
-                target_fd: 1,
-            }
-        );
-        assert_eq!(plan.stderr, StreamAction::None);
-    }
-
-    #[test]
-    fn plan_stderr_only() {
-        let path = PathBuf::from("/a/err.log");
-        let plan = plan_output_redirect(None, Some(&path), false);
-        assert_eq!(plan.stdout, StreamAction::None);
-        assert_eq!(
-            plan.stderr,
-            StreamAction::OpenAndRedirect {
-                path: path.clone(),
-                flags: OFlag::O_WRONLY | OFlag::O_CREAT | OFlag::O_TRUNC,
-                target_fd: 2,
-            }
-        );
-    }
-
-    #[test]
-    fn plan_both_different_paths() {
-        let out = PathBuf::from("/a/out.log");
-        let err = PathBuf::from("/a/err.log");
-        let plan = plan_output_redirect(Some(&out), Some(&err), false);
-        assert!(matches!(
-            plan.stdout,
-            StreamAction::OpenAndRedirect { target_fd: 1, .. }
-        ));
-        assert!(matches!(
-            plan.stderr,
-            StreamAction::OpenAndRedirect { target_fd: 2, .. }
-        ));
-    }
-
-    #[test]
-    fn plan_both_same_path() {
-        let path = PathBuf::from("/a/combined.log");
-        let plan = plan_output_redirect(Some(&path), Some(&path), false);
-        assert!(matches!(
-            plan.stdout,
-            StreamAction::OpenAndRedirect { target_fd: 1, .. }
-        ));
-        assert_eq!(plan.stderr, StreamAction::DupStdoutToStderr);
-    }
-
-    #[test]
-    fn plan_append_flag() {
-        let path = PathBuf::from("/a/out.log");
-        let plan = plan_output_redirect(Some(&path), None, true);
-        if let StreamAction::OpenAndRedirect { flags, .. } = plan.stdout {
-            assert!(flags.contains(OFlag::O_APPEND));
-            assert!(!flags.contains(OFlag::O_TRUNC));
-        } else {
-            panic!("expected OpenAndRedirect");
+    fn id(ino: u64) -> FileId {
+        FileId {
+            dev: 1,
+            ino: ino as libc::ino_t,
         }
     }
 
     #[test]
-    fn plan_truncate_flag() {
-        let path = PathBuf::from("/a/out.log");
-        let plan = plan_output_redirect(Some(&path), None, false);
-        if let StreamAction::OpenAndRedirect { flags, .. } = plan.stdout {
-            assert!(flags.contains(OFlag::O_TRUNC));
-            assert!(!flags.contains(OFlag::O_APPEND));
-        } else {
-            panic!("expected OpenAndRedirect");
-        }
+    fn plan_distinct_streams_get_a_descriptor_each() {
+        let plan = plan_output_redirect(Some(id(1)), Some(id(2)), &[]);
+        assert_eq!(
+            plan,
+            Ok(RedirectPlan {
+                stderr_shares_stdout: false
+            })
+        );
+    }
+
+    // Covers: R146
+    #[test]
+    fn plan_streams_on_one_file_share_a_descriptor() {
+        let plan = plan_output_redirect(Some(id(1)), Some(id(1)), &[]);
+        assert_eq!(
+            plan,
+            Ok(RedirectPlan {
+                stderr_shares_stdout: true
+            })
+        );
     }
 
     #[test]
-    fn plan_neither() {
-        let plan = plan_output_redirect(None, None, false);
-        assert_eq!(plan.stdout, StreamAction::None);
-        assert_eq!(plan.stderr, StreamAction::None);
+    fn plan_stderr_alone_shares_nothing() {
+        let plan = plan_output_redirect(None, Some(id(1)), &[]);
+        assert_eq!(
+            plan,
+            Ok(RedirectPlan {
+                stderr_shares_stdout: false
+            })
+        );
+    }
+
+    // Covers: R146
+    #[test]
+    fn plan_refuses_a_stream_that_is_an_owned_file() {
+        let owned = [("pidfile", id(7)), ("lockfile", id(8))];
+        assert_eq!(
+            plan_output_redirect(Some(id(1)), Some(id(8)), &owned),
+            Err(Collision {
+                stream: "stderr",
+                owned: "lockfile"
+            })
+        );
+        assert_eq!(
+            plan_output_redirect(Some(id(7)), None, &owned),
+            Err(Collision {
+                stream: "stdout",
+                owned: "pidfile"
+            })
+        );
+    }
+
+    #[test]
+    fn plan_same_inode_on_another_device_is_another_file() {
+        let other = FileId { dev: 2, ino: 1 };
+        assert_eq!(
+            plan_output_redirect(Some(id(1)), Some(other), &[]),
+            Ok(RedirectPlan {
+                stderr_shares_stdout: false
+            })
+        );
     }
 
     // --- Step 12: redirect output (executor smoke tests, serial) ---
@@ -990,8 +1023,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let stdout_path = dir.path().join("stdout.log");
         let stderr_path = dir.path().join("stderr.log");
-        let plan = plan_output_redirect(Some(&stdout_path), Some(&stderr_path), false);
-        let result = execute_output_redirect(&plan);
+        let result = redirect_output(Some(&stdout_path), Some(&stderr_path), false, &[]);
         assert!(result.is_ok());
         assert!(stdout_path.exists());
         assert!(stderr_path.exists());
@@ -1006,7 +1038,7 @@ mod tests {
 
         // Truncate mode
         std::fs::write(&stdout_path, "old content\n").unwrap();
-        redirect_output(Some(&stdout_path), None, false).unwrap();
+        redirect_output(Some(&stdout_path), None, false, &[]).unwrap();
         std::io::stdout().write_all(b"new content\n").unwrap();
         std::io::stdout().flush().unwrap();
         let content = std::fs::read_to_string(&stdout_path).unwrap();
@@ -1014,7 +1046,7 @@ mod tests {
         assert!(content.contains("new content"));
 
         // Append mode
-        redirect_output(Some(&stdout_path), None, true).unwrap();
+        redirect_output(Some(&stdout_path), None, true, &[]).unwrap();
         std::io::stdout().write_all(b"appended\n").unwrap();
         std::io::stdout().flush().unwrap();
         let content = std::fs::read_to_string(&stdout_path).unwrap();
@@ -1028,8 +1060,7 @@ mod tests {
         let _restore = SavedFds::new(&[1, 2]);
         let dir = tempfile::tempdir().unwrap();
         let combined = dir.path().join("combined.log");
-        let plan = plan_output_redirect(Some(&combined), Some(&combined), false);
-        execute_output_redirect(&plan).unwrap();
+        redirect_output(Some(&combined), Some(&combined), false, &[]).unwrap();
 
         std::io::stdout().write_all(b"stdout\n").unwrap();
         std::io::stdout().flush().unwrap();
@@ -1037,8 +1068,7 @@ mod tests {
         std::io::stderr().flush().unwrap();
 
         let content = std::fs::read_to_string(&combined).unwrap();
-        assert!(content.contains("stdout"));
-        assert!(content.contains("stderr"));
+        assert_eq!(content, "stdout\nstderr\n");
     }
 
     #[test]
@@ -1047,14 +1077,44 @@ mod tests {
         let _restore = SavedFds::new(&[2]);
         let dir = tempfile::tempdir().unwrap();
         let stderr_path = dir.path().join("stderr.log");
-        let plan = plan_output_redirect(None, Some(&stderr_path), false);
-        execute_output_redirect(&plan).unwrap();
+        redirect_output(None, Some(&stderr_path), false, &[]).unwrap();
         assert!(stderr_path.exists());
 
         std::io::stderr().write_all(b"stderr content\n").unwrap();
         std::io::stderr().flush().unwrap();
         let content = std::fs::read_to_string(&stderr_path).unwrap();
         assert!(content.contains("stderr content"));
+    }
+
+    // Covers: R146
+    #[test]
+    #[serial]
+    fn execute_redirect_refuses_an_owned_file_before_truncating_it() {
+        let _restore = SavedFds::new(&[1]);
+        let dir = tempfile::tempdir().unwrap();
+        let pidfile = dir.path().join("daemon.pid");
+        std::fs::write(&pidfile, "4242\n").unwrap();
+        let owned = [(
+            "pidfile",
+            file_id(std::fs::File::open(&pidfile).unwrap()).unwrap(),
+        )];
+
+        let result = redirect_output(Some(&pidfile), None, false, &owned);
+
+        assert!(
+            matches!(&result, Err(DaemonizeError::ValidationError(m)) if m.contains("same file")),
+            "{result:?}"
+        );
+        assert_eq!(std::fs::read_to_string(&pidfile).unwrap(), "4242\n");
+    }
+
+    #[test]
+    #[serial]
+    fn execute_redirect_into_a_device_does_not_truncate_it() {
+        // ftruncate refuses a device where O_TRUNC ignored it; `-o /dev/null`
+        // must keep working.
+        let _restore = SavedFds::new(&[1]);
+        redirect_output(Some(Path::new("/dev/null")), None, false, &[]).unwrap();
     }
 
     // --- Step 13: close inherited fds (pure plan tests) ---
