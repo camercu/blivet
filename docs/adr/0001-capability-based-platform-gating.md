@@ -66,9 +66,8 @@ The initial capability set:
 | `faccessat_lacks_eaccess` | Does `faccessat` reject `AT_EACCESS`? | effective-UID access check |
 
 The same table is the single source of truth for the documented platform list:
-the build script exports it as an environment variable, and the doc-drift guard
-in `src/doc_sync.rs` reads that instead of its own copy. Adding a platform
-becomes one row.
+every place that lists the platforms is generated from it or checked against
+it, never kept as a copy of its own. Adding a platform becomes one row.
 
 **Support is tiered, and the tiers are documented in `README.md` and
 `docs/SPEC.md`:**
