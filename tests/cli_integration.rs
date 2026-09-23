@@ -1345,27 +1345,51 @@ fn foreground_mode_runs_program() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    // R66/R68: pidfile should be written even in foreground mode
+    // R68: the non-fork steps still run — here the pidfile and the stdout
+    // redirect, both observable after the program has exited.
     assert!(pidfile.exists(), "pidfile should exist in foreground mode");
+    let log = std::fs::read_to_string(&stdout_file).unwrap();
+    assert_eq!(
+        log, "foreground_test\n",
+        "the program's stdout should land in the -o file"
+    );
 }
 
 // Covers: R66
 #[test]
-fn foreground_mode_no_orphan() {
+fn foreground_mode_program_is_the_process_the_invoker_started() {
+    // What a supervisor relies on `-f` for: no fork, so the program keeps the
+    // PID the supervisor spawned and stays its child. The program reports its
+    // own PID and parent PID; a daemonizing run would print neither, since its
+    // stdout is /dev/null, and would be orphaned if it could.
     let dir = tempfile::tempdir().unwrap();
     let pidfile = dir.path().join("test.pid");
 
-    // In foreground mode, the process should NOT be orphaned (PPID != 1)
-    // We use a short-lived command and check it ran successfully
-    let output = daemonize_cmd()
-        .args(["-f", "-p", pidfile.to_str().unwrap(), "--", "true"])
-        .output()
+    let child = daemonize_cmd()
+        .args(["-f", "-p", pidfile.to_str().unwrap(), "--"])
+        .args(["/bin/sh", "-c", "echo $$ $PPID"])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
         .unwrap();
-
+    let spawned = child.id();
+    let output = child.wait_with_output().unwrap();
     assert!(
         output.status.success(),
         "foreground should succeed, stderr: {}",
         String::from_utf8_lossy(&output.stderr)
+    );
+
+    let report = String::from_utf8_lossy(&output.stdout);
+    let ids: Vec<u32> = report
+        .split_whitespace()
+        .map(|f| f.parse().unwrap())
+        .collect();
+    assert_eq!(
+        ids,
+        [spawned, std::process::id()],
+        "expected the program to run as the spawned PID with the test as its \
+         parent; the report was {report:?}"
     );
 }
 
