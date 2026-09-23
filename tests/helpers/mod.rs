@@ -139,6 +139,11 @@ const TERM_GRACE: Duration = Duration::from_secs(2);
 /// Stop a process: `SIGTERM`, then `SIGKILL` if it is still there after
 /// [`TERM_GRACE`].
 ///
+/// For a program that runs until it is stopped. A PID names a process only
+/// while it lives: once a short program has exited its PID can be handed to an
+/// unrelated one, which this would then signal. A test whose program exits by
+/// itself leaves it to exit and does not call this.
+///
 /// This waits by polling, like every other wait in this module. A fixed sleep
 /// here cost each of its call sites the whole sleep whether or not the process
 /// had already gone.

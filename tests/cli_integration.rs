@@ -116,15 +116,13 @@ fn stdout_redirect_writes_output() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let pid = wait_for_pidfile(&pidfile).expect("pidfile should appear");
+    wait_for_pidfile(&pidfile).expect("pidfile should appear");
 
     let content = wait_for_file_content(&stdout_file, "hello_stdout");
     assert!(
         content.contains("hello_stdout"),
         "stdout file should contain output, got: {content}"
     );
-
-    kill_process(pid);
 }
 
 // Covers: R9
@@ -154,15 +152,13 @@ fn stderr_redirect_writes_output() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let pid = wait_for_pidfile(&pidfile).expect("pidfile should appear");
+    wait_for_pidfile(&pidfile).expect("pidfile should appear");
 
     let content = wait_for_file_content(&stderr_file, "hello_stderr");
     assert!(
         content.contains("hello_stderr"),
         "stderr file should contain output, got: {content}"
     );
-
-    kill_process(pid);
 }
 
 // Covers: R12, R13
@@ -195,7 +191,7 @@ fn append_mode_preserves_existing_content() {
         "daemonize should succeed, stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let pid = wait_for_pidfile(&pidfile).expect("pidfile should appear");
+    wait_for_pidfile(&pidfile).expect("pidfile should appear");
 
     let content = wait_for_file_content(&stdout_file, "appended");
     assert!(
@@ -203,8 +199,6 @@ fn append_mode_preserves_existing_content() {
         "should preserve existing content"
     );
     assert!(content.contains("appended"), "should append new content");
-
-    kill_process(pid);
 }
 
 // Covers: R15, R16
@@ -442,15 +436,13 @@ fn env_vars_passed_to_daemon() {
         "daemonize should succeed, stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let pid = wait_for_pidfile(&pidfile).expect("pidfile should appear");
+    wait_for_pidfile(&pidfile).expect("pidfile should appear");
 
     let content = wait_for_file_content(&env_file, "hello_world");
     assert!(
         content.contains("hello_world"),
         "env var should be passed to daemon, got: {content}"
     );
-
-    kill_process(pid);
 }
 
 // Covers: R14
@@ -481,13 +473,11 @@ fn same_path_stdout_stderr() {
         "daemonize should succeed, stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let pid = wait_for_pidfile(&pidfile).expect("pidfile should appear");
+    wait_for_pidfile(&pidfile).expect("pidfile should appear");
 
     let content = wait_for_file_content(&combined, "stderr_line");
     assert!(content.contains("stdout_line"), "should have stdout");
     assert!(content.contains("stderr_line"), "should have stderr");
-
-    kill_process(pid);
 }
 
 // --- Stdout implies stderr ---
@@ -517,7 +507,7 @@ fn stdout_only_mirrors_to_stderr() {
         "daemonize should succeed, stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let pid = wait_for_pidfile(&pidfile).expect("pidfile should appear");
+    wait_for_pidfile(&pidfile).expect("pidfile should appear");
 
     let content = wait_for_file_content(&combined, "stderr_line");
     assert!(content.contains("stdout_line"), "should have stdout");
@@ -525,8 +515,6 @@ fn stdout_only_mirrors_to_stderr() {
         content.contains("stderr_line"),
         "should have stderr (mirrored from --stdout)"
     );
-
-    kill_process(pid);
 }
 
 #[test]
@@ -555,7 +543,7 @@ fn stdout_extension_swaps_to_stderr() {
         "daemonize failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let pid = wait_for_pidfile(&pidfile).expect("pidfile should appear");
+    wait_for_pidfile(&pidfile).expect("pidfile should appear");
 
     let out_content = wait_for_file_content(&stdout_file, "out_line");
     assert!(
@@ -576,8 +564,6 @@ fn stdout_extension_swaps_to_stderr() {
         !err_content.contains("out_line"),
         "stderr file should not have stdout"
     );
-
-    kill_process(pid);
 }
 
 #[test]
@@ -606,7 +592,7 @@ fn stdout_out_extension_swaps_to_err() {
         "daemonize failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let pid = wait_for_pidfile(&pidfile).expect("pidfile should appear");
+    wait_for_pidfile(&pidfile).expect("pidfile should appear");
 
     let out_content = wait_for_file_content(&stdout_file, "out_line");
     assert!(
@@ -627,8 +613,6 @@ fn stdout_out_extension_swaps_to_err() {
         !err_content.contains("out_line"),
         "stderr file should not have stdout"
     );
-
-    kill_process(pid);
 }
 
 // --- Relative path resolution (R55) ---
@@ -665,15 +649,13 @@ fn relative_path_with_slash_canonicalized() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let pid = wait_for_pidfile(&pidfile).expect("pidfile should appear");
+    wait_for_pidfile(&pidfile).expect("pidfile should appear");
 
     let content = wait_for_file_content(&stdout_file, "resolved_ok");
     assert!(
         content.contains("resolved_ok"),
         "script should execute despite chdir, got: {content}"
     );
-
-    kill_process(pid);
 }
 
 // --- Truncate mode (R11) ---
@@ -707,7 +689,7 @@ fn truncate_mode_overwrites_existing() {
         "daemonize should succeed, stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let pid = wait_for_pidfile(&pidfile).expect("pidfile should appear");
+    wait_for_pidfile(&pidfile).expect("pidfile should appear");
 
     let content = wait_for_file_content(&stdout_file, "new_content");
     assert!(
@@ -715,8 +697,6 @@ fn truncate_mode_overwrites_existing() {
         "truncate should remove old content"
     );
     assert!(content.contains("new_content"), "should have new content");
-
-    kill_process(pid);
 }
 
 // --- Parent notification timing (R39, R42) ---
@@ -1025,15 +1005,13 @@ fn umask_flag_sets_daemon_umask() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let pid = wait_for_pidfile(&pidfile).expect("pidfile should appear");
+    wait_for_pidfile(&pidfile).expect("pidfile should appear");
 
     let content = wait_for_file_content(&stdout_file, "600");
     assert!(
         content.contains("600"),
         "file created with umask 077 should have mode 600, got: {content}"
     );
-
-    kill_process(pid);
 }
 
 // --- Env without equals (R36 edge case) ---
@@ -1066,15 +1044,13 @@ fn env_without_equals_sets_empty_value() {
         "daemonize should succeed, stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let pid = wait_for_pidfile(&pidfile).expect("pidfile should appear");
+    wait_for_pidfile(&pidfile).expect("pidfile should appear");
 
     let content = wait_for_file_content(&env_file, "VAL=[]");
     assert!(
         content.contains("VAL=[]"),
         "env var without = should be empty string, got: {content}"
     );
-
-    kill_process(pid);
 }
 
 // --- Multiple env vars ---
@@ -1109,7 +1085,7 @@ fn multiple_env_vars() {
         "daemonize should succeed, stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let pid = wait_for_pidfile(&pidfile).expect("pidfile should appear");
+    wait_for_pidfile(&pidfile).expect("pidfile should appear");
 
     let content = wait_for_file_content(&env_file, "beta");
     assert!(
@@ -1120,8 +1096,6 @@ fn multiple_env_vars() {
         content.contains("beta"),
         "should have VAR_B, got: {content}"
     );
-
-    kill_process(pid);
 }
 
 // --- Bare program name uses PATH search ---
@@ -1328,7 +1302,7 @@ fn hyphen_arguments_pass_through() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let pid = wait_for_pidfile(&pidfile);
+    wait_for_pidfile(&pidfile).expect("pidfile should appear");
 
     let content = wait_for_file_content(&stdout_file, "--flag");
     assert!(
@@ -1339,10 +1313,6 @@ fn hyphen_arguments_pass_through() {
         content.contains("-x"),
         "program should receive -x, got: {content}"
     );
-
-    if let Some(pid) = pid {
-        kill_process(pid);
-    }
 }
 
 // --- Error messages appear on stderr ---
