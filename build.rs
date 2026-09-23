@@ -225,19 +225,12 @@ fn main() {
     let fd_dir = platform.and_then(|p| p.fd_dir).unwrap_or("");
     println!("cargo::rustc-env=BLIVET_FD_DIR={fd_dir}");
 
-    // Two views of the same table. Display names go to `tests/docgen.rs`, which
-    // owns the Supported row of the tier tables in README.md and docs/SPEC.md;
-    // `target_os` values go to `tests/target_lists.rs`, which holds the target
-    // lists that cannot be generated to the table.
+    // Display names go to `tests/docgen.rs`, which owns the Supported row of
+    // the tier tables in README.md and docs/SPEC.md.
     let names: Vec<&str> = PLATFORMS.iter().map(|p| p.name).collect();
     println!("cargo::rustc-env=BLIVET_PLATFORMS={}", names.join(","));
     write_platform_support_doc();
     write_entry_point_cfg_doc();
-    let oses: Vec<&str> = PLATFORMS.iter().map(|p| p.target_os).collect();
-    println!(
-        "cargo::rustc-env=BLIVET_SUPPORTED_TARGET_OS={}",
-        oses.join(",")
-    );
 
     // The target actually being built, so the non-Unix `compile_error!` can
     // name it. The full triple rather than `target_os`, which is "unknown" for
