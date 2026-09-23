@@ -210,14 +210,13 @@ platform can be partly supported instead of falling off a cliff into every
 fallback at once. Each capability is checked against the running system by a
 probe test.
 
-One carve-out, so the Supported row means what it says. The guards that check
-this repository against itself test the repository, not the platform, and not
-every tier reaches them. Most are integration tests — the doc-vs-code guards
-and the hardcoded-temp-path guard — so only the tiers that build integration
-targets run them: Linux and macOS, both on every pull request. One runs
-everywhere, because it has to live in the library: the exit-code table is
-checked against the error type by a library test, which bakes the README into
-the binary and so travels to the cross-built tiers with it.
+One carve-out, so the Supported row means what it says. Tests that check this
+repository against itself test the repository, not the platform, and not every
+tier reaches them. They are integration tests, so only the tiers that build
+integration targets run them: Linux and macOS, both on every pull request. The
+exception has to live in the library: the exit-code table is checked against
+the error type by a library test, which bakes the README into the binary and so
+travels to the cross-built tiers with it.
 
 "Any other Unix" is not a checkable class, and one member of it does not hold:
 `x86_64-pc-solaris` fails to compile, because `nix` gates `Flock` and
