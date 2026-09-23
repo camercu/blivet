@@ -21,8 +21,12 @@ fmt-check:
     cargo fmt --check
 
 # Run clippy lints
+# --all-targets because without it clippy compiles the library and the binary
+# only: no test binary, no `#[cfg(test)]` module, and the test sources are
+# where a guard's own logic lives. A gate that cannot see the guards is not a
+# gate.
 lint:
-    {{cargo}} clippy {{locked}} -- -D warnings
+    {{cargo}} clippy {{locked}} --all-targets -- -D warnings
 
 # Run cargo-deny checks (advisories, licenses, bans)
 lint-deny:
