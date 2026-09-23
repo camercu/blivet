@@ -402,47 +402,50 @@ pub(crate) fn redirect_output(
     append: bool,
     owned: &[(&'static str, FileId)],
 ) -> Result<(), DaemonizeError> {
-    let out = stdout.map(|p| open_stream(p, append)).transpose()?;
-    let err = stderr.map(|p| open_stream(p, append)).transpose()?;
-
-    let plan = plan_output_redirect(
-        out.as_ref().map(|s| s.id),
-        err.as_ref().map(|s| s.id),
-        owned,
-    )
-    .map_err(|c| {
-        let path = if c.stream == "stdout" { &out } else { &err };
-        let path = path.as_ref().map_or(Path::new(""), |s| s.path);
-        DaemonizeError::ValidationError(format!(
-            "{} and {} must not be the same file: {}",
-            c.owned,
-            c.stream,
-            path.display()
-        ))
-    })?;
-
-    if !append {
-        if let Some(out) = &out {
-            truncate(out)?;
+    // stdout goes first, all the way onto fd 1, before stderr is opened: a
+    // stderr of `/dev/stdout` names whatever fd 1 is at that moment, and must
+    // find the stdout file there rather than the stream it replaced.
+    let stdout_id = match stdout {
+        Some(path) => {
+            let out = open_stream(path, append)?;
+            plan_output_redirect(Some(out.id), None, owned).map_err(|c| refusal(&c, &out))?;
+            if !append {
+                truncate(&out)?;
+            }
+            dup2_stdio(&out.fd, 1)
+                .map_err(|e| DaemonizeError::OutputFileError(format!("dup2 fd 1: {e}")))?;
+            Some(out.id)
         }
-        if let Some(err) = err.as_ref().filter(|_| !plan.stderr_shares_stdout) {
-            truncate(err)?;
-        }
-    }
-    if let Some(out) = &out {
-        dup2_stdio(&out.fd, 1)
-            .map_err(|e| DaemonizeError::OutputFileError(format!("dup2 fd 1: {e}")))?;
-    }
-    let stderr_source = if plan.stderr_shares_stdout {
-        out.as_ref()
-    } else {
-        err.as_ref()
+        None => None,
     };
-    if let Some(source) = stderr_source {
-        dup2_stdio(&source.fd, 2)
-            .map_err(|e| DaemonizeError::OutputFileError(format!("dup2 fd 2: {e}")))?;
+
+    if let Some(path) = stderr {
+        let err = open_stream(path, append)?;
+        let plan =
+            plan_output_redirect(stdout_id, Some(err.id), owned).map_err(|c| refusal(&c, &err))?;
+        if plan.stderr_shares_stdout {
+            // fd 1 already is the stdout file; share its descriptor and offset.
+            dup2_stdio(std::io::stdout(), 2)
+                .map_err(|e| DaemonizeError::OutputFileError(format!("dup2 fd 2: {e}")))?;
+        } else {
+            if !append {
+                truncate(&err)?;
+            }
+            dup2_stdio(&err.fd, 2)
+                .map_err(|e| DaemonizeError::OutputFileError(format!("dup2 fd 2: {e}")))?;
+        }
     }
     Ok(())
+}
+
+/// The refusal for a stream that turned out to be an owned file.
+fn refusal(collision: &Collision, stream: &OpenStream) -> DaemonizeError {
+    DaemonizeError::ValidationError(format!(
+        "{} and {} must not be the same file: {}",
+        collision.owned,
+        collision.stream,
+        stream.path.display()
+    ))
 }
 
 /// Write all bytes to a file descriptor, looping on partial writes.
@@ -1086,6 +1089,32 @@ mod tests {
         assert!(
             matches!((out, err), (Some(o), Some(e)) if o < e),
             "stderr should follow stdout on the shared descriptor: {content:?}"
+        );
+    }
+
+    // Covers: R146
+    #[test]
+    #[serial]
+    fn execute_redirect_stderr_onto_dev_stdout_follows_the_redirected_stdout() {
+        // `-e /dev/stdout` names whatever fd 1 is when stderr is opened, so
+        // stderr must be opened after stdout has moved onto fd 1 — then it is
+        // the stdout file, and shares its descriptor.
+        let _restore = SavedFds::new(&[1, 2]);
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("combined.log");
+
+        redirect_output(Some(&log), Some(Path::new("/dev/stdout")), false, &[]).unwrap();
+        std::io::stdout().write_all(b"stdout\n").unwrap();
+        std::io::stdout().flush().unwrap();
+        std::io::stderr().write_all(b"stderr\n").unwrap();
+        std::io::stderr().flush().unwrap();
+
+        let content = std::fs::read_to_string(&log).unwrap();
+        let out = content.find("stdout\n");
+        let err = content.find("stderr\n");
+        assert!(
+            matches!((out, err), (Some(o), Some(e)) if o < e),
+            "stderr should land in the stdout file, after stdout's line: {content:?}"
         );
     }
 
