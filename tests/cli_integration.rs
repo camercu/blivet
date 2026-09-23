@@ -1,7 +1,7 @@
 mod helpers;
 
 use helpers::*;
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::process::Command;
 use std::time::Duration;
 
@@ -744,17 +744,31 @@ fn parent_waits_for_exec_before_exiting() {
     std::thread::spawn(move || exited.send(parent.wait()));
     let early = exit.recv_timeout(Duration::from_millis(300));
 
-    // Release the daemon before asserting anything, so a failure does not
-    // strand it on the FIFO: it opens its stdout, execs `true`, and the exec
-    // closes the notification pipe, which is what the parent waits for.
-    let mut drained = Vec::new();
-    std::io::Read::read_to_end(&mut std::fs::File::open(&fifo).unwrap(), &mut drained).unwrap();
+    // Release the daemon: with a reader present, its open of the FIFO
+    // returns, it execs `true`, and the exec closes the notification pipe the
+    // parent waits on. Opened non-blocking, so this returns whether or not the
+    // daemon ever reaches its open, and held until the parent has gone, so a
+    // failing run does not strand the daemon on the FIFO either.
+    let reader = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NONBLOCK)
+        .open(&fifo)
+        .unwrap();
+    let exited = match &early {
+        Ok(status) => Ok(status.as_ref().map(|s| *s).map_err(|e| e.kind())),
+        Err(_) => exit
+            .recv_timeout(Duration::from_secs(30))
+            .map(|status| status.map_err(|e| e.kind())),
+    };
+    drop(reader);
 
     assert!(
         early.is_err(),
         "the parent exited while the daemon was still held before exec: {early:?}"
     );
-    let status = exit.recv().unwrap().unwrap();
+    let status = exited
+        .expect("the parent did not exit within 30s of the daemon's release")
+        .unwrap();
     assert!(
         status.success(),
         "the parent should exit 0 once exec succeeds: {status}"
