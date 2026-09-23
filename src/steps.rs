@@ -1043,8 +1043,16 @@ mod tests {
         redirect_output(Some(&stdout_path), None, false, &[]).unwrap();
         std::io::stdout().write_all(b"new content\n").unwrap();
         std::io::stdout().flush().unwrap();
+        // Not an exact match: under a shared harness (`cargo test --lib`, as
+        // the packaged and bionic tiers run) other tests' result lines reach
+        // the redirected fd 1 too. The old tail is what a skipped truncate
+        // would leave behind.
         let content = std::fs::read_to_string(&stdout_path).unwrap();
-        assert_eq!(content, "new content\n", "should have truncated");
+        assert!(content.contains("new content\n"), "{content:?}");
+        assert!(
+            !content.contains("replaces it"),
+            "should have truncated: {content:?}"
+        );
 
         // Append mode
         redirect_output(Some(&stdout_path), None, true, &[]).unwrap();
@@ -1068,8 +1076,17 @@ mod tests {
         std::io::stderr().write_all(b"stderr\n").unwrap();
         std::io::stderr().flush().unwrap();
 
+        // One descriptor means one offset, so stderr's line follows stdout's;
+        // two would put both at offset 0 and one would overwrite the other.
+        // Positions rather than an exact match, since a shared harness writes
+        // its own lines into fd 1 as well.
         let content = std::fs::read_to_string(&combined).unwrap();
-        assert_eq!(content, "stdout\nstderr\n");
+        let out = content.find("stdout\n");
+        let err = content.find("stderr\n");
+        assert!(
+            matches!((out, err), (Some(o), Some(e)) if o < e),
+            "stderr should follow stdout on the shared descriptor: {content:?}"
+        );
     }
 
     #[test]
@@ -1098,7 +1115,11 @@ mod tests {
 
         redirect_output(Some(&stdout_path), Some(&stderr_path), false, &[]).unwrap();
 
-        assert_eq!(std::fs::read_to_string(&stderr_path).unwrap(), "");
+        let content = std::fs::read_to_string(&stderr_path).unwrap();
+        assert!(
+            !content.contains("stale stderr"),
+            "should have truncated: {content:?}"
+        );
     }
 
     /// With stdout closed, `open` hands back fd 1 itself. The redirect must
