@@ -12,6 +12,32 @@ fn daemonize_cmd() -> Command {
     Command::new(daemonize_bin())
 }
 
+/// The UID the container's passwd database gives `user`. Panics if the lookup
+/// fails: a test comparing against it has nothing to assert without it.
+fn uid_of(user: &str) -> u32 {
+    let out = Command::new("id").args(["-u", user]).output().unwrap();
+    assert!(
+        out.status.success(),
+        "id -u {user} failed: the image is missing the test user"
+    );
+    String::from_utf8_lossy(&out.stdout).trim().parse().unwrap()
+}
+
+/// The GID the container's group database gives `group`, failing loudly like
+/// [`uid_of`].
+fn gid_of_group(group: &str) -> u32 {
+    let out = Command::new("getent")
+        .args(["group", group])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "getent group {group} failed: the image is missing the test group"
+    );
+    let line = String::from_utf8_lossy(&out.stdout);
+    line.trim().split(':').nth(2).unwrap().parse().unwrap()
+}
+
 /// Check that we are running as root on Linux. Returns false otherwise.
 fn is_root_on_linux() -> bool {
     cfg!(target_os = "linux") && nix::unistd::geteuid().as_raw() == 0
@@ -91,21 +117,14 @@ fn user_switch_sets_uid_and_gid() {
     assert_eq!(info.uid, expected_uid, "daemon UID should match testuser");
     assert_eq!(info.gid, expected_gid, "daemon GID should match testuser");
 
-    // Verify the id output from inside the daemon matches (poll for it).
-    let id_output = wait_for_file_content(&env_file, &expected_uid.to_string());
-    let lines: Vec<&str> = id_output.lines().collect();
-    if lines.len() >= 2 {
-        assert_eq!(
-            lines[0].trim(),
-            expected_uid.to_string(),
-            "id -u inside daemon should match"
-        );
-        assert_eq!(
-            lines[1].trim(),
-            expected_gid.to_string(),
-            "id -g inside daemon should match"
-        );
-    }
+    // What the daemon itself reports: `id -u` then `id -g`, one line each.
+    // Poll for both lines; `id -u` alone can land first.
+    let expected_report = format!("{expected_uid}\n{expected_gid}\n");
+    let id_output = wait_for_file_content(&env_file, &expected_report);
+    assert_eq!(
+        id_output, expected_report,
+        "id -u and id -g inside the daemon should report testuser"
+    );
 
     kill_process(pid);
 }
@@ -465,10 +484,13 @@ fn group_only_switch_sets_gid() {
 
     let info = query_process(pid).expect("daemon process should exist");
 
-    // R61: group-only should set GID but keep UID as root
+    // R61: group-only sets the GID and leaves the UID root.
     assert_eq!(info.uid, 0, "UID should remain root for group-only switch");
-    // GID should be testgroup's GID (not 0/root)
-    assert_ne!(info.gid, 0, "GID should be testgroup's GID, not root");
+    assert_eq!(
+        info.gid,
+        gid_of_group("testgroup"),
+        "GID should be testgroup's"
+    );
 
     kill_process(pid);
 }
@@ -511,22 +533,14 @@ fn user_and_group_switch_sets_independent_gid() {
 
     let info = query_process(pid).expect("daemon process should exist");
 
-    // R60/R70: UID should be testuser, GID should be testgroup's GID
-    assert_ne!(info.uid, 0, "UID should be testuser, not root");
-
-    // Get testgroup's GID for comparison
-    let testgroup_gid_output = Command::new("getent")
-        .args(["group", "testgroup"])
-        .output()
-        .unwrap();
-    if testgroup_gid_output.status.success() {
-        let fields = String::from_utf8_lossy(&testgroup_gid_output.stdout);
-        let testgroup_gid: u32 = fields.trim().split(':').nth(2).unwrap().parse().unwrap();
-        assert_eq!(
-            info.gid, testgroup_gid,
-            "GID should be testgroup's GID, not testuser's primary group"
-        );
-    }
+    // R60/R70: UID is testuser's, GID is testgroup's rather than testuser's
+    // primary group.
+    assert_eq!(info.uid, uid_of("testuser"), "UID should be testuser's");
+    assert_eq!(
+        info.gid,
+        gid_of_group("testgroup"),
+        "GID should be testgroup's GID, not testuser's primary group"
+    );
 
     kill_process(pid);
 }
