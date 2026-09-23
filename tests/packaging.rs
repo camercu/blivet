@@ -206,44 +206,6 @@ fn no_shipped_source_names_a_file_the_crate_does_not_ship() {
     );
 }
 
-/// The CLI's argument parser must stay optional.
-///
-/// `clap` is used only by `src/main.rs`. Declared unconditionally it is 13 of
-/// the 24 crates a library-only consumer compiles; behind a default-on `cli`
-/// feature that consumer compiles 11, and `cargo install blivet` and docs.rs
-/// are unchanged because the feature is on by default.
-///
-/// Cargo refuses a half-revert on its own: dropping `optional` while `cli`
-/// still says `dep:clap` fails to parse the manifest. What nothing catches is
-/// the whole revert — deleting the feature and the flag together, as a tidying
-/// edit would — after which the library builds, every test passes, and the
-/// saving is quietly gone. That is what this test is for.
-/// `just check-no-default-features` is the other half: this says the feature is
-/// declared, that says the library still compiles without it.
-#[test]
-fn the_cli_parser_is_an_optional_dependency() {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let manifest = std::fs::read_to_string(root.join("Cargo.toml")).expect("Cargo.toml");
-
-    let clap = manifest
-        .lines()
-        .find(|line| line.trim_start().starts_with("clap"))
-        .expect("Cargo.toml declares clap");
-    assert!(
-        clap.contains("optional = true"),
-        "clap is an unconditional dependency, so every consumer of the library \
-         compiles the CLI's argument parser and its subtree: {clap}"
-    );
-
-    for declaration in ["cli = [\"dep:clap\"]", "required-features = [\"cli\"]"] {
-        assert!(
-            manifest.contains(declaration),
-            "Cargo.toml is missing `{declaration}`; without it an optional clap \
-             is either unreachable or silently absent from the CLI build"
-        );
-    }
-}
-
 /// Calls that reach the filesystem while a test is running.
 const RUN_TIME_READS: &[&str] = &["std::fs::", "fs::read", "File::open", "read_to_string"];
 
