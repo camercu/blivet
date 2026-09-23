@@ -1241,10 +1241,6 @@ mod tests {
     fn validate_unwritable_parent_rejected() {
         use std::os::unix::fs::PermissionsExt;
 
-        // Root bypasses W_OK checks, so this arm is unreachable under docker CI.
-        if nix::unistd::geteuid().is_root() {
-            return;
-        }
         let dir = tempfile::tempdir().unwrap();
         std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o555)).unwrap();
         let mut config = DaemonConfig::new();
@@ -1252,11 +1248,22 @@ mod tests {
         let result = config.validate();
         // Restore before asserting so tempdir cleanup succeeds either way.
         std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
-        assert!(matches!(
-            result,
-            Err(DaemonizeError::ValidationError(msg))
-                if msg.contains("not writable") && msg.contains(&dir.path().display().to_string())
-        ));
+
+        // The probe answers for the effective identity, and root may write a
+        // 0555 directory — so the root tier asserts the other half of the same
+        // rule rather than asserting nothing.
+        if nix::unistd::geteuid().is_root() {
+            assert!(
+                result.is_ok(),
+                "root can write a 0555 directory: {result:?}"
+            );
+        } else {
+            assert!(matches!(
+                result,
+                Err(DaemonizeError::ValidationError(msg))
+                    if msg.contains("not writable") && msg.contains(&dir.path().display().to_string())
+            ));
+        }
     }
 
     // Covers: R141

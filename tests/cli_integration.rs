@@ -876,21 +876,33 @@ fn chdir_nonexistent_exits_71() {
 
 // Covers: R35, R51
 #[test]
-fn permission_denied_user_switch_without_root_exits_77() {
-    // Skip if running as root
-    if nix::unistd::geteuid().as_raw() == 0 {
-        return;
-    }
+fn user_switch_is_permitted_to_root_alone() {
+    assert_switch_status(&["-u", "nobody"]);
+}
 
+/// The exit status a user or group switch should produce for whoever runs the
+/// suite: R35 permits a switch to root alone. The same test asserts in the
+/// unprivileged tiers and in the root one, so neither counts a pass it did not
+/// test.
+fn expected_switch_status() -> i32 {
+    if nix::unistd::geteuid().is_root() {
+        0
+    } else {
+        77
+    }
+}
+
+fn assert_switch_status(args: &[&str]) {
     let output = daemonize_cmd()
-        .args(["-u", "nobody", "--", "sleep", "1"])
+        .args(args)
+        .args(["--", "true"])
         .output()
         .unwrap();
-
     assert_eq!(
         output.status.code(),
-        Some(77),
-        "non-root user switch should exit 77, stderr: {}",
+        Some(expected_switch_status()),
+        "{args:?} as euid {}: stderr: {}",
+        nix::unistd::geteuid(),
         String::from_utf8_lossy(&output.stderr)
     );
 }
@@ -1454,43 +1466,14 @@ fn foreground_lock_conflict_reports_error() {
 
 // Covers: R35, R51
 #[test]
-fn permission_denied_group_switch_without_root_exits_77() {
-    // Skip if running as root
-    if nix::unistd::geteuid().as_raw() == 0 {
-        return;
-    }
-
-    let output = daemonize_cmd()
-        .args(["-g", "wheel", "--", "sleep", "1"])
-        .output()
-        .unwrap();
-
-    assert_eq!(
-        output.status.code(),
-        Some(77),
-        "non-root group switch should exit 77, stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
+fn user_and_group_switch_is_permitted_to_root_alone() {
+    // A numeric group is taken as given (R142), so the root tier does not
+    // depend on which group names its image ships.
+    assert_switch_status(&["-u", "nobody", "-g", "65534"]);
 }
 
 // Covers: R35, R51
 #[test]
-fn permission_denied_group_only_without_root_exits_77() {
-    // Skip if running as root
-    if nix::unistd::geteuid().as_raw() == 0 {
-        return;
-    }
-
-    // Group-only (no -u) should also require root
-    let output = daemonize_cmd()
-        .args(["-g", "nogroup", "--", "sleep", "1"])
-        .output()
-        .unwrap();
-
-    assert_eq!(
-        output.status.code(),
-        Some(77),
-        "non-root group-only switch should exit 77, stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
+fn group_only_switch_is_permitted_to_root_alone() {
+    assert_switch_status(&["-g", "65534"]);
 }
