@@ -513,17 +513,18 @@ pub(crate) unsafe fn daemonize_inner(
 
 /// Removes the pidfile this process wrote if the sequence never reaches the end.
 ///
-/// Steps 9–13 all run after step 8 has written the pidfile, and any of them can
-/// fail. In daemon mode the abort path signals the parent and `_exit`s, and in
+/// Everything from the second half of step 8 through step 13 runs after this
+/// process has taken hold of the pidfile, and any of it can fail. In daemon mode the abort path signals the parent and `_exit`s, and in
 /// foreground mode the error returns to the caller; neither builds a
 /// [`DaemonContext`], so no drop-time cleanup ever runs. Without this the file
 /// is left naming a process that never started — what `kill $(cat …)`, a status
 /// script, or systemd's `PIDFile=` reads next, and after PID reuse some other
 /// process entirely.
 ///
-/// Armed only *after* the write, so a failure before step 8 — a lock conflict
-/// above all, where the pidfile on disk belongs to the daemon already running —
-/// cannot remove a file this process does not own. Gated on
+/// Armed once [`steps::open_pidfile`] returns, which is when the file becomes
+/// this process's — not before, so a lock conflict or a refused `open` cannot
+/// remove a file that belongs to someone else, and not after the write, so a
+/// write that fails half way does not leave an empty pidfile behind. Gated on
 /// [`cleanup_on_drop`](DaemonConfig::cleanup_on_drop), matching the drop-time
 /// cleanup that [`DaemonContext::report_error`] replicates for the same reason.
 #[cfg(unix)]
@@ -578,22 +579,20 @@ fn run_post_fork(
         None => None,
     };
 
-    // Step 8: Write pidfile. The debt is owed from the moment this process may
-    // touch the path, not from the moment the write succeeds: step 7 has
-    // already created the file whenever the lockfile is the derived one, and
-    // `write_pidfile` creates and truncates it otherwise — so a write that
-    // fails half way leaves an empty file that names no process at all. Arm
-    // first, disarm at step 14 — see `PidfileOnAbort`.
-    //
-    // Arming here and not before step 7 is what keeps a lock conflict from
-    // deleting the incumbent's pidfile: that aborts above this block, holding
-    // no lock. Past step 7 the lock is ours, so the file is ours to remove.
+    // Step 8: Write pidfile. The debt is owed from the moment this process
+    // owns the file on disk — once `open_pidfile` returns, having locked it at
+    // step 7 or created and truncated it just now — not from the moment the
+    // write succeeds: a write that fails half way leaves an empty file naming
+    // no process at all. Nor any earlier: an `open_pidfile` that fails, or a
+    // lock conflict at step 7, leaves a file that belongs to someone else.
+    // Arm between the two halves, disarm at step 14 — see `PidfileOnAbort`.
     let mut pidfile_on_abort = PidfileOnAbort { path: None };
     if let Some(ref pidfile_path) = config.pidfile {
+        let pidfile = steps::open_pidfile(pidfile_path, lockfile_path.zip(lockfile.as_ref()))?;
         if config.cleanup_on_drop {
             pidfile_on_abort.path = Some(pidfile_path);
         }
-        steps::write_pidfile(pidfile_path, lockfile_path.zip(lockfile.as_ref()))?;
+        pidfile.write_pid()?;
     }
 
     // Step 9: Reset signal dispositions
@@ -1016,6 +1015,46 @@ mod tests {
             !pidfile.exists(),
             "step 8 failed after creating the pidfile and left it behind, \
              empty, naming no process at all"
+        );
+    }
+
+    // Covers: R145
+    #[test]
+    fn pidfile_open_failure_leaves_the_existing_file_alone() {
+        run_in_subprocess("tests::pidfile_open_failure_leaves_the_existing_file_alone_subprocess");
+    }
+
+    #[test]
+    #[ignore]
+    fn pidfile_open_failure_leaves_the_existing_file_alone_subprocess() {
+        if !is_subprocess() {
+            return;
+        }
+        steps::failpoints::PIDFILE_OPEN_FAILS.store(true, std::sync::atomic::Ordering::Relaxed);
+        let dir = crate::test_support::tmp_dir();
+        let pidfile = dir.join(format!("pidopen-{}.pid", std::process::id()));
+        std::fs::write(&pidfile, "4242\n").unwrap();
+        let mut config = DaemonConfig::new();
+        // No lockfile, so step 7 does not open the pidfile and step 8's own
+        // open is the first time this process would touch it.
+        config
+            .foreground(true)
+            .close_fds(false)
+            .pidfile(&pidfile)
+            .no_lockfile();
+        let mut forker = NullForker::new(vec![], Ok(()));
+        let result = run_inner(&config, &mut forker);
+        let left = std::fs::read_to_string(&pidfile);
+        let _ = std::fs::remove_file(&pidfile);
+
+        assert!(
+            matches!(&result, Err(DaemonizeError::PidfileError(m)) if m.contains("open")),
+            "expected the open failure to propagate, got {result:?}"
+        );
+        assert_eq!(
+            left.ok().as_deref(),
+            Some("4242\n"),
+            "an open that failed removed a pidfile this process never opened"
         );
     }
 
