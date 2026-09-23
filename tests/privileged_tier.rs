@@ -10,6 +10,9 @@
 use std::path::{Path, PathBuf};
 use std::process::Output;
 
+mod common;
+use common::{code_of, rust_files};
+
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 }
@@ -165,5 +168,114 @@ fn the_tier_asks_for_the_ignored_corpus() {
         nextest.contains("--run-ignored all"),
         "the privileged tier exists to run the ignored corpus, so its nextest \
          command must ask for it; it asked for:\n{nextest}"
+    );
+}
+
+// ---- a test run as root must still test something ----
+
+/// Calls that answer "is this process privileged?".
+const PRIVILEGE_CHECKS: [&str; 3] = ["geteuid()", "is_root()", "is_root_on_linux()"];
+
+/// Every early `return` guarded by a privilege check, in a test the ordinary
+/// tiers run, as `  <path>:<line>: <condition>`.
+///
+/// The privileged tier runs the whole suite as root and counts what passed. A
+/// test that returns when it finds itself root is counted as a pass there
+/// having asserted nothing, and `--no-skips` cannot see it: an early return is
+/// not a skip. The honest forms are an assertion that holds for either
+/// identity, or a subprocess that sheds root and tests the same path.
+///
+/// `#[ignore]` tests are exempt: only the privileged tier runs them, and its
+/// script refuses to run unless it is root, so a return that fires when it is
+/// not root cannot fire there.
+fn privilege_returns_in_tests(root: &Path, files: &[PathBuf]) -> Vec<String> {
+    let mut offenders = Vec::new();
+    for file in files {
+        let Ok(text) = std::fs::read_to_string(file) else {
+            continue;
+        };
+        let lines: Vec<&str> = text.lines().collect();
+        for (at, line) in lines.iter().enumerate() {
+            let code = code_of(line).trim();
+            let guards_on_privilege = code.starts_with("if ")
+                && code.ends_with('{')
+                && PRIVILEGE_CHECKS.iter().any(|c| code.contains(c));
+            if !guards_on_privilege || !block_returns(&lines, at) || !in_ordinary_test(&lines, at) {
+                continue;
+            }
+            let rel = file.strip_prefix(root).unwrap_or(file).display();
+            offenders.push(format!("  {rel}:{}: {code}", at + 1));
+        }
+    }
+    offenders
+}
+
+/// Whether the block opened on line `open` returns before it closes.
+fn block_returns(lines: &[&str], open: usize) -> bool {
+    let indent = lines[open].len() - lines[open].trim_start().len();
+    lines[open + 1..]
+        .iter()
+        .take_while(|l| {
+            let close = l.len() - l.trim_start().len() == indent && l.trim_start().starts_with('}');
+            !close
+        })
+        .any(|l| code_of(l).trim_start().starts_with("return"))
+}
+
+/// Whether line `at` sits in a test the ordinary tiers run: a function marked
+/// `#[test]` and not `#[ignore]`. Library code returning on a privilege check
+/// is the behaviour under test, not a test declining to run.
+fn in_ordinary_test(lines: &[&str], at: usize) -> bool {
+    let Some(fn_line) = lines[..at].iter().rposition(|l| {
+        let l = l.trim_start();
+        l.starts_with("fn ") || l.starts_with("pub fn ") || l.starts_with("pub(crate) fn ")
+    }) else {
+        return false;
+    };
+    let attributes: Vec<&str> = lines[..fn_line]
+        .iter()
+        .rev()
+        .map(|l| l.trim())
+        .take_while(|l| l.is_empty() || l.starts_with("#[") || l.starts_with("//"))
+        .collect();
+    attributes.contains(&"#[test]") && !attributes.iter().any(|l| l.starts_with("#[ignore"))
+}
+
+#[test]
+fn a_test_run_as_root_still_tests_something() {
+    let root = repo_root();
+    let mut files = Vec::new();
+    rust_files(&root.join("src"), &mut files);
+    rust_files(&root.join("tests"), &mut files);
+    let offenders = privilege_returns_in_tests(&root, &files);
+    assert!(
+        offenders.is_empty(),
+        "these tests return early on a privilege check, so the privileged tier \
+         counts them as passed having tested nothing. Assert what holds for \
+         either identity, or shed root in a subprocess:\n{}",
+        offenders.join("\n")
+    );
+}
+
+#[test]
+fn the_privilege_scan_accuses_the_shape_it_bans() {
+    // The shape this file exists to forbid, fed to the scan directly, so a
+    // scan that silently stopped matching fails here rather than passing
+    // everything.
+    let dir = tempfile::tempdir().unwrap();
+    let sample = dir.path().join("sample.rs");
+    std::fs::write(
+        &sample,
+        "#[test]\nfn t() {\n    if nix::unistd::geteuid().is_root() {\n        return;\n    }\n}\n\n\
+         #[test]\n#[ignore]\nfn u() {\n    if !is_root_on_linux() {\n        return;\n    }\n}\n\n\
+         fn validate() -> Result<(), E> {\n    if geteuid().as_raw() != 0 {\n        return Err(E);\n    }\n    Ok(())\n}\n",
+    )
+    .unwrap();
+    let offenders = privilege_returns_in_tests(dir.path(), &[sample]);
+    assert_eq!(
+        offenders,
+        ["  sample.rs:3: if nix::unistd::geteuid().is_root() {"],
+        "the scan must accuse the ordinary test and exempt the ignored test and \
+         the library code"
     );
 }
