@@ -1173,12 +1173,40 @@ mod tests {
         (1..).find(|g| !gids.contains(g) && *g != egid).unwrap()
     }
 
+    /// Drops the effective UID to `nobody` when the test runs as root.
+    ///
+    /// The tests that call this assert an unprivileged failure — a chown or a
+    /// setgid refused with EPERM. Root would succeed instead, so rather than
+    /// return and count a pass the root tier never tested, the body sheds root
+    /// in its own process and tests the same path there. Process-global, so
+    /// only ever called in a `run_in_subprocess` child.
+    #[cfg(blivet_thread_count)]
+    fn shed_root() {
+        /// The conventional unprivileged UID; `seteuid` does not need it to
+        /// exist in passwd.
+        const NOBODY: u32 = 65534;
+        if nix::unistd::geteuid().is_root() {
+            nix::unistd::seteuid(nix::unistd::Uid::from_raw(NOBODY))
+                .expect("root can drop its effective UID");
+        }
+    }
+
     #[cfg(blivet_thread_count)]
     #[test]
     fn drop_privileges_chowns_configured_paths() {
-        if nix::unistd::geteuid().is_root() {
-            return; // relies on chown failing with EPERM; root chown succeeds
+        crate::test_support::run_in_subprocess(
+            "context::tests::drop_privileges_chowns_configured_paths_unprivileged",
+        );
+    }
+
+    #[cfg(blivet_thread_count)]
+    #[test]
+    #[ignore = "runs in a subprocess that sheds root; see shed_root"]
+    fn drop_privileges_chowns_configured_paths_unprivileged() {
+        if !crate::test_support::is_subprocess() {
+            return;
         }
+        shed_root();
         let dir = tempfile::tempdir().unwrap();
         let pidfile = dir.path().join("x.pid");
         std::fs::write(&pidfile, "123\n").unwrap();
@@ -1202,9 +1230,19 @@ mod tests {
     #[cfg(blivet_thread_count)]
     #[test]
     fn drop_privileges_skips_chown_when_disabled() {
-        if nix::unistd::geteuid().is_root() {
-            return; // relies on EPERM from setgid; root would switch groups
+        crate::test_support::run_in_subprocess(
+            "context::tests::drop_privileges_skips_chown_when_disabled_unprivileged",
+        );
+    }
+
+    #[cfg(blivet_thread_count)]
+    #[test]
+    #[ignore = "runs in a subprocess that sheds root; see shed_root"]
+    fn drop_privileges_skips_chown_when_disabled_unprivileged() {
+        if !crate::test_support::is_subprocess() {
+            return;
         }
+        shed_root();
         let dir = tempfile::tempdir().unwrap();
         let pidfile = dir.path().join("x.pid");
         std::fs::write(&pidfile, "123\n").unwrap();
