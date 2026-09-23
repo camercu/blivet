@@ -279,7 +279,12 @@ package-test:
     root=$PWD
     version=$(cargo metadata --format-version 1 --no-deps \
         | jq -r '.packages[] | select(.name == "blivet") | .version')
-    cargo package --locked
+    # --allow-dirty: this tests the packaged file set, which is what a developer
+    # is about to commit. Whether the tree is committed is a publishing
+    # question, and CI answers it from a clean checkout. Without the flag the
+    # recipe refuses mid-change, and `ci-full` with it — the gate a developer
+    # reaches for before a push.
+    cargo package --locked --allow-dirty
     work=$(mktemp -d)
     trap 'rm -rf "$work"' EXIT
     tar xf "target/package/blivet-$version.crate" -C "$work"
