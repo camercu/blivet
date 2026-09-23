@@ -221,16 +221,30 @@ mutants base="origin/main":
     git diff "$(git merge-base {{base}} HEAD)" > "$diff"
     cargo mutants ${CARGO_LOCKED:+--cargo-arg=$CARGO_LOCKED} --in-diff "$diff"
 
+# The build context both container tiers get, as a tar stream on stdout: the
+# files git tracks, plus untracked files `.gitignore` does not exclude — what
+# the working tree holds for the build, and nothing it marks as local state.
+# `.gitignore` is the one list of what stays out; there is no `.dockerignore`
+# to fall out of step with it. A tracked file deleted in the working tree is
+# skipped, as it would be from a commit of the tree as it stands.
+[private]
+build-context:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    git ls-files -z --cached --others --exclude-standard \
+        | while IFS= read -r -d '' f; do [ -e "$f" ] && printf '%s\0' "$f"; done \
+        | tar --null -T - -cf -
+
 # Build and run Docker container for root + Linux-specific tests
 docker-test:
-    docker build --build-arg RUST_VERSION={{docker_rust}} -t blivet-test .
+    just build-context | docker build --build-arg RUST_VERSION={{docker_rust}} -t blivet-test -
     docker run --rm --init --privileged blivet-test
 
 # Run the library tests against bionic, Android's libc, in a Termux container.
 # The platform is pinned to linux/amd64 so a developer on any architecture runs
 # what CI runs; off an x86_64 host that means emulation, and it is slow.
 termux-test:
-    docker build --platform linux/amd64 -f Dockerfile.termux -t blivet-termux .
+    just build-context | docker build --platform linux/amd64 -f Dockerfile.termux -t blivet-termux -
     docker run --rm --platform linux/amd64 --init blivet-termux
 
 # Rewrite the machine-owned cells of README.md and docs/SPEC.md.
