@@ -1500,29 +1500,33 @@ mod tests {
         assert!(!config.close_fds);
     }
 
-    #[test]
-    fn validate_group_requires_root() {
-        // Non-root with group should fail validation
-        if nix::unistd::geteuid().as_raw() != 0 {
-            let mut config = DaemonConfig::new();
-            config.group("wheel");
-            assert!(matches!(
-                config.validate(),
-                Err(DaemonizeError::PermissionDenied(_))
-            ));
+    /// Holds `validate` to R35 for whoever runs the suite: a user or group
+    /// switch is accepted for root and refused with `PermissionDenied`
+    /// otherwise. Both tiers assert; neither counts a pass it did not test.
+    fn assert_switch_permitted_to_root_alone(config: &DaemonConfig) {
+        let result = config.validate();
+        if nix::unistd::geteuid().is_root() {
+            assert!(result.is_ok(), "root may switch identity: {result:?}");
+        } else {
+            assert!(
+                matches!(result, Err(DaemonizeError::PermissionDenied(_))),
+                "only root may switch identity: {result:?}"
+            );
         }
     }
 
     #[test]
+    fn validate_group_requires_root() {
+        let mut config = DaemonConfig::new();
+        // Numeric, so root does not depend on the group names an image ships.
+        config.group("65534");
+        assert_switch_permitted_to_root_alone(&config);
+    }
+
+    #[test]
     fn validate_user_or_group_requires_root() {
-        // Non-root with user should fail validation (existing behavior)
-        if nix::unistd::geteuid().as_raw() != 0 {
-            let mut config = DaemonConfig::new();
-            config.user("nobody");
-            assert!(matches!(
-                config.validate(),
-                Err(DaemonizeError::PermissionDenied(_))
-            ));
-        }
+        let mut config = DaemonConfig::new();
+        config.user("nobody");
+        assert_switch_permitted_to_root_alone(&config);
     }
 }
