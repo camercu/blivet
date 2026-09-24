@@ -756,7 +756,6 @@ mod tests {
             let ctx = ctx(&cfg, None, None);
             ctx.cleanup_on_signals(&[libc::SIGTERM]).unwrap();
             nix::sys::signal::raise(nix::sys::signal::Signal::SIGTERM).unwrap();
-            std::thread::sleep(std::time::Duration::from_secs(5));
             unreachable!("should have been killed by the re-raised SIGTERM");
         }
 
@@ -793,7 +792,6 @@ mod tests {
             let ctx = ctx(&cfg, None, None);
             ctx.cleanup_on_term_signals().unwrap();
             nix::sys::signal::raise(nix::sys::signal::Signal::SIGINT).unwrap();
-            std::thread::sleep(std::time::Duration::from_secs(5));
             unreachable!("should have been killed by the re-raised SIGINT");
         }
 
@@ -829,7 +827,6 @@ mod tests {
             let ctx = ctx(&cfg, None, None);
             ctx.cleanup_on_term_signals().unwrap();
             nix::sys::signal::raise(nix::sys::signal::Signal::SIGTERM).unwrap();
-            std::thread::sleep(std::time::Duration::from_secs(5));
             unreachable!("should have been killed by the re-raised SIGTERM");
         }
 

@@ -78,7 +78,7 @@ fn user_switch_sets_uid_and_gid() {
             "--",
             "sh",
             "-c",
-            "id -u; id -g; sleep 5",
+            "id -u; id -g; exec tail -f /dev/null",
         ])
         .output()
         .unwrap();
@@ -159,7 +159,7 @@ fn user_switch_sets_env_vars() {
             "--",
             "sh",
             "-c",
-            "echo USER=$USER; echo HOME=$HOME; echo LOGNAME=$LOGNAME; sleep 5",
+            "echo USER=$USER; echo HOME=$HOME; echo LOGNAME=$LOGNAME; exec tail -f /dev/null",
         ])
         .output()
         .unwrap();
@@ -229,7 +229,7 @@ fn output_file_owned_by_target_user() {
             "--",
             "sh",
             "-c",
-            "echo hello; echo err >&2; sleep 5",
+            "echo hello; echo err >&2; exec tail -f /dev/null",
         ])
         .output()
         .unwrap();
@@ -312,8 +312,9 @@ fn daemon_cwd_via_proc() {
             "-c",
             chdir,
             "--",
-            "sleep",
-            "30",
+            "tail",
+            "-f",
+            "/dev/null",
         ])
         .output()
         .unwrap();
@@ -374,7 +375,7 @@ fn user_switch_sets_supplementary_groups() {
             "--",
             "sh",
             "-c",
-            "id -G; sleep 5",
+            "id -G; exec tail -f /dev/null",
         ])
         .output()
         .unwrap();
@@ -432,7 +433,7 @@ fn user_switch_nonexistent_user_fails() {
     }
 
     let output = daemonize_cmd()
-        .args(["-u", "nonexistent_user_xyz_12345", "--", "sleep", "1"])
+        .args(["-u", "nonexistent_user_xyz_12345", "--", "true"])
         .output()
         .unwrap();
 
@@ -468,8 +469,9 @@ fn group_only_switch_sets_gid() {
             "-p",
             pidfile.to_str().unwrap(),
             "--",
-            "sleep",
-            "30",
+            "tail",
+            "-f",
+            "/dev/null",
         ])
         .output()
         .unwrap();
@@ -517,8 +519,9 @@ fn user_and_group_switch_sets_independent_gid() {
             "-p",
             pidfile.to_str().unwrap(),
             "--",
-            "sleep",
-            "30",
+            "tail",
+            "-f",
+            "/dev/null",
         ])
         .output()
         .unwrap();
@@ -619,7 +622,7 @@ fn user_and_group_switch_seeds_supplementary_from_user() {
             "--",
             "sh",
             "-c",
-            "id -G; sleep 5",
+            "id -G; exec tail -f /dev/null",
         ])
         .output()
         .unwrap();
@@ -654,7 +657,7 @@ fn nonexistent_group_fails_with_exit_67() {
     }
 
     let output = daemonize_cmd()
-        .args(["-g", "nonexistent_group_xyz_12345", "--", "sleep", "1"])
+        .args(["-g", "nonexistent_group_xyz_12345", "--", "true"])
         .output()
         .unwrap();
 
@@ -694,8 +697,9 @@ fn numeric_uid_switch() {
             "-p",
             pidfile.to_str().unwrap(),
             "--",
-            "sleep",
-            "30",
+            "tail",
+            "-f",
+            "/dev/null",
         ])
         .output()
         .unwrap();

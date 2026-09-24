@@ -128,6 +128,12 @@ pub fn wait_for_pidfile(path: &Path) -> Option<u32> {
     })
 }
 
+/// Wait for a child to exit, polling, so one that never does fails its test at
+/// the poll bound instead of hanging the run.
+pub fn wait_for_child(child: &mut std::process::Child) -> Option<std::process::ExitStatus> {
+    poll_until(|| child.try_wait().ok().flatten())
+}
+
 /// How long [`kill_process`] lets a process handle `SIGTERM` before `SIGKILL`.
 ///
 /// It bounds only the unusual case — a target that ignores `SIGTERM`, or an
