@@ -159,7 +159,14 @@ ci-rtk:
 # Run the full CI suite including Docker tests
 ci-full: check test docker-test
 
+# Checks that .releaserc.json's plugins still pick the right release type and
+# render commits into the notes. A preset/plugin major mismatch otherwise
+# publishes with an empty changelog and GitHub release body.
+check-release-config:
+    node scripts/check-release-config.mjs
+
 # Run semantic-release (used by release workflow)
 release:
     npm ci
+    just check-release-config
     npx semantic-release

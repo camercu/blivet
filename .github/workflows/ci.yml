@@ -101,6 +101,18 @@ jobs:
       - name: Check public API matches committed snapshot
         run: nix-shell --run 'just public-api-toolchain public-api-check'
 
+  release-config:
+    # The Release workflow only runs after CI passes, so a dependency bump
+    # that breaks note rendering fails here, on its own PR, not at release.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - run: npm ci
+      - run: node scripts/check-release-config.mjs
+
   commitlint:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
