@@ -694,26 +694,30 @@ responsibility (via `drop_privileges()`), files are created as the
 current user (typically root); `drop_privileges()` chowns them to the
 target user before switching.
 
-Each stream is handled in turn, stdout first, and stdout is on fd 1
-before stderr is opened — so a stderr of `/dev/stdout` names the stdout
-file, not the stream it replaced. For each:
+Step 12 is all or nothing: nothing is truncated until both streams have
+been opened and compared, and a stderr that fails puts fd 1 back as it
+was, so a failed start leaves the previous run's logs and the caller's
+stdout untouched.
 
-1. Open with `O_WRONLY | O_CREAT`, plus `O_APPEND` per the append flag,
-   but without `O_TRUNC`: nothing on disk changes until the file has
-   been compared. Mode 0644 (subject to umask from step 4). Open failure
-   returns `OutputFileError` (via the notification pipe).
-2. Compare the open file by device and inode (R146). A stream that is
-   the pidfile or the lockfile, under any name, is refused with
-   `ValidationError` before it is truncated. Validation compares paths
-   before the files exist, and no comparison of spellings sees every
-   way two names reach one file — a symlink whose target does not exist
-   yet, a case-insensitive filesystem, a hard link. This is where the
-   files themselves are compared. A stderr that is the stdout file
-   takes fd 1's descriptor, so the two share one file description and
-   write offset rather than overwriting each other.
-3. Unless appending, truncate a regular file — a FIFO or a device such
-   as `/dev/null` has nothing to truncate — and `dup2` the descriptor to
-   its target fd. `dup2` failure returns `OutputFileError`.
+1. Open stdout with `O_WRONLY | O_CREAT`, plus `O_APPEND` per the
+   append flag, but without `O_TRUNC`. Mode 0644 (subject to umask from
+   step 4). Open failure returns `OutputFileError` (via the
+   notification pipe). Compare it by device and inode (R146): a stream
+   that is the pidfile or the lockfile, under any name, is refused with
+   `ValidationError`. Validation compares paths before the files exist,
+   and no comparison of spellings sees every way two names reach one
+   file — a symlink whose target does not exist yet, a case-insensitive
+   filesystem, a hard link. This is where the files themselves are
+   compared. Then `dup2` it to fd 1.
+2. Open and compare stderr the same way. Because stdout is already on
+   fd 1, a stderr of `/dev/stdout` names the stdout file. A stderr that
+   is the stdout file takes fd 1's descriptor, so the two share one
+   file description and write offset rather than overwriting each
+   other.
+3. Unless appending, truncate each distinct regular file once — a FIFO
+   or a device such as `/dev/null` has nothing to truncate — and `dup2`
+   stderr's descriptor to fd 2. `dup2` failure returns
+   `OutputFileError`.
 
 The append flag applies uniformly to both stdout and stderr.
 
