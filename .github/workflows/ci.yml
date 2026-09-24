@@ -84,7 +84,22 @@ jobs:
       - uses: taiki-e/install-action@nextest
       - uses: taiki-e/install-action@cargo-mutants
       - name: Mutation-test the change
-        run: just mutants ${{ github.event.pull_request.base.sha || github.event.before }}
+        env:
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+        # A branch's first push reports an all-zero `before`, and a force-push
+        # one that is no longer in the fetched history; test the last commit
+        # alone then.
+        run: |
+          if [ -n "$PR_BASE" ]; then
+            base="$PR_BASE"
+          elif [ "$PUSH_BEFORE" = "0000000000000000000000000000000000000000" ] \
+              || ! git cat-file -e "${PUSH_BEFORE}^{commit}" 2>/dev/null; then
+            base=HEAD~1
+          else
+            base="$PUSH_BEFORE"
+          fi
+          just mutants-diff "$base"
       - uses: actions/upload-artifact@v7
         if: always()
         with:

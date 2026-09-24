@@ -201,24 +201,31 @@ check: fmt-check lint lint-deny doc msrv-check check-cross check-non-unix check-
 # They are compiled fresh by rustdoc every time and touch no process state, so
 # the failure above cannot reach them.
 #
-# --profile gate, not the default: the default profile belongs to cargo-mutants
-# and kills any test at 5s, which killed fourteen CLI integration tests on a
-# loaded machine. See .config/nextest.toml.
+# --profile gate: a hung test is killed, with a margin wide enough that a
+# loaded machine does not kill a healthy one. See .config/nextest.toml.
 test:
     RUSTFLAGS="-D warnings" {{cargo}} nextest run --profile gate {{locked}}
     RUSTFLAGS="-D warnings" {{cargo}} test {{locked}} --doc
 
-# Mutation-test the code changed since `base`: every mutant in a changed line
-# must make some test fail. A survivor is code no test constrains — the
-# vacuous test that review keeps missing, found by what the tests do rather
-# than how they are written. Uncommitted changes count, so this runs before a
-# commit as well as in CI. A whole-crate sweep is plain `cargo mutants`.
-mutants base="origin/main":
+# Mutation-test the whole crate: every mutant must make some test fail. Slow;
+# run it before a release and when a change is wide. A survivor is code no
+# test constrains — found by what the tests do, not how they are written.
+mutants *args:
+    cargo mutants ${CARGO_LOCKED:+--cargo-arg=$CARGO_LOCKED} {{args}}
+
+# Mutation-test only the lines changed since `base`, so the cost follows the
+# size of the change. Work not yet committed counts, new files included, so
+# this runs before a commit as well as in CI.
+mutants-diff base="origin/main":
     #!/usr/bin/env bash
     set -euo pipefail
     diff=$(mktemp)
     trap 'rm -f "$diff"' EXIT
     git diff "$(git merge-base {{base}} HEAD)" > "$diff"
+    # `git diff` leaves out files git does not track yet; add each as new.
+    git ls-files -z --others --exclude-standard | while IFS= read -r -d '' f; do
+        git diff --no-index -- /dev/null "$f" >> "$diff" || true
+    done
     cargo mutants ${CARGO_LOCKED:+--cargo-arg=$CARGO_LOCKED} --in-diff "$diff"
 
 # The build context both container tiers get, as a tar stream on stdout: the
@@ -267,9 +274,8 @@ manpage:
 # Generate code coverage report (requires cargo-llvm-cov + cargo-nextest).
 # Under nextest for the same reason `test` is, stated there, and on the same
 # profile — through NEXTEST_PROFILE rather than --profile, which cargo-llvm-cov
-# reads as a cargo build profile of its own. Left on the default profile this
-# recipe inherited cargo-mutants' 5s kill, and instrumented tests are the
-# slowest thing here.
+# reads as a cargo build profile of its own. Instrumented tests are the
+# slowest thing here, so the wide margin matters most.
 coverage:
     NEXTEST_PROFILE=gate cargo llvm-cov nextest --html {{locked}}
     @echo "Coverage report: target/llvm-cov/html/index.html"
