@@ -142,18 +142,43 @@ pub fn wait_for_child(child: &mut std::process::Child) -> Option<std::process::E
 /// moment it has.
 const TERM_GRACE: Duration = Duration::from_secs(2);
 
-/// Stop a process: `SIGTERM`, then `SIGKILL` if it is still there after
-/// [`TERM_GRACE`].
+/// A daemon that runs until it is stopped, stopped when this is dropped.
 ///
-/// For a program that runs until it is stopped. A PID names a process only
-/// while it lives: once a short program has exited its PID can be handed to an
-/// unrelated one, which this would then signal. A test whose program exits by
-/// itself leaves it to exit and does not call this.
+/// Dropping happens on a failed assertion too, so a failing test does not
+/// leave its daemon running after the run. Only for a program that runs until
+/// it is stopped: a PID names a process only while it lives, and once a short
+/// program has exited its PID can be handed to an unrelated one, which the drop
+/// would then signal. A test whose program exits by itself waits with
+/// [`wait_for_pidfile`] instead.
+pub struct Daemon {
+    pid: u32,
+}
+
+impl Daemon {
+    pub fn pid(&self) -> u32 {
+        self.pid
+    }
+}
+
+impl Drop for Daemon {
+    fn drop(&mut self) {
+        kill_process(self.pid);
+    }
+}
+
+/// Wait for a long-running daemon's pidfile, and hold the daemon it names.
+pub fn wait_for_daemon(pidfile: &Path) -> Option<Daemon> {
+    wait_for_pidfile(pidfile).map(|pid| Daemon { pid })
+}
+
+/// Stop a process: `SIGTERM`, then `SIGKILL` if it is still there after
+/// [`TERM_GRACE`]. Reached only through [`Daemon`], which says when that is
+/// safe.
 ///
 /// This waits by polling, like every other wait in this module. A fixed sleep
 /// here cost each of its call sites the whole sleep whether or not the process
 /// had already gone.
-pub fn kill_process(pid: u32) {
+fn kill_process(pid: u32) {
     unsafe { libc::kill(pid as i32, libc::SIGTERM) };
     let gone = poll_for(TERM_GRACE, || {
         let gone = unsafe { libc::kill(pid as i32, 0) } != 0;

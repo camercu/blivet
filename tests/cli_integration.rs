@@ -35,7 +35,8 @@ fn happy_path_daemon_is_orphaned_and_in_new_session() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let pid = wait_for_pidfile(&pidfile).expect("pidfile should appear");
+    let daemon = wait_for_daemon(&pidfile).expect("pidfile should appear");
+    let pid = daemon.pid();
 
     let info = query_process(pid).expect("daemon process should exist");
 
@@ -58,8 +59,6 @@ fn happy_path_daemon_is_orphaned_and_in_new_session() {
     // R17: pidfile contains PID
     let pidfile_content = std::fs::read_to_string(&pidfile).unwrap();
     assert_eq!(pidfile_content.trim(), pid.to_string());
-
-    kill_process(pid);
 }
 
 // Covers: R23
@@ -86,14 +85,13 @@ fn default_cwd_is_root() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let pid = wait_for_pidfile(&pidfile).expect("pidfile should appear");
+    let daemon = wait_for_daemon(&pidfile).expect("pidfile should appear");
+    let pid = daemon.pid();
     let info = query_process(pid).expect("daemon process should exist");
 
     if !info.cwd.is_empty() {
         assert_eq!(info.cwd, "/", "default CWD should be /");
     }
-
-    kill_process(pid);
 }
 
 // Covers: R9
@@ -231,7 +229,7 @@ fn lockfile_exclusion_second_instance_fails() {
         .unwrap();
     assert!(output1.status.success());
 
-    let pid = wait_for_pidfile(&pidfile).expect("pidfile should appear");
+    let _daemon = wait_for_daemon(&pidfile).expect("pidfile should appear");
 
     // Second instance with same lockfile should fail
     let output2 = daemonize_cmd()
@@ -253,8 +251,6 @@ fn lockfile_exclusion_second_instance_fails() {
         "second instance should exit 69, stderr: {}",
         String::from_utf8_lossy(&output2.stderr)
     );
-
-    kill_process(pid);
 }
 
 // Covers: R30, R38, R85, R113
@@ -402,8 +398,7 @@ fn verbose_mode_prints_diagnostics() {
         "verbose mode should print diagnostics, got: {stderr}"
     );
 
-    let pid = wait_for_pidfile(&pidfile).expect("pidfile should appear");
-    kill_process(pid);
+    let _daemon = wait_for_daemon(&pidfile).expect("pidfile should appear");
 }
 
 // Covers: R53
@@ -435,8 +430,7 @@ fn no_verbose_no_diagnostics() {
         "without -v should have no stderr, got: {stderr}"
     );
 
-    let pid = wait_for_pidfile(&pidfile).expect("pidfile should appear");
-    kill_process(pid);
+    let _daemon = wait_for_daemon(&pidfile).expect("pidfile should appear");
 }
 
 // Covers: R24, R25
@@ -1147,8 +1141,7 @@ fn bare_program_name_uses_path_search() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let pid = wait_for_pidfile(&pidfile).expect("pidfile should appear");
-    kill_process(pid);
+    let _daemon = wait_for_daemon(&pidfile).expect("pidfile should appear");
 }
 
 // --- Shared lockfile and pidfile path ---
@@ -1179,15 +1172,14 @@ fn shared_lockfile_pidfile_path() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let pid = wait_for_pidfile(&shared).expect("pidfile should appear");
+    let daemon = wait_for_daemon(&shared).expect("pidfile should appear");
+    let pid = daemon.pid();
     let content = std::fs::read_to_string(&shared).unwrap();
     assert_eq!(
         content.trim(),
         pid.to_string(),
         "pidfile should contain PID"
     );
-
-    kill_process(pid);
 }
 
 // --- Pidfile implies lockfile ---
@@ -1216,7 +1208,7 @@ fn pidfile_without_lockfile_enforces_single_instance() {
         String::from_utf8_lossy(&output1.stderr)
     );
 
-    let pid = wait_for_pidfile(&pidfile).expect("pidfile should appear");
+    let _daemon = wait_for_daemon(&pidfile).expect("pidfile should appear");
 
     // Second instance with same pidfile should fail (lockfile defaulted to pidfile)
     let output2 = daemonize_cmd()
@@ -1236,8 +1228,6 @@ fn pidfile_without_lockfile_enforces_single_instance() {
         "second instance should exit 69 (lock conflict), stderr: {}",
         String::from_utf8_lossy(&output2.stderr)
     );
-
-    kill_process(pid);
 }
 
 // Covers: R132
@@ -1263,7 +1253,7 @@ fn no_lock_flag_disables_single_instance() {
         "first instance should succeed: {}",
         String::from_utf8_lossy(&output1.stderr)
     );
-    let pid1 = wait_for_pidfile(&pidfile).expect("pidfile should appear");
+    let daemon1 = wait_for_daemon(&pidfile).expect("pidfile should appear");
 
     // With --no-lock the pidfile is not flock'd, so a second instance starts.
     let output2 = daemonize_cmd()
@@ -1283,11 +1273,12 @@ fn no_lock_flag_disables_single_instance() {
         "second --no-lock instance should succeed: {}",
         String::from_utf8_lossy(&output2.stderr)
     );
-    let pid2 = wait_for_pidfile(&pidfile).expect("pidfile should appear");
-
-    kill_process(pid1);
-    if pid2 != pid1 {
-        kill_process(pid2);
+    let daemon2 = wait_for_daemon(&pidfile).expect("pidfile should appear");
+    let (pid1, pid2) = (daemon1.pid(), daemon2.pid());
+    if pid2 == pid1 {
+        // Both name one process; stopping it twice could signal whatever
+        // reuses its PID.
+        std::mem::forget(daemon2);
     }
     assert_ne!(
         pid1, pid2,
@@ -1476,22 +1467,15 @@ fn foreground_lock_conflict_reports_error() {
         "first instance should succeed: {}",
         String::from_utf8_lossy(&output1.stderr)
     );
-    let pid = wait_for_pidfile(&pidfile).expect("pidfile should appear");
+    let _daemon = wait_for_daemon(&pidfile).expect("pidfile should appear");
 
     // A foreground second instance must report the conflict, not die silently.
+    // It runs `true`, so if it wrongly starts it exits and the assertion below
+    // says so, rather than the run hanging on a program that never ends.
     let output2 = daemonize_cmd()
-        .args([
-            "-f",
-            "-p",
-            pidfile.to_str().unwrap(),
-            "--",
-            "tail",
-            "-f",
-            "/dev/null",
-        ])
+        .args(["-f", "-p", pidfile.to_str().unwrap(), "--", "true"])
         .output()
         .unwrap();
-    kill_process(pid);
 
     assert_eq!(
         output2.status.code(),
