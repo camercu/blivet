@@ -23,6 +23,17 @@ fn uid_of(user: &str) -> u32 {
     String::from_utf8_lossy(&out.stdout).trim().parse().unwrap()
 }
 
+/// The primary GID the container's passwd database gives `user`, failing
+/// loudly like [`uid_of`].
+fn primary_gid_of(user: &str) -> u32 {
+    let out = Command::new("id").args(["-g", user]).output().unwrap();
+    assert!(
+        out.status.success(),
+        "id -g {user} failed: the image is missing the test user"
+    );
+    String::from_utf8_lossy(&out.stdout).trim().parse().unwrap()
+}
+
 /// The GID the container's group database gives `group`, failing loudly like
 /// [`uid_of`].
 fn gid_of_group(group: &str) -> u32 {
@@ -96,23 +107,9 @@ fn user_switch_sets_uid_and_gid() {
     let info = query_process(pid).expect("daemon process should exist");
 
     // Resolve expected UID/GID for testuser
-    let expected = Command::new("id")
-        .args(["-u", "testuser"])
-        .output()
-        .unwrap();
-    let expected_uid: u32 = String::from_utf8_lossy(&expected.stdout)
-        .trim()
-        .parse()
-        .unwrap();
+    let expected_uid = uid_of("testuser");
 
-    let expected = Command::new("id")
-        .args(["-g", "testuser"])
-        .output()
-        .unwrap();
-    let expected_gid: u32 = String::from_utf8_lossy(&expected.stdout)
-        .trim()
-        .parse()
-        .unwrap();
+    let expected_gid = primary_gid_of("testuser");
 
     assert_eq!(info.uid, expected_uid, "daemon UID should match testuser");
     assert_eq!(info.gid, expected_gid, "daemon GID should match testuser");
@@ -247,14 +244,7 @@ fn output_file_owned_by_target_user() {
     wait_for_file_content(&stderr_file, "err");
 
     // Resolve testuser's UID
-    let expected = Command::new("id")
-        .args(["-u", "testuser"])
-        .output()
-        .unwrap();
-    let expected_uid: u32 = String::from_utf8_lossy(&expected.stdout)
-        .trim()
-        .parse()
-        .unwrap();
+    let expected_uid = uid_of("testuser");
 
     // Check file ownership
     use std::os::unix::fs::MetadataExt;
@@ -578,28 +568,11 @@ fn user_and_group_switch_seeds_supplementary_from_user() {
 
     // testuser's primary GID must survive as a supplementary group even though
     // the effective GID is overridden to testgroup.
-    let primary_gid = String::from_utf8_lossy(
-        &Command::new("id")
-            .args(["-g", "testuser"])
-            .output()
-            .unwrap()
-            .stdout,
-    )
-    .trim()
-    .to_string();
+    let primary_gid = primary_gid_of("testuser").to_string();
 
     // testgroup's GID becomes the effective GID; poll on it since it is always
     // present in `id -G` once the daemon has switched.
-    let testgroup_line = Command::new("getent")
-        .args(["group", "testgroup"])
-        .output()
-        .unwrap();
-    let testgroup_gid = String::from_utf8_lossy(&testgroup_line.stdout)
-        .trim()
-        .split(':')
-        .nth(2)
-        .unwrap()
-        .to_string();
+    let testgroup_gid = gid_of_group("testgroup").to_string();
 
     // Guard: the test is only discriminating if the two GIDs differ. If the
     // container ever gives testuser a primary group equal to testgroup, this
@@ -681,14 +654,7 @@ fn numeric_uid_switch() {
     let dir = tempfile::tempdir().unwrap();
     let pidfile = dir.path().join("test.pid");
 
-    // Get testuser's UID
-    let testuser_uid_output = Command::new("id")
-        .args(["-u", "testuser"])
-        .output()
-        .unwrap();
-    let testuser_uid = String::from_utf8_lossy(&testuser_uid_output.stdout)
-        .trim()
-        .to_string();
+    let testuser_uid = uid_of("testuser").to_string();
 
     let output = daemonize_cmd()
         .args([
