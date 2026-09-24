@@ -100,7 +100,8 @@ fn user_switch_sets_uid_and_gid() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let pid = wait_for_pidfile(&pidfile).expect("pidfile should appear");
+    let daemon = wait_for_daemon(&pidfile).expect("pidfile should appear");
+    let pid = daemon.pid();
 
     // The daemon has already dropped privileges and exec'd by the time the
     // parent exits (above), so its UID/GID are queryable immediately.
@@ -122,8 +123,6 @@ fn user_switch_sets_uid_and_gid() {
         id_output, expected_report,
         "id -u and id -g inside the daemon should report testuser"
     );
-
-    kill_process(pid);
 }
 
 // Covers: R28, R29
@@ -167,7 +166,7 @@ fn user_switch_sets_env_vars() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let pid = wait_for_pidfile(&pidfile).expect("pidfile should appear");
+    let _daemon = wait_for_daemon(&pidfile).expect("pidfile should appear");
     // Poll for the daemon's output instead of a fixed sleep.
     let content = wait_for_file_content(&env_file, "USER=testuser");
 
@@ -185,8 +184,6 @@ fn user_switch_sets_env_vars() {
         content.contains("HOME=/home/testuser"),
         "HOME should be /home/testuser, got: {content}"
     );
-
-    kill_process(pid);
 }
 
 // ============================================================
@@ -237,7 +234,7 @@ fn output_file_owned_by_target_user() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let pid = wait_for_pidfile(&pidfile).expect("pidfile should appear");
+    let _daemon = wait_for_daemon(&pidfile).expect("pidfile should appear");
     // Poll for the daemon's output instead of a fixed sleep; this also confirms
     // both redirect files are present before the ownership checks.
     wait_for_file_content(&stdout_file, "hello");
@@ -261,8 +258,6 @@ fn output_file_owned_by_target_user() {
         expected_uid,
         "stderr file should be owned by testuser"
     );
-
-    kill_process(pid);
 }
 
 // ============================================================
@@ -315,7 +310,8 @@ fn daemon_cwd_via_proc() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let pid = wait_for_pidfile(&pidfile).expect("pidfile should appear");
+    let daemon = wait_for_daemon(&pidfile).expect("pidfile should appear");
+    let pid = daemon.pid();
 
     // Verify CWD via /proc
     let proc_cwd = std::fs::read_link(format!("/proc/{pid}/cwd"));
@@ -327,8 +323,6 @@ fn daemon_cwd_via_proc() {
         expected,
         "daemon CWD via /proc should match configured chdir"
     );
-
-    kill_process(pid);
 }
 
 // ============================================================
@@ -376,7 +370,7 @@ fn user_switch_sets_supplementary_groups() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let pid = wait_for_pidfile(&pidfile).expect("pidfile should appear");
+    let _daemon = wait_for_daemon(&pidfile).expect("pidfile should appear");
 
     // Expected groups for testuser. Computed first so we can poll the daemon's
     // output for them instead of sleeping a fixed interval.
@@ -404,8 +398,6 @@ fn user_switch_sets_supplementary_groups() {
         daemon_groups, exp_groups,
         "daemon supplementary groups should match testuser's groups"
     );
-
-    kill_process(pid);
 }
 
 // ============================================================
@@ -472,7 +464,8 @@ fn group_only_switch_sets_gid() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let pid = wait_for_pidfile(&pidfile).expect("pidfile should appear");
+    let daemon = wait_for_daemon(&pidfile).expect("pidfile should appear");
+    let pid = daemon.pid();
 
     let info = query_process(pid).expect("daemon process should exist");
 
@@ -483,8 +476,6 @@ fn group_only_switch_sets_gid() {
         gid_of_group("testgroup"),
         "GID should be testgroup's"
     );
-
-    kill_process(pid);
 }
 
 // Covers: R60, R70
@@ -522,7 +513,8 @@ fn user_and_group_switch_sets_independent_gid() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let pid = wait_for_pidfile(&pidfile).expect("pidfile should appear");
+    let daemon = wait_for_daemon(&pidfile).expect("pidfile should appear");
+    let pid = daemon.pid();
 
     let info = query_process(pid).expect("daemon process should exist");
 
@@ -534,8 +526,6 @@ fn user_and_group_switch_sets_independent_gid() {
         gid_of_group("testgroup"),
         "GID should be testgroup's GID, not testuser's primary group"
     );
-
-    kill_process(pid);
 }
 
 // Covers: R60, R101
@@ -606,7 +596,7 @@ fn user_and_group_switch_seeds_supplementary_from_user() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let pid = wait_for_pidfile(&pidfile).expect("pidfile should appear");
+    let _daemon = wait_for_daemon(&pidfile).expect("pidfile should appear");
     let content = wait_for_file_content(&groups_file, &testgroup_gid);
     let groups: Vec<&str> = content.split_whitespace().collect();
 
@@ -616,8 +606,6 @@ fn user_and_group_switch_seeds_supplementary_from_user() {
          {primary_gid} (initgroups must seed from the user's primary GID, not \
          the explicit -g group {testgroup_gid}); got: {content}"
     );
-
-    kill_process(pid);
 }
 
 // Covers: R51
@@ -676,7 +664,8 @@ fn numeric_uid_switch() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let pid = wait_for_pidfile(&pidfile).expect("pidfile should appear");
+    let daemon = wait_for_daemon(&pidfile).expect("pidfile should appear");
+    let pid = daemon.pid();
 
     let info = query_process(pid).expect("daemon process should exist");
     assert_eq!(
@@ -684,6 +673,4 @@ fn numeric_uid_switch() {
         testuser_uid.parse::<u32>().unwrap(),
         "UID should match numeric UID"
     );
-
-    kill_process(pid);
 }
