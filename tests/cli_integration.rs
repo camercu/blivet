@@ -3,7 +3,6 @@ mod helpers;
 use helpers::*;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::process::Command;
-use std::time::Duration;
 
 fn daemonize_cmd() -> Command {
     Command::new(daemonize_bin())
@@ -23,8 +22,9 @@ fn happy_path_daemon_is_orphaned_and_in_new_session() {
             "-c",
             chdir,
             "--",
-            "sleep",
-            "30",
+            "tail",
+            "-f",
+            "/dev/null",
         ])
         .output()
         .unwrap();
@@ -69,7 +69,14 @@ fn default_cwd_is_root() {
     let pidfile = dir.path().join("test.pid");
 
     let output = daemonize_cmd()
-        .args(["-p", pidfile.to_str().unwrap(), "--", "sleep", "30"])
+        .args([
+            "-p",
+            pidfile.to_str().unwrap(),
+            "--",
+            "tail",
+            "-f",
+            "/dev/null",
+        ])
         .output()
         .unwrap();
 
@@ -105,7 +112,7 @@ fn stdout_redirect_writes_output() {
             "--",
             "sh",
             "-c",
-            "echo hello_stdout; sleep 1",
+            "echo hello_stdout",
         ])
         .output()
         .unwrap();
@@ -141,7 +148,7 @@ fn stderr_redirect_writes_output() {
             "--",
             "sh",
             "-c",
-            "echo hello_stderr >&2; sleep 1",
+            "echo hello_stderr >&2",
         ])
         .output()
         .unwrap();
@@ -181,7 +188,7 @@ fn append_mode_preserves_existing_content() {
             "--",
             "sh",
             "-c",
-            "echo appended; sleep 1",
+            "echo appended",
         ])
         .output()
         .unwrap();
@@ -216,8 +223,9 @@ fn lockfile_exclusion_second_instance_fails() {
             "-l",
             lockfile.to_str().unwrap(),
             "--",
-            "sleep",
-            "30",
+            "tail",
+            "-f",
+            "/dev/null",
         ])
         .output()
         .unwrap();
@@ -227,7 +235,14 @@ fn lockfile_exclusion_second_instance_fails() {
 
     // Second instance with same lockfile should fail
     let output2 = daemonize_cmd()
-        .args(["-l", lockfile.to_str().unwrap(), "--", "sleep", "30"])
+        .args([
+            "-l",
+            lockfile.to_str().unwrap(),
+            "--",
+            "tail",
+            "-f",
+            "/dev/null",
+        ])
         .output()
         .unwrap();
 
@@ -246,7 +261,7 @@ fn lockfile_exclusion_second_instance_fails() {
 #[test]
 fn validation_error_nonabsolute_pidfile() {
     let output = daemonize_cmd()
-        .args(["-p", "relative.pid", "--", "sleep", "1"])
+        .args(["-p", "relative.pid", "--", "true"])
         .output()
         .unwrap();
 
@@ -273,8 +288,9 @@ fn output_path_that_is_a_directory_is_rejected_before_anything_happens() {
             "-o",
             outdir.to_str().unwrap(),
             "--",
-            "sleep",
-            "30",
+            "tail",
+            "-f",
+            "/dev/null",
         ])
         .output()
         .unwrap();
@@ -363,7 +379,15 @@ fn verbose_mode_prints_diagnostics() {
     let pidfile = dir.path().join("test.pid");
 
     let output = daemonize_cmd()
-        .args(["-v", "-p", pidfile.to_str().unwrap(), "--", "sleep", "5"])
+        .args([
+            "-v",
+            "-p",
+            pidfile.to_str().unwrap(),
+            "--",
+            "tail",
+            "-f",
+            "/dev/null",
+        ])
         .output()
         .unwrap();
 
@@ -389,7 +413,14 @@ fn no_verbose_no_diagnostics() {
     let pidfile = dir.path().join("test.pid");
 
     let output = daemonize_cmd()
-        .args(["-p", pidfile.to_str().unwrap(), "--", "sleep", "5"])
+        .args([
+            "-p",
+            pidfile.to_str().unwrap(),
+            "--",
+            "tail",
+            "-f",
+            "/dev/null",
+        ])
         .output()
         .unwrap();
 
@@ -426,7 +457,7 @@ fn env_vars_passed_to_daemon() {
             "--",
             "sh",
             "-c",
-            "echo $MY_TEST_VAR; sleep 1",
+            "echo $MY_TEST_VAR",
         ])
         .output()
         .unwrap();
@@ -463,7 +494,7 @@ fn same_path_stdout_stderr() {
             "--",
             "sh",
             "-c",
-            "echo stdout_line; echo stderr_line >&2; sleep 1",
+            "echo stdout_line; echo stderr_line >&2",
         ])
         .output()
         .unwrap();
@@ -497,7 +528,7 @@ fn stdout_only_mirrors_to_stderr() {
             "--",
             "sh",
             "-c",
-            "echo stdout_line; echo stderr_line >&2; sleep 1",
+            "echo stdout_line; echo stderr_line >&2",
         ])
         .output()
         .unwrap();
@@ -533,7 +564,7 @@ fn stdout_extension_swaps_to_stderr() {
             "--",
             "sh",
             "-c",
-            "echo out_line; echo err_line >&2; sleep 1",
+            "echo out_line; echo err_line >&2",
         ])
         .output()
         .unwrap();
@@ -582,7 +613,7 @@ fn stdout_out_extension_swaps_to_err() {
             "--",
             "sh",
             "-c",
-            "echo out_line; echo err_line >&2; sleep 1",
+            "echo out_line; echo err_line >&2",
         ])
         .output()
         .unwrap();
@@ -626,7 +657,12 @@ fn relative_path_with_slash_canonicalized() {
 
     // Create a script in the tempdir
     let script = dir.path().join("test_script.sh");
-    std::fs::write(&script, "#!/bin/sh\necho resolved_ok\nsleep 1\n").unwrap();
+    std::fs::write(
+        &script,
+        "#!/bin/sh\necho resolved_ok
+",
+    )
+    .unwrap();
     std::fs::set_permissions(&script, PermissionsExt::from_mode(0o755)).unwrap();
 
     // Use a relative path with / (e.g. ./test_script.sh from the tempdir)
@@ -679,7 +715,7 @@ fn truncate_mode_overwrites_existing() {
             "--",
             "sh",
             "-c",
-            "echo new_content; sleep 1",
+            "echo new_content",
         ])
         .output()
         .unwrap();
@@ -704,51 +740,44 @@ fn truncate_mode_overwrites_existing() {
 // Covers: R39, R42
 #[test]
 fn parent_waits_for_exec_before_exiting() {
-    // The daemon is held short of exec by pointing its stdout at a FIFO:
-    // opening a FIFO for writing blocks until something opens it for reading.
-    // While the daemon is held the parent must still be waiting.
-    //
-    // The bounded wait is an absence check, not synchronisation: a correct
-    // parent cannot exit while the daemon is held, however slow the machine,
-    // so it can only fail on a parent that stopped waiting.
+    // The daemon is held short of exec by pointing its stdout at a FIFO: step
+    // 12 opens it for writing, which blocks until something opens it for
+    // reading. The pidfile, written at step 8, says when the daemon has got
+    // that far. So once the pidfile exists, and before anything reads the
+    // FIFO, the daemon has not exec'd, and a parent that waits for the exec
+    // must still be running. Nothing here depends on timing: correct code
+    // cannot fail it on any machine.
     let dir = tempfile::tempdir().unwrap();
     let fifo = dir.path().join("stdout.fifo");
+    let pidfile = dir.path().join("daemon.pid");
     nix::unistd::mkfifo(&fifo, nix::sys::stat::Mode::S_IRWXU).unwrap();
 
     let mut parent = daemonize_cmd()
+        .args(["-p", pidfile.to_str().unwrap()])
         .args(["-o", fifo.to_str().unwrap(), "--", "true"])
         .stdout(std::process::Stdio::null())
         .spawn()
         .unwrap();
-    let (exited, exit) = std::sync::mpsc::channel();
-    std::thread::spawn(move || exited.send(parent.wait()));
-    let early = exit.recv_timeout(Duration::from_millis(300));
+    wait_for_pidfile(&pidfile).expect("the daemon should reach step 8");
+    let while_held = parent.try_wait().unwrap();
 
-    // Release the daemon: with a reader present, its open of the FIFO
-    // returns, it execs `true`, and the exec closes the notification pipe the
-    // parent waits on. Opened non-blocking, so this returns whether or not the
-    // daemon ever reaches its open, and held until the parent has gone, so a
-    // failing run does not strand the daemon on the FIFO either.
+    // Release the daemon: with a reader present its open returns, it execs
+    // `true`, and the exec closes the notification pipe the parent waits on.
+    // Non-blocking, and held until the parent has gone, so a failing run
+    // neither hangs here nor strands the daemon on the FIFO.
     let reader = std::fs::OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_NONBLOCK)
         .open(&fifo)
         .unwrap();
-    let exited = match &early {
-        Ok(status) => Ok(status.as_ref().map(|s| *s).map_err(|e| e.kind())),
-        Err(_) => exit
-            .recv_timeout(Duration::from_secs(30))
-            .map(|status| status.map_err(|e| e.kind())),
-    };
+    let status = wait_for_child(&mut parent);
     drop(reader);
 
     assert!(
-        early.is_err(),
-        "the parent exited while the daemon was still held before exec: {early:?}"
+        while_held.is_none(),
+        "the parent exited while the daemon was still held before exec: {while_held:?}"
     );
-    let status = exited
-        .expect("the parent did not exit within 30s of the daemon's release")
-        .unwrap();
+    let status = status.expect("the parent did not exit once the daemon was released");
     assert!(
         status.success(),
         "the parent should exit 0 once exec succeeds: {status}"
@@ -856,7 +885,7 @@ fn exec_target_gets_default_sigpipe() {
 #[test]
 fn chdir_nonexistent_exits_64() {
     let output = daemonize_cmd()
-        .args(["-c", "/nonexistent_daemonize_dir_12345", "--", "sleep", "1"])
+        .args(["-c", "/nonexistent_daemonize_dir_12345", "--", "true"])
         .output()
         .unwrap();
 
@@ -907,13 +936,7 @@ fn assert_switch_status(args: &[&str]) {
 #[test]
 fn lockfile_nonwritable_parent_exits_64() {
     let output = daemonize_cmd()
-        .args([
-            "-l",
-            "/nonexistent_parent_dir/test.lock",
-            "--",
-            "sleep",
-            "1",
-        ])
+        .args(["-l", "/nonexistent_parent_dir/test.lock", "--", "true"])
         .output()
         .unwrap();
 
@@ -993,7 +1016,7 @@ fn umask_flag_sets_daemon_umask() {
             "sh",
             "-c",
             // Create a file; its permissions reveal the effective umask
-            &format!("touch {}/probe.txt; stat -f %Lp {}/probe.txt 2>/dev/null || stat -c %a {}/probe.txt; sleep 1",
+            &format!("touch {}/probe.txt; stat -f %Lp {}/probe.txt 2>/dev/null || stat -c %a {}/probe.txt",
                 dir.path().display(), dir.path().display(), dir.path().display()),
         ])
         .output()
@@ -1034,7 +1057,7 @@ fn env_without_equals_sets_empty_value() {
             "--",
             "sh",
             "-c",
-            "echo \"VAL=[$EMPTY_VAR]\"; sleep 1",
+            "echo \"VAL=[$EMPTY_VAR]\"",
         ])
         .output()
         .unwrap();
@@ -1075,7 +1098,7 @@ fn multiple_env_vars() {
             "--",
             "sh",
             "-c",
-            "echo $VAR_A; echo $VAR_B; sleep 1",
+            "echo $VAR_A; echo $VAR_B",
         ])
         .output()
         .unwrap();
@@ -1107,7 +1130,14 @@ fn bare_program_name_uses_path_search() {
     let pidfile = dir.path().join("test.pid");
 
     let output = daemonize_cmd()
-        .args(["-p", pidfile.to_str().unwrap(), "--", "sleep", "5"])
+        .args([
+            "-p",
+            pidfile.to_str().unwrap(),
+            "--",
+            "tail",
+            "-f",
+            "/dev/null",
+        ])
         .output()
         .unwrap();
 
@@ -1136,8 +1166,9 @@ fn shared_lockfile_pidfile_path() {
             "-l",
             shared.to_str().unwrap(),
             "--",
-            "sleep",
-            "30",
+            "tail",
+            "-f",
+            "/dev/null",
         ])
         .output()
         .unwrap();
@@ -1169,7 +1200,14 @@ fn pidfile_without_lockfile_enforces_single_instance() {
 
     // Start first instance with only --pidfile (no --lock)
     let output1 = daemonize_cmd()
-        .args(["-p", pidfile.to_str().unwrap(), "--", "sleep", "30"])
+        .args([
+            "-p",
+            pidfile.to_str().unwrap(),
+            "--",
+            "tail",
+            "-f",
+            "/dev/null",
+        ])
         .output()
         .unwrap();
     assert!(
@@ -1182,7 +1220,14 @@ fn pidfile_without_lockfile_enforces_single_instance() {
 
     // Second instance with same pidfile should fail (lockfile defaulted to pidfile)
     let output2 = daemonize_cmd()
-        .args(["-p", pidfile.to_str().unwrap(), "--", "sleep", "30"])
+        .args([
+            "-p",
+            pidfile.to_str().unwrap(),
+            "--",
+            "tail",
+            "-f",
+            "/dev/null",
+        ])
         .output()
         .unwrap();
     assert_eq!(
@@ -1207,8 +1252,9 @@ fn no_lock_flag_disables_single_instance() {
             pidfile.to_str().unwrap(),
             "--no-lock",
             "--",
-            "sleep",
-            "30",
+            "tail",
+            "-f",
+            "/dev/null",
         ])
         .output()
         .unwrap();
@@ -1226,8 +1272,9 @@ fn no_lock_flag_disables_single_instance() {
             pidfile.to_str().unwrap(),
             "--no-lock",
             "--",
-            "sleep",
-            "30",
+            "tail",
+            "-f",
+            "/dev/null",
         ])
         .output()
         .unwrap();
@@ -1254,14 +1301,7 @@ fn no_lock_conflicts_with_explicit_lockfile() {
     let dir = tempfile::tempdir().unwrap();
     let lockfile = dir.path().join("test.lock");
     let output = daemonize_cmd()
-        .args([
-            "-l",
-            lockfile.to_str().unwrap(),
-            "--no-lock",
-            "--",
-            "sleep",
-            "1",
-        ])
+        .args(["-l", lockfile.to_str().unwrap(), "--no-lock", "--", "true"])
         .output()
         .unwrap();
     assert_eq!(
@@ -1321,7 +1361,7 @@ fn hyphen_arguments_pass_through() {
 #[test]
 fn error_message_on_stderr() {
     let output = daemonize_cmd()
-        .args(["-p", "relative.pid", "--", "sleep", "1"])
+        .args(["-p", "relative.pid", "--", "true"])
         .output()
         .unwrap();
 
@@ -1421,7 +1461,14 @@ fn foreground_lock_conflict_reports_error() {
     let pidfile = dir.path().join("test.pid");
 
     let output1 = daemonize_cmd()
-        .args(["-p", pidfile.to_str().unwrap(), "--", "sleep", "30"])
+        .args([
+            "-p",
+            pidfile.to_str().unwrap(),
+            "--",
+            "tail",
+            "-f",
+            "/dev/null",
+        ])
         .output()
         .unwrap();
     assert!(
@@ -1433,7 +1480,15 @@ fn foreground_lock_conflict_reports_error() {
 
     // A foreground second instance must report the conflict, not die silently.
     let output2 = daemonize_cmd()
-        .args(["-f", "-p", pidfile.to_str().unwrap(), "--", "sleep", "30"])
+        .args([
+            "-f",
+            "-p",
+            pidfile.to_str().unwrap(),
+            "--",
+            "tail",
+            "-f",
+            "/dev/null",
+        ])
         .output()
         .unwrap();
     kill_process(pid);
