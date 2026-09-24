@@ -403,50 +403,85 @@ fn truncate(stream: &OpenStream) -> Result<(), DaemonizeError> {
 /// [`drop_privileges`](crate::DaemonContext::drop_privileges) chowns them to
 /// the target user afterward.
 ///
-/// Both files are opened first and compared by identity with each other and
-/// with `owned` — the files the sequence holds, by the name to report them
-/// under. Only then is anything truncated, so a stream that is the pidfile
-/// under another name is refused before a byte of it changes (R146).
+/// All or nothing (R146). Each stream is opened without truncating it and
+/// compared by identity with `owned` — the files the sequence holds, by the
+/// name to report them under — and stdout is on fd 1 before stderr is opened,
+/// so a stderr of `/dev/stdout` names the stdout file and shares its
+/// descriptor. Only once both have passed is anything truncated. If stderr
+/// fails, fd 1 is put back as it was, so a failed start leaves the previous
+/// run's logs and the caller's stdout untouched.
 pub(crate) fn redirect_output(
     stdout: Option<&Path>,
     stderr: Option<&Path>,
     append: bool,
     owned: &[(&'static str, FileId)],
 ) -> Result<(), DaemonizeError> {
-    // stdout goes first, all the way onto fd 1, before stderr is opened: a
-    // stderr of `/dev/stdout` names whatever fd 1 is at that moment, and must
-    // find the stdout file there rather than the stream it replaced.
-    let stdout_id = match stdout {
+    let out = match stdout {
         Some(path) => {
             let out = open_stream(path, append)?;
             plan_output_redirect(Some(out.id), None, owned).map_err(|c| refusal(&c, &out))?;
-            if !append {
-                truncate(&out)?;
-            }
-            dup2_stdio(&out.fd, 1)
-                .map_err(|e| DaemonizeError::OutputFileError(format!("dup2 fd 1: {e}")))?;
-            Some(out.id)
+            Some(out)
         }
         None => None,
     };
 
-    if let Some(path) = stderr {
-        let err = open_stream(path, append)?;
-        let plan =
-            plan_output_redirect(stdout_id, Some(err.id), owned).map_err(|c| refusal(&c, &err))?;
-        if plan.stderr_shares_stdout {
-            // fd 1 already is the stdout file; share its descriptor and offset.
-            dup2_stdio(std::io::stdout(), 2)
-                .map_err(|e| DaemonizeError::OutputFileError(format!("dup2 fd 2: {e}")))?;
-        } else {
-            if !append {
-                truncate(&err)?;
+    // stdout goes onto fd 1 before stderr is opened; the fd 1 it replaces is
+    // kept, to be put back if stderr fails.
+    let replaced = match &out {
+        Some(out) => {
+            // Kept to put back if stderr fails. A fd 1 that cannot be kept —
+            // closed, or no descriptor left — is not put back; nothing has been
+            // truncated at that point either way, so the logs are safe.
+            let replaced = std::io::stdout().as_fd().try_clone_to_owned().ok();
+            dup2_stdio(&out.fd, 1)
+                .map_err(|e| DaemonizeError::OutputFileError(format!("dup2 fd 1: {e}")))?;
+            replaced
+        }
+        None => None,
+    };
+
+    let err = match stderr.map(|path| open_checked_stderr(path, append, out.as_ref(), owned)) {
+        Some(Err(e)) => {
+            if let Some(replaced) = &replaced {
+                let _ = dup2_stdio(replaced, 1);
             }
-            dup2_stdio(&err.fd, 2)
-                .map_err(|e| DaemonizeError::OutputFileError(format!("dup2 fd 2: {e}")))?;
+            return Err(e);
+        }
+        Some(Ok(err)) => Some(err),
+        None => None,
+    };
+
+    if !append {
+        if let Some(out) = &out {
+            truncate(out)?;
+        }
+        if let Some((err, false)) = &err {
+            truncate(err)?;
         }
     }
+    if let Some((err, shares_stdout)) = &err {
+        let source = match (shares_stdout, &out) {
+            (true, Some(out)) => &out.fd,
+            _ => &err.fd,
+        };
+        dup2_stdio(source, 2)
+            .map_err(|e| DaemonizeError::OutputFileError(format!("dup2 fd 2: {e}")))?;
+    }
     Ok(())
+}
+
+/// Opens stderr and compares it, with stdout already on fd 1. Returns the
+/// stream and whether it is the stdout file, to share its descriptor.
+fn open_checked_stderr<'a>(
+    path: &'a Path,
+    append: bool,
+    out: Option<&OpenStream>,
+    owned: &[(&'static str, FileId)],
+) -> Result<(OpenStream<'a>, bool), DaemonizeError> {
+    let err = open_stream(path, append)?;
+    let plan = plan_output_redirect(out.map(|o| o.id), Some(err.id), owned)
+        .map_err(|c| refusal(&c, &err))?;
+    Ok((err, plan.stderr_shares_stdout))
 }
 
 /// The refusal for a stream that turned out to be an owned file.
@@ -1127,6 +1162,48 @@ mod tests {
         assert!(
             matches!((out, err), (Some(o), Some(e)) if o < e),
             "stderr should follow stdout on the shared descriptor: {content:?}"
+        );
+    }
+
+    // Covers: R146
+    #[test]
+    fn execute_redirect_that_fails_on_stderr_changes_nothing() {
+        run_in_subprocess(
+            "steps::tests::execute_redirect_that_fails_on_stderr_changes_nothing_subprocess",
+        );
+    }
+
+    /// A start that fails must not have emptied the previous run's log, nor
+    /// left the caller's stdout pointing somewhere else. A directory as stderr
+    /// fails to open for root too, so every tier sees the failure. In its own
+    /// process because the assertion is on the log's exact bytes, and under a
+    /// shared harness other tests' result lines reach fd 1 while it is
+    /// redirected.
+    #[test]
+    #[ignore]
+    fn execute_redirect_that_fails_on_stderr_changes_nothing_subprocess() {
+        use nix::sys::stat::fstat;
+
+        if !is_subprocess() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("app.log");
+        std::fs::write(&log, "the previous run\n").unwrap();
+        let stdout_before = fstat(std::io::stdout()).unwrap();
+
+        let result = redirect_output(Some(&log), Some(dir.path()), false, &[]);
+
+        assert!(
+            matches!(result, Err(DaemonizeError::OutputFileError(_))),
+            "{result:?}"
+        );
+        assert_eq!(std::fs::read_to_string(&log).unwrap(), "the previous run\n");
+        let stdout_after = fstat(std::io::stdout()).unwrap();
+        assert_eq!(
+            (stdout_before.st_dev, stdout_before.st_ino),
+            (stdout_after.st_dev, stdout_after.st_ino),
+            "a failed redirect left fd 1 redirected"
         );
     }
 
