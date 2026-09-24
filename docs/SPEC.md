@@ -378,19 +378,14 @@ panicking (with a message naming the problem and fix) unless it is exactly
 1, or if it cannot be determined, then calls
 `unsafe { daemonize_unchecked(config) }`. A count other than 1 — including
 an anomalous 0 a healthy process can never report — fails closed rather than
-forking on an untrusted count. The thread count source is per-OS:
+forking on an untrusted count. The count is read from the kernel,
+through whichever interface each platform offers; the capability table
+in `build.rs` records which, and the crate front page's "Platform
+support" section is generated from it.
 
-| OS      | Source                                                      |
-| ------- | ----------------------------------------------------------- |
-| Linux   | `/proc/self/status` `Threads:` line                         |
-| Android | `/proc/self/status` `Threads:` line                         |
-| macOS   | `proc_pidinfo(PROC_PIDTASKINFO)` → `pti_threadnum`          |
-| FreeBSD | `sysctl(KERN_PROC_PID)` → `kinfo_proc.ki_numthreads`        |
-| NetBSD  | `sysctl(KERN_PROC2/KERN_PROC_PID)` → `kinfo_proc2.p_nlwps`  |
-| OpenBSD | `sysctl(KERN_PROC_PID \| KERN_PROC_SHOW_THREADS)`; count = bytes / record |
-
-On any other target it is a `#[deprecated]` stub that panics (no
-thread-count source). The thread-count FFI lives in `unsafe_ops`.
+On a target the table gives no thread-count source it is a
+`#[deprecated]` stub that panics. The thread-count FFI lives in
+`unsafe_ops`.
 
 > With a single thread, the observation "thread count is 1" is stable:
 > incrementing it requires an existing thread to call `pthread_create`,
