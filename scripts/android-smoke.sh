@@ -44,14 +44,12 @@ adb push "${TEST_BIN}" "${DEVICE_DIR}/blivet-tests" >/dev/null
 adb shell chmod 755 "${DEVICE_DIR}/daemonize" "${DEVICE_DIR}/blivet-tests"
 adb shell rm -f "${PIDFILE}"
 
-adb shell "${DEVICE_DIR}/daemonize" -p "${PIDFILE}" -- sleep 30
+# `tail -f /dev/null` runs until killed, so the check below cannot race the
+# daemon's own exit.
+adb shell "${DEVICE_DIR}/daemonize" -p "${PIDFILE}" -- tail -f /dev/null
 
-# The daemon writes the pidfile after the second fork, so the parent's exit
-# does not mean the file is there yet.
-for _ in $(seq 1 10); do
-    adb shell "[ -f ${PIDFILE} ]" && break
-    sleep 1
-done
+# The parent exits only once the daemon has exec'd, and the daemon writes the
+# pidfile before that, so the file is already there.
 adb shell "[ -f ${PIDFILE} ]" || fail "pidfile not created"
 
 PID=$(adb shell cat "${PIDFILE}" | tr -d '\r')
