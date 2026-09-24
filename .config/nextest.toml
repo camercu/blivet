@@ -1,19 +1,19 @@
-# The default profile is cargo-mutants' (see .cargo/mutants.toml, which sets
-# `test_tool = "nextest"` and so gets this one): no test may run longer than
-# 5s — kill it, don't wait. A mutant that hangs a test (blocked pipe reader,
-# stuck loop) dies here well inside cargo-mutants' own auto timeout and
-# reports as a cleanly caught failure instead of TIMEOUT noise.
-[profile.default]
-slow-timeout = { period = "5s", terminate-after = 1 }
+# cargo-mutants' profile (selected in .cargo/mutants.toml). A mutant that
+# hangs a test — a blocked pipe reader, a loop that stops advancing — is killed
+# at 2x10s and counts as caught; cargo-mutants' own minimum timeout sits above
+# that at 30s, so nextest always fires first. The margin is wide on purpose: a
+# 5s kill here once killed healthy tests on a loaded machine, which in a CI
+# gate is a flake. Raise `period` if tests get legitimately slower.
+[profile.mutants]
+slow-timeout = { period = "10s", terminate-after = 2 }
 
 # What `just test` runs under. The suite's own integration tests spawn the CLI
 # and poll for a pidfile with a 30s bound, deliberately loose so a loaded
 # machine does not fail a passing test (the poll returns the instant its
-# condition holds, so the bound costs a healthy run nothing). Under the 5s kill
-# above, fourteen of them were killed mid-flight on a machine busy building
+# condition holds, so the bound costs a healthy run nothing). Under a 5s kill,
+# fourteen of them were killed mid-flight on a machine busy building
 # containers — a flaky gate, which is the thing moving to nextest was meant to
 # stop.
-#
 [profile.gate]
 # Report a test as slow at the integration poll bound, kill it at four times
 # that, so a genuinely hung test still cannot wedge the run.
