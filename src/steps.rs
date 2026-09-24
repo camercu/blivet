@@ -1290,6 +1290,31 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&stdout_path).unwrap(), "reached\n");
     }
 
+    /// The same for fd 2, the highest slot `open_above_stdio` must keep a
+    /// source out of: with stderr closed, the redirect must leave fd 2 open on
+    /// the file.
+    #[test]
+    fn execute_redirect_into_a_closed_stderr_slot() {
+        run_in_subprocess("steps::tests::execute_redirect_into_a_closed_stderr_slot_subprocess");
+    }
+
+    #[test]
+    #[ignore]
+    fn execute_redirect_into_a_closed_stderr_slot_subprocess() {
+        if !is_subprocess() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let stderr_path = dir.path().join("stderr.log");
+        nix::unistd::close(2).unwrap();
+
+        redirect_output(None, Some(&stderr_path), false, &[]).unwrap();
+
+        let written = nix::unistd::write(std::io::stderr(), b"reached\n");
+        assert_eq!(written, Ok(8), "fd 2 is not open after the redirect");
+        assert_eq!(std::fs::read_to_string(&stderr_path).unwrap(), "reached\n");
+    }
+
     // Covers: R146
     #[test]
     #[serial]
