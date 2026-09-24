@@ -34,6 +34,20 @@ fn primary_gid_of(user: &str) -> u32 {
     String::from_utf8_lossy(&out.stdout).trim().parse().unwrap()
 }
 
+/// Every GID `user` belongs to, primary first, failing loudly like
+/// [`uid_of`].
+fn groups_of(user: &str) -> Vec<u32> {
+    let out = Command::new("id").args(["-G", user]).output().unwrap();
+    assert!(
+        out.status.success(),
+        "id -G {user} failed: the image is missing the test user"
+    );
+    String::from_utf8_lossy(&out.stdout)
+        .split_whitespace()
+        .map(|g| g.parse().unwrap())
+        .collect()
+}
+
 /// The GID the container's group database gives `group`, failing loudly like
 /// [`uid_of`].
 fn gid_of_group(group: &str) -> u32 {
@@ -374,24 +388,15 @@ fn user_switch_sets_supplementary_groups() {
 
     // Expected groups for testuser. Computed first so we can poll the daemon's
     // output for them instead of sleeping a fixed interval.
-    let expected = Command::new("id")
-        .args(["-G", "testuser"])
-        .output()
-        .unwrap();
-    let expected_str = String::from_utf8_lossy(&expected.stdout).trim().to_string();
-    let mut exp_groups: Vec<&str> = expected_str.split_whitespace().collect();
+    let mut exp_groups = groups_of("testuser");
 
-    let content = wait_for_file_content(&groups_file, exp_groups.first().copied().unwrap_or(""));
-
-    // Should have at least the primary group
-    let groups: Vec<&str> = content.split_whitespace().collect();
-    assert!(
-        !groups.is_empty(),
-        "daemon should have at least one group, got: {content}"
-    );
+    let content = wait_for_file_content(&groups_file, &exp_groups[0].to_string());
 
     // The daemon's groups should match the expected groups for testuser
-    let mut daemon_groups = groups.clone();
+    let mut daemon_groups: Vec<u32> = content
+        .split_whitespace()
+        .map(|g| g.parse().unwrap())
+        .collect();
     daemon_groups.sort();
     exp_groups.sort();
     assert_eq!(
