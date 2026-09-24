@@ -211,7 +211,7 @@ test:
 # run it before a release and when a change is wide. A survivor is code no
 # test constrains — found by what the tests do, not how they are written.
 mutants *args:
-    cargo mutants ${CARGO_LOCKED:+--cargo-arg=$CARGO_LOCKED} {{args}}
+    {{just_executable()}} --justfile {{justfile()}} cargo-mutants {{args}}
 
 # Mutation-test only the lines changed since `base`, so the cost follows the
 # size of the change. Work not yet committed counts, new files included, so
@@ -226,7 +226,23 @@ mutants-diff base="origin/main":
     git ls-files -z --others --exclude-standard | while IFS= read -r -d '' f; do
         git diff --no-index -- /dev/null "$f" >> "$diff" || true
     done
-    cargo mutants ${CARGO_LOCKED:+--cargo-arg=$CARGO_LOCKED} --in-diff "$diff"
+    {{just_executable()}} --justfile {{justfile()}} cargo-mutants --in-diff "$diff"
+
+# cargo-mutants, with a timed-out mutant counted as caught: its tests did not
+# pass. Exit 3 cannot say that alone, because cargo-mutants returns it whenever
+# any mutant timed out, ahead of the 2 for a missed one; so 3 passes only when
+# `mutants.out/missed.txt` exists and is empty.
+[private]
+cargo-mutants *args:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    cargo mutants ${CARGO_LOCKED:+--cargo-arg=$CARGO_LOCKED} {{args}} && exit 0
+    rc=$?
+    if [ "$rc" -eq 3 ] && [ -f mutants.out/missed.txt ] && [ ! -s mutants.out/missed.txt ]; then
+        echo "cargo-mutants: some mutants timed out and none were missed; a timeout counts as caught" >&2
+        exit 0
+    fi
+    exit "$rc"
 
 # The build context both container tiers get, as a tar stream on stdout: the
 # files git tracks, plus untracked files `.gitignore` does not exclude — what

@@ -1,13 +1,16 @@
 # cargo-mutants configuration.
 #
 # Tests run under nextest's `mutants` profile (.config/nextest.toml), which
-# kills a hung test before cargo-mutants' own timeout: a mutant that hangs the
-# suite is reported as caught, not as TIMEOUT noise.
+# kills a hung test so the rest of the suite still runs.
 test_tool = "nextest"
 additional_cargo_test_args = ["--profile", "mutants"]
 
-# Above the mutants profile's 2x10s kill, so nextest always fires first and a
-# hung mutant is caught rather than timed out.
+# cargo-mutants' timeout bounds the whole test run, not one test, so no
+# per-test kill can promise to fire first: a mutant that hangs more tests than
+# nextest runs at once can still time out. That is fine: a timed-out mutant's
+# tests did not pass, and the justfile's mutants recipes count it as caught.
+# This floor only keeps a fast baseline from auto-setting a timeout too short
+# for a loaded machine.
 minimum_test_timeout = 30
 
 # Unkillable false positives, excluded with reasons:

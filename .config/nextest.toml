@@ -1,9 +1,11 @@
 # cargo-mutants' profile (selected in .cargo/mutants.toml). A mutant that
-# hangs a test — a blocked pipe reader, a loop that stops advancing — is killed
-# at 2x10s and counts as caught; cargo-mutants' own minimum timeout sits above
-# that at 30s, so nextest always fires first. The margin is wide on purpose: a
-# 5s kill here once killed healthy tests on a loaded machine, which in a CI
-# gate is a flake. Raise `period` if tests get legitimately slower.
+# hangs a test — a blocked pipe reader, a loop that stops advancing — has that
+# test killed, which fails it, so the mutant counts as caught and the rest of
+# the suite still runs. If cargo-mutants' own timeout for the whole run fires
+# first, the mutant still counts as caught (see .cargo/mutants.toml). The kill
+# is not short on purpose: a 5s kill here once killed healthy tests on a
+# loaded machine, which in a CI gate is a flake. Raise `period` if tests get
+# legitimately slower.
 [profile.mutants]
 slow-timeout = { period = "10s", terminate-after = 2 }
 
