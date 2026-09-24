@@ -349,8 +349,9 @@ impl DaemonConfig {
             }
         }
 
-        // No owned file may also be a stream: the redirect's O_TRUNC would
-        // empty it. An owned file may equal another owned file (the pidfile is
+        // No owned file may also be a stream: the redirect would overwrite
+        // it. Step 12 checks again by file identity, for the overlaps a path
+        // comparison cannot see. An owned file may equal another owned file (the pidfile is
         // its own lockfile by default), and stdout may share stderr's file.
         // Owned rows come in table order, so a derived lockfile (== pidfile) is
         // reported as the pidfile the user actually configured.
