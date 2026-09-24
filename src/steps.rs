@@ -72,11 +72,17 @@ pub(crate) struct FileId {
 
 /// The identity of the open file `fd`.
 pub(crate) fn file_id(fd: impl AsFd) -> Result<FileId, nix::errno::Errno> {
-    let st = nix::sys::stat::fstat(fd)?;
-    Ok(FileId {
-        dev: st.st_dev,
-        ino: st.st_ino,
-    })
+    nix::sys::stat::fstat(fd).map(|st| FileId::of(&st))
+}
+
+impl FileId {
+    /// The identity `fstat` reported.
+    fn of(st: &nix::sys::stat::FileStat) -> Self {
+        FileId {
+            dev: st.st_dev,
+            ino: st.st_ino,
+        }
+    }
 }
 
 /// What step 12 does with the streams it has opened — see
@@ -110,6 +116,26 @@ pub(crate) fn change_dir(path: &Path) -> Result<(), DaemonizeError> {
         .map_err(|e| DaemonizeError::ChdirFailed(format!("{}: {e}", path.display())))
 }
 
+/// Opens `path`, never on fd 0, 1 or 2.
+///
+/// With a stdio slot closed, `open` returns that slot itself. The `dup2` onto
+/// it that follows would then be a no-op, and dropping the descriptor would
+/// close the redirect it had just made. `try_clone` duplicates with a floor of
+/// 3, so the source of a redirect is never one of its targets and dropping it
+/// is always safe.
+fn open_above_stdio<P: ?Sized + nix::NixPath>(
+    path: &P,
+    flags: OFlag,
+    mode: Mode,
+) -> std::io::Result<OwnedFd> {
+    let fd = open(path, flags, mode)?;
+    if fd.as_raw_fd() <= 2 {
+        fd.try_clone()
+    } else {
+        Ok(fd)
+    }
+}
+
 /// Step 6: Redirect standard streams to /dev/null.
 ///
 /// Always redirects stdin. When `stdout_stderr` is true, also redirects
@@ -126,7 +152,7 @@ pub(crate) fn redirect_to_devnull(stdout_stderr: bool) -> Result<(), DaemonizeEr
             "open /dev/null: injected failure".into(),
         ));
     }
-    let devnull = open(c"/dev/null", OFlag::O_RDWR, Mode::empty())
+    let devnull = open_above_stdio(c"/dev/null", OFlag::O_RDWR, Mode::empty())
         .map_err(|e| DaemonizeError::SystemError(format!("open /dev/null: {e}")))?;
     unistd::dup2_stdin(&devnull)
         .map_err(|e| DaemonizeError::SystemError(format!("dup2 /dev/null -> stdin: {e}")))?;
@@ -135,10 +161,6 @@ pub(crate) fn redirect_to_devnull(stdout_stderr: bool) -> Result<(), DaemonizeEr
             .map_err(|e| DaemonizeError::SystemError(format!("dup2 /dev/null -> stdout: {e}")))?;
         unistd::dup2_stderr(&devnull)
             .map_err(|e| DaemonizeError::SystemError(format!("dup2 /dev/null -> stderr: {e}")))?;
-    }
-    if devnull.as_raw_fd() <= 2 {
-        // devnull IS one of the stdio fds — don't close it on drop.
-        std::mem::forget(devnull);
     }
     Ok(())
 }
@@ -349,25 +371,14 @@ fn open_stream(path: &Path, append: bool) -> Result<OpenStream<'_>, DaemonizeErr
     if append {
         flags |= OFlag::O_APPEND;
     }
-    let fail = |e| DaemonizeError::OutputFileError(format!("cannot open {}: {e}", path.display()));
-    let fd = open(path, flags, Mode::from_bits_truncate(0o644)).map_err(fail)?;
-    // With a stdio slot closed, `open` can return 1 or 2 itself; the dup2
-    // onto that slot would then be a no-op and dropping the stream would
-    // close the redirect. `try_clone` duplicates to 3 or above, so the stream
-    // never occupies a slot it is about to be copied into.
-    let fd = if fd.as_raw_fd() <= 2 {
-        fd.try_clone()
-            .map_err(|e| DaemonizeError::OutputFileError(format!("dup {}: {e}", path.display())))?
-    } else {
-        fd
-    };
-    let st = nix::sys::stat::fstat(&fd).map_err(fail)?;
+    let fd = open_above_stdio(path, flags, Mode::from_bits_truncate(0o644)).map_err(|e| {
+        DaemonizeError::OutputFileError(format!("cannot open {}: {e}", path.display()))
+    })?;
+    let st = nix::sys::stat::fstat(&fd)
+        .map_err(|e| DaemonizeError::OutputFileError(format!("fstat {}: {e}", path.display())))?;
     Ok(OpenStream {
         path,
-        id: FileId {
-            dev: st.st_dev,
-            ino: st.st_ino,
-        },
+        id: FileId::of(&st),
         // A FIFO or a device (`-o /dev/null`) has no length to truncate:
         // `ftruncate` refuses one, where `O_TRUNC` used to ignore it.
         regular: st.st_mode & libc::S_IFMT == libc::S_IFREG,
@@ -665,6 +676,33 @@ mod tests {
     fn redirect_to_devnull_succeeds() {
         let _restore = SavedFds::new(&[0, 1, 2]);
         redirect_to_devnull(true).unwrap();
+    }
+
+    /// With stdin closed, `open("/dev/null")` hands back fd 0 itself. The
+    /// redirect must still leave fd 0 open on /dev/null afterwards.
+    #[test]
+    fn redirect_to_devnull_into_a_closed_stdin_slot() {
+        run_in_subprocess("steps::tests::redirect_to_devnull_into_a_closed_stdin_slot_subprocess");
+    }
+
+    #[test]
+    #[ignore]
+    fn redirect_to_devnull_into_a_closed_stdin_slot_subprocess() {
+        use nix::sys::stat::fstat;
+
+        if !is_subprocess() {
+            return;
+        }
+        nix::unistd::close(0).unwrap();
+
+        redirect_to_devnull(false).unwrap();
+
+        let devnull = fstat(open(c"/dev/null", OFlag::O_RDONLY, Mode::empty()).unwrap()).unwrap();
+        let stdin = fstat(std::io::stdin()).expect("fd 0 is not open after the redirect");
+        assert_eq!(
+            (stdin.st_dev, stdin.st_ino),
+            (devnull.st_dev, devnull.st_ino)
+        );
     }
 
     // Covers: R7
