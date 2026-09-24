@@ -76,8 +76,8 @@ esac
 # The sum therefore holds only for as long as one invocation wraps one test
 # command. Chaining a second one in lets its counts stand in for the first's
 # zero, and `cargo test --doc` never reports zero at all, because rustdoc
-# re-reads the sources every run. `tests/vacuous_run_guard.rs` holds every
-# caller to one test command apiece, which is what keeps this paragraph true.
+# re-reads the sources every run. So each caller wraps one test command per
+# invocation; review is what holds them to it.
 #
 # Passed AND failed, because
 # the question here is whether anything ran at all — a suite where every test
