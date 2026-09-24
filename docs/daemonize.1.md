@@ -73,8 +73,7 @@ dropped, so the daemon can continue to write to them after the switch.
     When **--stderr** is not specified, stderr is also redirected: if *path*
     ends in **.stdout**, stderr goes to the same name with a **.stderr**
     extension; if *path* ends in **.out**, stderr goes to **.err**;
-    otherwise both streams share the same file (opened once, shared via
-    **dup2**(2)).
+    otherwise both streams share the same file and one descriptor.
 
 **-e**, **--stderr** *path*
 :   Redirect the daemon's stderr to *path*. The path must be absolute.
