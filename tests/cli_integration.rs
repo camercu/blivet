@@ -752,13 +752,14 @@ fn parent_waits_for_exec_before_exiting() {
         .stdout(std::process::Stdio::null())
         .spawn()
         .unwrap();
-    wait_for_pidfile(&pidfile).expect("the daemon should reach step 8");
+    let reached = wait_for_pidfile(&pidfile);
     let while_held = parent.try_wait().unwrap();
 
     // Release the daemon: with a reader present its open returns, it execs
     // `true`, and the exec closes the notification pipe the parent waits on.
     // Non-blocking, and held until the parent has gone, so a failing run
-    // neither hangs here nor strands the daemon on the FIFO.
+    // neither hangs here nor strands the daemon on the FIFO. Every assertion
+    // waits until after this, the one on the pidfile included.
     let reader = std::fs::OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_NONBLOCK)
@@ -767,6 +768,7 @@ fn parent_waits_for_exec_before_exiting() {
     let status = wait_for_child(&mut parent);
     drop(reader);
 
+    reached.expect("the daemon should reach step 8");
     assert!(
         while_held.is_none(),
         "the parent exited while the daemon was still held before exec: {while_held:?}"
