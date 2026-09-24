@@ -491,11 +491,11 @@ to a path with no file name or with a parent that does not resolve
 either.
 
 Overlap detection therefore holds before the files exist, which is
-when it matters: the failure it prevents is silent. Two spellings of
-one path get two `O_TRUNC` opens with independent offsets, so the
-pidfile is truncated to nothing by the stdout redirect, or stdout and
-stderr overwrite each other — and the daemon starts and exits 0
-either way. See R115.
+when it matters: the failure it prevents is silent — the stdout
+redirect overwriting the pidfile, or stdout and stderr overwriting each
+other, with the daemon starting and exiting 0. See R115. Step 12
+compares the files themselves as well, for the overlaps no path
+comparison can see (R146).
 
 ### Lockfile derivation
 
@@ -675,8 +675,9 @@ foreground), it also redirects stdout and stderr. In foreground mode,
 stdout and stderr are left inherited so output reaches the parent
 terminal or supervisor.
 
-Open `/dev/null` with `O_RDWR`, `dup2` to the target fd(s). If the
-source fd already equals the target, skip `dup2` and close. Failure to
+Open `/dev/null` with `O_RDWR` on a descriptor above 2, and `dup2` it
+to the target fd(s); with a stdio slot closed `open` would return that
+slot, and the source of a redirect must not be its target. Failure to
 open `/dev/null` or `dup2` to it reports `SystemError` via the
 notification pipe.
 

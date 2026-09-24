@@ -39,10 +39,8 @@ non-breaking-able must land first.
       Linux-with-root (Docker, `--run-ignored all`); equivalent and
       cfg-dead mutants are excluded in `.cargo/mutants.toml`. Residual
       known misses, accepted as documented:
-      - fd-redirect internals (`redirect_to_devnull` bound,
-        `execute_stream_action` arms): observable only with fds 0-2
-        re-plumbed; the CLI/Docker integration tier exercises the
-        behavior end to end.
+      - fd-redirect internals: since resolved. The closed-stdio-slot
+        case is tested in a subprocess for both redirect steps.
       - per-OS `thread_count` implementations: each is testable only
         on its own OS; the host-OS path is covered by
         `current_thread_count_tracks_live_threads` on every CI OS.

@@ -91,7 +91,7 @@ When \f[B]\(enstderr\f[R] is not specified, stderr is also redirected:
 if \f[I]path\f[R] ends in \f[B].stdout\f[R], stderr goes to the same
 name with a \f[B].stderr\f[R] extension; if \f[I]path\f[R] ends in
 \f[B].out\f[R], stderr goes to \f[B].err\f[R]; otherwise both streams
-share the same file (opened once, shared via \f[B]dup2\f[R](2)).
+share the same file and one descriptor.
 .TP
 \f[B]\-e\f[R], \f[B]\(enstderr\f[R] \f[I]path\f[R]
 Redirect the daemon\(cqs stderr to \f[I]path\f[R].
