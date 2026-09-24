@@ -1280,32 +1280,27 @@ mod tests {
     // parallel (open lockfiles, ReadDir handles during tempdir cleanup),
     // producing spurious EBADF failures. #[serial] does not help: it only
     // orders against other #[serial] tests, not the parallel non-serial ones.
-    // So this test runs #[ignore] and is spawned in isolation via
+    // So the body runs in isolation, spawned via
     // crate::test_support::run_in_subprocess.
 
-    /// Ignored by default: closing fds in-process trips systemd's
-    /// `safe_close()` EBADF assertion when the test runs under systemd, as it
-    /// does on a hosted Ubuntu runner. The glibc container tier has no systemd
-    /// and runs it with `--include-ignored`; the bionic tier runs
-    /// `cargo test --lib` and so does not.
+    /// Ignored on Linux: closing fds in-process trips systemd's `safe_close()`
+    /// EBADF assertion when the test runs under systemd, as it does on a
+    /// hosted Ubuntu runner. systemd exists only on Linux, so everywhere else —
+    /// macOS, the BSDs, bionic — it runs with the ordinary suite, and there
+    /// mutation testing reaches step 13 too. On Linux the glibc container tier,
+    /// which has no systemd, runs it with `--include-ignored`.
     ///
-    /// The BSD VM tiers did run it before, because they do not forward `CI`,
-    /// and no longer do. That is the cost of keying on the hazard instead of
-    /// on an environment variable: the variable happened to let it through
-    /// there, but it also let it through on the device and VM tiers where the
-    /// hazard was never assessed. What those tiers uniquely covered was the
-    /// brute-force branch, since they have no fd directory; that no longer
-    /// depends on which tier runs, because
-    /// `close_inherited_fds_without_a_listing_preserves_skipped` forces the
-    /// branch wherever it runs.
-    ///
-    /// Keyed on being asked for rather than on `CI` being set, because that
-    /// variable means "a hosted runner" and was standing in for "systemd is
-    /// pid 1" — a proxy that says nothing about the VM and device tiers, which
-    /// do not set it.
+    /// Keyed on the target rather than on `CI` being set: that variable means
+    /// "a hosted runner" and was standing in for "systemd may be pid 1", a
+    /// proxy that says nothing about the VM and device tiers, which do not set
+    /// it. `close_inherited_fds_without_a_listing_preserves_skipped` forces the
+    /// brute-force branch wherever it runs, so no tier is needed for that.
     // Covers: R103, R104
     #[test]
-    #[ignore = "closing fds in-process trips systemd's safe_close assertion"]
+    #[cfg_attr(
+        target_os = "linux",
+        ignore = "closing fds in-process trips systemd's safe_close assertion"
+    )]
     fn close_inherited_fds_preserves_skipped() {
         crate::test_support::run_in_subprocess(
             "steps::tests::close_inherited_fds_preserves_skipped_subprocess",
@@ -1333,7 +1328,10 @@ mod tests {
     /// tier that lacks the directory.
     // Covers: R103, R104, R135
     #[test]
-    #[ignore = "closing fds in-process trips systemd's safe_close assertion"]
+    #[cfg_attr(
+        target_os = "linux",
+        ignore = "closing fds in-process trips systemd's safe_close assertion"
+    )]
     fn close_inherited_fds_without_a_listing_preserves_skipped() {
         crate::test_support::run_in_subprocess(
             "steps::tests::close_inherited_fds_without_a_listing_preserves_skipped_subprocess",
