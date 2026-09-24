@@ -1426,24 +1426,15 @@ mod tests {
     // So the body runs in isolation, spawned via
     // crate::test_support::run_in_subprocess.
 
-    /// Ignored on Linux: closing fds in-process trips systemd's `safe_close()`
-    /// EBADF assertion when the test runs under systemd, as it does on a
-    /// hosted Ubuntu runner. systemd exists only on Linux, so everywhere else —
-    /// macOS, the BSDs, bionic — it runs with the ordinary suite, and there
-    /// mutation testing reaches step 13 too. On Linux the glibc container tier,
-    /// which has no systemd, runs it with `--include-ignored`.
-    ///
-    /// Keyed on the target rather than on `CI` being set: that variable means
-    /// "a hosted runner" and was standing in for "systemd may be pid 1", a
-    /// proxy that says nothing about the VM and device tiers, which do not set
-    /// it. `close_inherited_fds_without_a_listing_preserves_skipped` forces the
+    /// Runs everywhere, the hosted Ubuntu runner included, so mutation testing
+    /// reaches step 13 in CI. It was once ignored there after an abort blamed
+    /// on systemd's `safe_close()` (7dc982b, eb50694); a hosted run with the
+    /// ignore removed passed, so the ignore went. If that abort comes back,
+    /// the ignore is not the fix: find what in the test process owns the fd.
+    /// `close_inherited_fds_without_a_listing_preserves_skipped` forces the
     /// brute-force branch wherever it runs, so no tier is needed for that.
     // Covers: R103, R104
     #[test]
-    #[cfg_attr(
-        target_os = "linux",
-        ignore = "closing fds in-process trips systemd's safe_close assertion"
-    )]
     fn close_inherited_fds_preserves_skipped() {
         crate::test_support::run_in_subprocess(
             "steps::tests::close_inherited_fds_preserves_skipped_subprocess",
@@ -1471,10 +1462,6 @@ mod tests {
     /// tier that lacks the directory.
     // Covers: R103, R104, R135
     #[test]
-    #[cfg_attr(
-        target_os = "linux",
-        ignore = "closing fds in-process trips systemd's safe_close assertion"
-    )]
     fn close_inherited_fds_without_a_listing_preserves_skipped() {
         crate::test_support::run_in_subprocess(
             "steps::tests::close_inherited_fds_without_a_listing_preserves_skipped_subprocess",
