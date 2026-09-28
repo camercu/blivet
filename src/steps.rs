@@ -57,6 +57,12 @@ pub(crate) mod failpoints {
     pub(crate) fn injected(flag: &AtomicBool) -> bool {
         flag.load(std::sync::atomic::Ordering::Relaxed)
     }
+
+    /// The fd limit [`MAX_FD`] stands in with, if a test set one.
+    pub(crate) fn injected_max_fd() -> Option<i32> {
+        let max_fd = MAX_FD.load(std::sync::atomic::Ordering::Relaxed);
+        (max_fd > 0).then_some(max_fd)
+    }
 }
 
 // ---- File identity, for step 12's same-file checks ----
@@ -535,11 +541,8 @@ pub(crate) fn get_max_fd() -> Result<i32, DaemonizeError> {
         ));
     }
     #[cfg(test)]
-    {
-        let injected = failpoints::MAX_FD.load(std::sync::atomic::Ordering::Relaxed);
-        if injected > 0 {
-            return Ok(injected);
-        }
+    if let Some(max_fd) = failpoints::injected_max_fd() {
+        return Ok(max_fd);
     }
     let limit = nix::sys::resource::getrlimit(nix::sys::resource::Resource::RLIMIT_NOFILE)
         .map_err(|e| DaemonizeError::SystemError(format!("getrlimit(RLIMIT_NOFILE): {e}")))?;
