@@ -687,9 +687,13 @@ mod tests {
 
         // The two cases below reach the filesystem: one needs an existing
         // directory to be a pidfile, the other needs a writable parent for the
-        // overlap check to be the failure that fires.
+        // overlap check to be the failure that fires. The directory is made
+        // inside the temp dir, not the temp dir itself: `/tmp`'s parent is `/`,
+        // which a non-root user cannot write, and parent writability is checked
+        // before the directory is.
         let tmp = crate::test_support::tmp_dir();
-        let tmp_name = tmp.display().to_string();
+        let dir = tempfile::tempdir_in(&tmp).unwrap();
+        let dir_name = dir.path().display().to_string();
         let overlap = tmp.join("same.pid");
         let overlap_name = overlap.display().to_string();
 
@@ -734,9 +738,9 @@ mod tests {
             (
                 "pidfile is dir",
                 &|c| {
-                    c.pidfile(&tmp);
+                    c.pidfile(dir.path());
                 },
-                &tmp_name,
+                &dir_name,
             ),
             (
                 "stdout parent missing",
