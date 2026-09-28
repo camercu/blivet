@@ -229,9 +229,10 @@ stubs: using one warns with guidance by default and is a hard error under
 `-D warnings`, and the `unsafe` forms are the way through. Non-Unix targets are
 a `compile_error!` naming the target, not a wall of type errors.
 
-Android is supported with one documented difference: bionic rejects
-`AT_EACCESS`, so the pre-fork writability check there answers for the real UID
-rather than the effective one.
+Android is supported from API level 24 (Android 7.0): group lookup links
+`getgrnam_r`, which bionic added then, so a build for an older API level fails
+to link. One behaviour differs: bionic rejects `AT_EACCESS`, so the pre-fork
+writability check there answers for the real UID rather than the effective one.
 
 Android is also the one Supported platform whose "real OS" is split across two
 jobs. The blocking one runs the library suite against bionic and the real
