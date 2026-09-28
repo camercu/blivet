@@ -60,7 +60,9 @@ On a best-effort target `daemonize()` and `drop_privileges()` are
 forms are the supported path there. A non-Unix target is a
 `compile_error!` naming the target.
 
-Android is supported with one documented divergence: bionic rejects
+Android is supported from API level 24 (Android 7.0), the first whose
+bionic has `getgrnam_r`, which group lookup links; a build for an older
+API level fails to link. One behaviour diverges: bionic rejects
 `AT_EACCESS`, so the pre-fork writability check answers for the real
 UID (see [Validation](#validation)).
 
