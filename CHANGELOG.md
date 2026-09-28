@@ -1,99 +1,96 @@
 ## [0.13.0](https://github.com/camercu/blivet/compare/v0.12.0...v0.13.0) (2026-07-15)
 
+### Features
+
+* **config:** reject configured paths containing a NUL byte ([112de2b](https://github.com/camercu/blivet/commit/112de2b29d34ffbd8440ffec921d4240369e7ecd))
+* **steps:** report post-fork syscall failures instead of panicking ([ad44bd9](https://github.com/camercu/blivet/commit/ad44bd9a7a897c05ebc80565ae8b0bb8c9c28aa1))
+
+### Bug Fixes
+
+* **notify:** report failure when the pipe is dropped unsignaled ([93ce4de](https://github.com/camercu/blivet/commit/93ce4decf29d9fbdaba7140f2ac6b7fd3a61e251))
+* report remaining post-fork panics as errors ([e20013c](https://github.com/camercu/blivet/commit/e20013c741ebe2b5656630a270dd52c46ffd9393))
+* **steps:** create standalone pidfile with mode 0644 ([dae1c83](https://github.com/camercu/blivet/commit/dae1c8328c3e88f094ed900db6e02a97eff17e51))
+
 ## [0.12.0](https://github.com/camercu/blivet/compare/v0.11.0...v0.12.0) (2026-07-11)
 
-## 0.11.0 (2026-07-10)
+### ⚠ BREAKING CHANGES
 
-* docs: add 1.0 release checklist ([9c083fe](https://github.com/camercu/blivet/commit/9c083fe))
-* docs: record mutation-sweep triage in the 1.0 checklist ([ab59e54](https://github.com/camercu/blivet/commit/ab59e54))
-* docs(cli): document -E bare-name empty-value behavior in help and README ([3883152](https://github.com/camercu/blivet/commit/3883152))
-* docs(readme): fix inverted signal_hook flag in cleanup recipe ([57fc53d](https://github.com/camercu/blivet/commit/57fc53d))
-* docs(spec): cite pidfile-locking precedent in derivation rationale ([58490a0](https://github.com/camercu/blivet/commit/58490a0))
-* docs(spec): state the foreground error path in the sequence sections ([36300db](https://github.com/camercu/blivet/commit/36300db))
-* test: assert close_inherited_fds actually closes and get_max_fd is sane ([a4a72e7](https://github.com/camercu/blivet/commit/a4a72e7))
-* test: cover cleanup_on_term_signals and RealForker::setsid ([7d25cc5](https://github.com/camercu/blivet/commit/7d25cc5))
-* test: kill surviving mutants in paths_same and identity accessors ([c042bed](https://github.com/camercu/blivet/commit/c042bed))
-* test: strengthen lockfile-derivation assertions and close validation coverage gaps ([305fd7c](https://github.com/camercu/blivet/commit/305fd7c))
-* test(docs): compile-check README code blocks as doctests ([fea34c7](https://github.com/camercu/blivet/commit/fea34c7))
-* test(steps): verify shared pidfile writes through the locked fd ([da2b691](https://github.com/camercu/blivet/commit/da2b691))
-* ci: add dependabot for github-actions updates ([0218116](https://github.com/camercu/blivet/commit/0218116))
-* ci: bump actions to latest majors ([f29f6cc](https://github.com/camercu/blivet/commit/f29f6cc))
-* ci: exempt dependabot commits from commitlint ([95406ce](https://github.com/camercu/blivet/commit/95406ce))
-* ci: expand dependabot to all ecosystems, fix commit prefixes ([d52e3f4](https://github.com/camercu/blivet/commit/d52e3f4))
-* ci: float cross-platform-actions on major tag ([43d5f81](https://github.com/camercu/blivet/commit/43d5f81))
-* ci: gate public API snapshot drift in CI ([2ef4642](https://github.com/camercu/blivet/commit/2ef4642))
-* ci: install a C toolchain in the OmniOS smoke VM ([98b9954](https://github.com/camercu/blivet/commit/98b9954))
-* ci: pin the nightly that renders the public API snapshot ([d26c9e9](https://github.com/camercu/blivet/commit/d26c9e9))
-* ci: re-enable OmniOS smoke test ([a29df3e](https://github.com/camercu/blivet/commit/a29df3e))
-* ci: stop dependabot bumping the rust-toolchain MSRV pin ([c927710](https://github.com/camercu/blivet/commit/c927710))
-* build(just): add ci-rtk target for token-compressed CI output ([3b26e6a](https://github.com/camercu/blivet/commit/3b26e6a))
-* build(test): run mutants under nextest with per-test kill timeout ([3971241](https://github.com/camercu/blivet/commit/3971241))
-* fix(config): name the offending path in validation error messages ([46fd868](https://github.com/camercu/blivet/commit/46fd868))
-* fix(config): name the pidfile in derived-lockfile overlap errors ([cffbee4](https://github.com/camercu/blivet/commit/cffbee4))
-* fix(coverage): run under nextest to avoid harness pipe corruption ([8dda538](https://github.com/camercu/blivet/commit/8dda538))
-* fix(docker): run doctests without --include-ignored ([6948303](https://github.com/camercu/blivet/commit/6948303))
-* fix(steps): enumerate open fds instead of brute-force close loop ([4a6ca29](https://github.com/camercu/blivet/commit/4a6ca29))
-* chore(gitignore): ignore cargo-mutants output ([1cb0a48](https://github.com/camercu/blivet/commit/1cb0a48))
-* chore(mutants): exclude equivalent bitflag mutants ([170fbf8](https://github.com/camercu/blivet/commit/170fbf8))
-* chore(mutants): exclude hang-detected and cfg-dead false positives ([38d3476](https://github.com/camercu/blivet/commit/38d3476))
-* feat(config)!: derive the lockfile from the pidfile by default ([dd2c478](https://github.com/camercu/blivet/commit/dd2c478))
-* feat(error)!: carry the conflicting path in LockConflict ([f257d4e](https://github.com/camercu/blivet/commit/f257d4e))
-* fix(lib)!: return foreground setup errors instead of exiting silently ([b285a59](https://github.com/camercu/blivet/commit/b285a59))
-* refactor: apply review findings on the lockfile-derivation change ([08299ae](https://github.com/camercu/blivet/commit/08299ae))
-* refactor(config): resolve effective lockfile once in validate() ([7507806](https://github.com/camercu/blivet/commit/7507806))
-* feat(cli): add --no-lock and delegate lockfile derivation to the library ([aff854a](https://github.com/camercu/blivet/commit/aff854a))
+* **context:** DaemonContext::chown_paths is removed. drop_privileges
+now chowns configured paths itself; use DaemonConfig::chown_paths(false)
+to opt out. Callers that called chown_paths() then drop_privileges() can
+delete the chown_paths() call.
 
-### BREAKING CHANGE
+### Features
 
-* a configured pidfile is now exclusively flock'd unless
+* **config:** add chown_paths knob (default true) ([7a81321](https://github.com/camercu/blivet/commit/7a813217c2eec54ce4c64b94b6c08f7a5e417e2c))
+* **config:** derive Hash for DaemonConfig ([7c8bfec](https://github.com/camercu/blivet/commit/7c8bfece3652e94e5600bc98ed0288f57bca6acf))
+* **context:** drop_privileges chowns configured paths first ([1a52e43](https://github.com/camercu/blivet/commit/1a52e431ca302476b6f9bb5c253d6669dcd07b47))
+* **context:** honor chown_paths(false) in drop_privileges ([d57a154](https://github.com/camercu/blivet/commit/d57a1545783e4bcb70cb430796ea3253224538bb))
+
+### Code Refactoring
+
+* **context:** make chown_paths private, fold into drop_privileges ([f293f4e](https://github.com/camercu/blivet/commit/f293f4ea0b0b3e7530cf3fb834d998cfd6aa371f))
+
+## [0.11.0](https://github.com/camercu/blivet/compare/v0.10.0...v0.11.0) (2026-07-10)
+
+### ⚠ BREAKING CHANGES
+
+* **error:** DaemonizeError::LockConflict is now a struct variant
+{ path: PathBuf } instead of LockConflict(String). Display output is
+unchanged.
+* **lib:** in foreground mode daemonize()/daemonize_unchecked()
+no longer terminate the process on setup errors; callers receive Err
+and choose how to exit.
+* **config:** a configured pidfile is now exclusively flock'd unless
 a separate lockfile() path is set or no_lockfile() is called. Deployments
 that intentionally run multiple instances sharing a pidfile path must
 call no_lockfile().
-* DaemonizeError::LockConflict is now a struct variant
-{ path: PathBuf } instead of LockConflict(String). Display output is
-unchanged.
-* in foreground mode daemonize()/daemonize_unchecked()
-no longer terminate the process on setup errors; callers receive Err
-and choose how to exit.
 
-## 0.10.0 (2026-07-04)
+### Features
 
-* docs(comments): trim two redundant comments ([5bf787c](https://github.com/camercu/blivet/commit/5bf787c))
-* docs(context): document chown_paths partial effect on error ([3ee8162](https://github.com/camercu/blivet/commit/3ee8162))
-* fix(signals): make cleanup_on_signals install all-or-nothing ([a2d77ad](https://github.com/camercu/blivet/commit/a2d77ad))
-* fix(signals): restore cleanup pointer before dispositions on rollback ([54facb9](https://github.com/camercu/blivet/commit/54facb9))
-* fix(cli)!: map exec-time EACCES to ProgramNotFound (exit 66) ([c2a6577](https://github.com/camercu/blivet/commit/c2a6577))
-* fix(cli)!: map exec-time ENOENT to ProgramNotFound (exit 66) ([ebc012d](https://github.com/camercu/blivet/commit/ebc012d))
-* test(cli): cover the non-ENOENT exec-failure branch ([b4f2d95](https://github.com/camercu/blivet/commit/b4f2d95))
-* test(traceability): raise coverage ratchet to 105 ([d5fd633](https://github.com/camercu/blivet/commit/d5fd633))
+* **cli:** add --no-lock and delegate lockfile derivation to the library ([aff854a](https://github.com/camercu/blivet/commit/aff854a5ef6c9fd7faa83734a6df0ba75ef6cbb9))
+* **config:** derive the lockfile from the pidfile by default ([dd2c478](https://github.com/camercu/blivet/commit/dd2c4784bc928110b1d55eafe1403b56ff7acc35))
+* **error:** carry the conflicting path in LockConflict ([f257d4e](https://github.com/camercu/blivet/commit/f257d4e6b6456179fa4619e8bbb03368368ef51a))
 
-### BREAKING CHANGE
+### Bug Fixes
 
-* the daemonize CLI exits 66 instead of 71 when a
+* **config:** name the offending path in validation error messages ([46fd868](https://github.com/camercu/blivet/commit/46fd8686d7ab4c51f164e0783f903157b206dfff))
+* **config:** name the pidfile in derived-lockfile overlap errors ([cffbee4](https://github.com/camercu/blivet/commit/cffbee451e314230a7267952ff9bef9ce0f55829))
+* **coverage:** run under nextest to avoid harness pipe corruption ([8dda538](https://github.com/camercu/blivet/commit/8dda538bbfe70b230afc20303f12a0c63dac7cea))
+* **docker:** run doctests without --include-ignored ([6948303](https://github.com/camercu/blivet/commit/6948303bb76b9fc736e2e760b59f3c62254b0856))
+* **lib:** return foreground setup errors instead of exiting silently ([b285a59](https://github.com/camercu/blivet/commit/b285a598c4d0674c255903be063c206194e20332))
+* **steps:** enumerate open fds instead of brute-force close loop ([4a6ca29](https://github.com/camercu/blivet/commit/4a6ca2903c364cd0a5efb9f647682e6fe188ad57))
+
+## [0.10.0](https://github.com/camercu/blivet/compare/v0.9.0...v0.10.0) (2026-07-04)
+
+### ⚠ BREAKING CHANGES
+
+* **cli:** the daemonize CLI exits 66 instead of 71 when a
 bare-name (PATH-resolved) target program exists but is not executable.
-* the daemonize CLI exits 66 instead of 71 when the
+* **cli:** the daemonize CLI exits 66 instead of 71 when the
 target program or its script interpreter does not exist at exec time.
 
-## 0.9.0 (2026-07-02)
+### Bug Fixes
 
-* build(just): cross-check FreeBSD/NetBSD/Linux targets in `just check` ([2d186f1](https://github.com/camercu/blivet/commit/2d186f1))
-* fix(steps): make clamp_max_fd portable to signed rlim_t ([fdfbf11](https://github.com/camercu/blivet/commit/fdfbf11))
-* fix(steps): saturate fd-close bound instead of wrapping to i32 ([6c0aa86](https://github.com/camercu/blivet/commit/6c0aa86))
-* docs: fix three stale comments ([7e20c1f](https://github.com/camercu/blivet/commit/7e20c1f))
-* docs: point pidfile-cleanup docs at cleanup_on_term_signals ([83a1098](https://github.com/camercu/blivet/commit/83a1098))
-* docs(config): correct validate() error listing ([191d49b](https://github.com/camercu/blivet/commit/191d49b))
-* docs(lib): reattach daemonize rustdoc lost to a private helper ([26da3e8](https://github.com/camercu/blivet/commit/26da3e8))
-* docs(unsafe): add the CLI's unsafe blocks to the containment inventory ([2d0af53](https://github.com/camercu/blivet/commit/2d0af53))
-* test(traceability): raise coverage ratchet to 103 ([3c6125d](https://github.com/camercu/blivet/commit/3c6125d))
-* fix(signals)!: preserve caller's SIGPIPE disposition across daemonize ([e35e04b](https://github.com/camercu/blivet/commit/e35e04b))
-* chore(deps): bump semantic-release to 25 for security fixes ([7767b37](https://github.com/camercu/blivet/commit/7767b37))
+* **cli:** map exec-time EACCES to ProgramNotFound (exit 66) ([c2a6577](https://github.com/camercu/blivet/commit/c2a65775cecf62dac1a9ae0526127d35870fd3eb))
+* **cli:** map exec-time ENOENT to ProgramNotFound (exit 66) ([ebc012d](https://github.com/camercu/blivet/commit/ebc012d7fc392257e30b725bcfc1604d3c716806))
+* **signals:** make cleanup_on_signals install all-or-nothing ([a2d77ad](https://github.com/camercu/blivet/commit/a2d77ad8f64abee0f79878aef30cea2906f59701))
+* **signals:** restore cleanup pointer before dispositions on rollback ([54facb9](https://github.com/camercu/blivet/commit/54facb97e870c57bcc9e273c7a0c42dc040fc8b9))
 
-### BREAKING CHANGE
+## [0.9.0](https://github.com/camercu/blivet/compare/v0.8.0...v0.9.0) (2026-07-02)
 
-* after daemonize()/daemonize_unchecked(), SIGPIPE keeps
+### ⚠ BREAKING CHANGES
+
+* **signals:** after daemonize()/daemonize_unchecked(), SIGPIPE keeps
 the disposition it had at entry (for Rust programs: ignored) instead of
 being reset to SIG_DFL. Callers that relied on daemonize() installing
 default SIGPIPE must set it themselves.
+
+### Bug Fixes
+
+* **signals:** preserve caller's SIGPIPE disposition across daemonize ([e35e04b](https://github.com/camercu/blivet/commit/e35e04bb54e360960356e7c2f239c074ca16e2f6))
+* **steps:** make clamp_max_fd portable to signed rlim_t ([fdfbf11](https://github.com/camercu/blivet/commit/fdfbf11570549b6a7596d2557e5b1f2fcb7c3ff0))
+* **steps:** saturate fd-close bound instead of wrapping to i32 ([6c0aa86](https://github.com/camercu/blivet/commit/6c0aa86419558b4884387a3d8e52777412e0998d))
 
 ## [0.8.0](https://github.com/camercu/blivet/compare/v0.7.0...v0.8.0) (2026-06-23)
 
