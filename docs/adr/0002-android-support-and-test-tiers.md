@@ -101,6 +101,10 @@ or flaky in practice; it trades the real kernel for far less plumbing.
   which stats the real path. Android and Termux have no `/tmp`, so those tests
   would fail for a reason unrelated to what they assert. A shared temp-directory
   helper replaces the literals.
+- The floor is API level 24 (Android 7.0). Group lookup goes through
+  `getgrnam_r`, which bionic added at 24, so the binary does not link below it.
+  The emulator job builds with `cargo ndk -P 24` so the floor is what CI links
+  against; its first hosted run, at cargo-ndk's lower default, failed to link.
 - `getpwnam`/`getgrnam` resolve differently on bionic (built-in AID table, no
   `/etc/passwd`). The identity tests move from assumption to evidence by
   running in tiers 2 and 3.
