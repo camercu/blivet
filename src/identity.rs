@@ -141,10 +141,12 @@ mod tests {
         // its answer — that is the requirement, and it is testable on every
         // platform. A test that simply expected rejection passed everywhere the
         // library is developed and failed on the bionic tier.
+        //
+        // The database may also answer with an error rather than an entry or
+        // none: the Android emulator does for this id. An id it cannot look up
+        // cannot be honoured either, so that counts as unknown.
         const UID: u32 = 4_242_424;
-        let known = User::from_uid(Uid::from_raw(UID))
-            .expect("the passwd database answers")
-            .is_some();
+        let known = matches!(User::from_uid(Uid::from_raw(UID)), Ok(Some(_)));
 
         match (known, resolve_user(&UID.to_string())) {
             (true, Ok(user)) => assert_eq!(
