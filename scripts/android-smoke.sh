@@ -44,9 +44,10 @@ adb push "${TEST_BIN}" "${DEVICE_DIR}/blivet-tests" >/dev/null
 adb shell chmod 755 "${DEVICE_DIR}/daemonize" "${DEVICE_DIR}/blivet-tests"
 adb shell rm -f "${PIDFILE}"
 
-# `tail -f /dev/null` runs until killed, so the check below cannot race the
-# daemon's own exit.
-adb shell "${DEVICE_DIR}/daemonize" -p "${PIDFILE}" -- tail -f /dev/null
+# Runs far longer than the check below, which kills it, so the check cannot
+# race its exit; bounded, so a run that dies before the kill does not leave it
+# on the device for good.
+adb shell "${DEVICE_DIR}/daemonize" -p "${PIDFILE}" -- sleep 600
 
 # The parent exits only once the daemon has exec'd, and the daemon writes the
 # pidfile before that, so the file is already there.
