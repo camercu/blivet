@@ -335,7 +335,7 @@ are lowercase with no trailing punctuation.
 | `ForkFailed`       | `fork()` returns an error                               |
 | `SetsidFailed`     | `setsid()` returns an error                             |
 | `ChdirFailed`      | `chdir()` fails at runtime after fork                   |
-| `SystemError`      | A system call with no more specific variant fails: creating the notification pipe, opening `/dev/null`, `sigaction`, `sigprocmask`, `getrlimit` |
+| `SystemError`      | A system call with no more specific variant fails: creating the notification pipe, opening `/dev/null` or `dup2` onto it, `sigaction`, `sigprocmask`, `getrlimit` |
 | `PermissionDenied` | Non-root caller with user/group switch, or setuid/setgid/chown fail |
 | `PidfileError`     | Pidfile cannot be written                               |
 | `OutputFileError`  | stdout/stderr file cannot be opened, truncated or dup2'd, or, in foreground mode, fd 1/2 cannot be saved first |
