@@ -199,7 +199,11 @@ pub(crate) mod null_forker {
                     "notification pipe: injected failure".into(),
                 )),
                 Pipe::Real | Pipe::RealKeepingReader => {
-                    let (rd, wr) = nix::unistd::pipe().expect("failed to create test pipe");
+                    // RealForker's pipe, close-on-exec: a subprocess a
+                    // parallel test spawns must not hold the write end open.
+                    let (rd, wr) = RealForker
+                        .create_notification_pipe()
+                        .expect("failed to create test pipe");
                     if matches!(self.pipe, Pipe::RealKeepingReader) {
                         self.pipe_reader =
                             Some(rd.try_clone().expect("failed to dup test read end"));
