@@ -1001,8 +1001,7 @@ mod tests {
     }
 
     /// Step 12 saves fd 1 only where a failure could be seen: a daemon child
-    /// that inherited descriptors up to its limit still starts, and step 13
-    /// closes them later.
+    /// that inherited descriptors up to its limit still gets past it.
     #[test]
     #[ignore]
     fn daemon_redirect_starts_with_no_descriptor_free_to_save_stdout_subprocess() {
