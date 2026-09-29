@@ -950,32 +950,18 @@ mod tests {
         );
     }
 
-    // Covers: R95
+    // Covers: R148
     #[test]
-    fn daemonize_with_no_descriptor_free_for_the_pipe_returns_err() {
-        run_in_subprocess(
-            "tests::daemonize_with_no_descriptor_free_for_the_pipe_returns_err_subprocess",
-        );
-    }
-
-    /// The notification pipe is made in the caller's process before the first
-    /// fork, so a caller whose descriptor table is full gets an error back,
-    /// not a panic.
-    #[test]
-    #[ignore]
-    #[allow(unsafe_code)]
-    fn daemonize_with_no_descriptor_free_for_the_pipe_returns_err_subprocess() {
-        if !is_subprocess() {
-            return;
-        }
+    fn notification_pipe_failure_returns_err_before_any_fork() {
         let config = DaemonConfig::new();
-        let held = crate::test_support::fill_fd_table(0);
+        // No fork is scripted, so a fork panics.
+        let mut forker = NullForker::new(vec![], Ok(())).with_failing_pipe();
 
-        // SAFETY: the pipe fails before any fork, so no fork happens here.
-        let result = catch_unwind(|| unsafe { daemonize_unchecked(&config) });
-        drop(held);
+        let result = catch_unwind(std::panic::AssertUnwindSafe(|| {
+            run_inner(&config, &mut forker)
+        }));
 
-        let result = result.expect("a full descriptor table must not panic");
+        let result = result.expect("a pipe failure must return, not fork or exit");
         assert!(
             matches!(result, Err(DaemonizeError::SystemError(_))),
             "{result:?}"

@@ -1519,3 +1519,6 @@ verification points.
   descriptor free. A stream file it created stays, empty. The one
   truncation it cannot undo is stdout's, when truncating stderr then
   fails with an I/O error.
+- R148. Failure to create the notification pipe — no descriptor free,
+  say — returns `SystemError` to the caller before any fork; it does
+  not panic.
