@@ -167,6 +167,20 @@ impl Drop for Daemon {
     }
 }
 
+/// A child the test spawned, killed and reaped when this is dropped, so a
+/// failed assertion does not leave it running.
+///
+/// Safe where [`Daemon`] needs care: `Child` knows once it has been reaped,
+/// and then `kill` sends no signal, so a reused PID is never hit.
+pub struct KillOnDrop(pub std::process::Child);
+
+impl Drop for KillOnDrop {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
 /// Wait for a long-running daemon's pidfile, and hold the daemon it names.
 pub fn wait_for_daemon(pidfile: &Path) -> Option<Daemon> {
     wait_for_pidfile(pidfile).map(|pid| Daemon { pid })

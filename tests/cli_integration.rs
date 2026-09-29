@@ -739,14 +739,16 @@ fn parent_waits_for_exec_before_exiting() {
     let pidfile = dir.path().join("daemon.pid");
     nix::unistd::mkfifo(&fifo, nix::sys::stat::Mode::S_IRWXU).unwrap();
 
-    let mut parent = daemonize_cmd()
-        .args(["-p", pidfile.to_str().unwrap()])
-        .args(["-o", fifo.to_str().unwrap(), "--", "true"])
-        .stdout(std::process::Stdio::null())
-        .spawn()
-        .unwrap();
+    let mut parent = KillOnDrop(
+        daemonize_cmd()
+            .args(["-p", pidfile.to_str().unwrap()])
+            .args(["-o", fifo.to_str().unwrap(), "--", "true"])
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
     let reached = wait_for_pidfile(&pidfile);
-    let while_held = parent.try_wait().unwrap();
+    let while_held = parent.0.try_wait().unwrap();
 
     // Release the daemon: with a reader present its open returns, it execs
     // `true`, and the exec closes the notification pipe the parent waits on.
@@ -758,7 +760,7 @@ fn parent_waits_for_exec_before_exiting() {
         .custom_flags(libc::O_NONBLOCK)
         .open(&fifo)
         .unwrap();
-    let status = wait_for_child(&mut parent);
+    let status = wait_for_child(&mut parent.0);
     drop(reader);
 
     reached.expect("the daemon should reach step 8");
