@@ -746,7 +746,7 @@ mod tests {
         // The intermediate child's write-end copy must also close without
         // writing: the grandchild daemon is the sole writer on the pipe.
         let config = DaemonConfig::new();
-        let mut forker = NullForker::second_parent().keeping_pipe_reader();
+        let mut forker = NullForker::second_parent();
         let result = catch_unwind(std::panic::AssertUnwindSafe(|| {
             run_inner(&config, &mut forker)
         }));
@@ -790,7 +790,7 @@ mod tests {
         // the pipe, whose only reader is this same process. A plain drop would
         // fire the NotifyPipe Drop safety net into it.
         let config = DaemonConfig::new();
-        let mut forker = NullForker::first_fork_fails().keeping_pipe_reader();
+        let mut forker = NullForker::first_fork_fails();
         let result = run_inner(&config, &mut forker);
         assert!(matches!(result, Err(DaemonizeError::ForkFailed(_))));
 
