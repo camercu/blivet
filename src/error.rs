@@ -59,11 +59,11 @@ pub enum DaemonizeError {
     #[error("chdir failed: {0}")]
     ChdirFailed(String),
 
-    /// A required system call failed: creating the notification pipe before
-    /// the first fork, or, after it, opening `/dev/null`, `sigaction`
-    /// (resetting signal dispositions), `sigprocmask` (clearing the signal
-    /// mask), or `getrlimit` (querying the fd limit before closing inherited
-    /// descriptors).
+    /// A required system call with no more specific variant failed: creating
+    /// the notification pipe, opening `/dev/null` or `dup2` onto it,
+    /// `sigaction` (resetting signal dispositions), `sigprocmask` (clearing the
+    /// signal mask), or `getrlimit` (querying the fd limit before closing
+    /// inherited descriptors).
     #[error("system error: {0}")]
     SystemError(String),
 
