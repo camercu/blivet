@@ -850,11 +850,15 @@ mod tests {
     // Covers: R31
     #[test]
     fn validate_pidfile_not_directory() {
+        // A directory inside the temp dir, not the temp dir itself: `/tmp`'s
+        // parent `/` is not writable to a non-root user, and that check runs
+        // first, so the test would pass without reaching the one it names.
+        let dir = tempfile::tempdir_in(crate::test_support::tmp_dir()).unwrap();
         let mut config = DaemonConfig::new();
-        config.pidfile(crate::test_support::tmp_dir());
+        config.pidfile(dir.path());
         assert!(matches!(
             config.validate(),
-            Err(DaemonizeError::ValidationError(_))
+            Err(DaemonizeError::ValidationError(m)) if m.contains("is a directory")
         ));
     }
 
