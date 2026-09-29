@@ -396,7 +396,10 @@ pub(crate) unsafe fn daemonize_inner(
 ) -> Result<DaemonContext, DaemonizeError> {
     let foreground = config.foreground;
 
-    // Steps 1–3: Fork sequence (skipped in foreground mode)
+    // Steps 1–3: Fork sequence (skipped in foreground mode). `None` here
+    // means foreground. A Caller/Parent enum was weighed and declined: stdio
+    // steps still need `foreground`, and the context's Option also means
+    // "already notified", so it would add a type and remove one check.
     let mut pipe_wr = if foreground {
         None
     } else {
