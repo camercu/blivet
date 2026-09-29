@@ -232,15 +232,10 @@ fn lockfile_exclusion_second_instance_fails() {
     let _daemon = wait_for_daemon(&pidfile).expect("pidfile should appear");
 
     // Second instance with same lockfile should fail
+    // Expected to fail, so it runs `true`: a wrong start then exits by itself
+    // rather than leaving a daemon nothing will stop.
     let output2 = daemonize_cmd()
-        .args([
-            "-l",
-            lockfile.to_str().unwrap(),
-            "--",
-            "tail",
-            "-f",
-            "/dev/null",
-        ])
+        .args(["-l", lockfile.to_str().unwrap(), "--", "true"])
         .output()
         .unwrap();
 
@@ -284,9 +279,7 @@ fn output_path_that_is_a_directory_is_rejected_before_anything_happens() {
             "-o",
             outdir.to_str().unwrap(),
             "--",
-            "tail",
-            "-f",
-            "/dev/null",
+            "true",
         ])
         .output()
         .unwrap();
@@ -1213,15 +1206,10 @@ fn pidfile_without_lockfile_enforces_single_instance() {
     let _daemon = wait_for_daemon(&pidfile).expect("pidfile should appear");
 
     // Second instance with same pidfile should fail (lockfile defaulted to pidfile)
+    // Expected to fail, so it runs `true`: a wrong start then exits by itself
+    // rather than leaving a daemon nothing will stop.
     let output2 = daemonize_cmd()
-        .args([
-            "-p",
-            pidfile.to_str().unwrap(),
-            "--",
-            "tail",
-            "-f",
-            "/dev/null",
-        ])
+        .args(["-p", pidfile.to_str().unwrap(), "--", "true"])
         .output()
         .unwrap();
     assert_eq!(
