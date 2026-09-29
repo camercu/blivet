@@ -404,7 +404,7 @@ pub(crate) unsafe fn daemonize_inner(
         // Made in the caller's process, before any fork, so a failure
         // returns to the caller.
         let (pipe_rd, pipe_wr) = forker.create_notification_pipe()?;
-        let mut pipe_wr = Some(NotifyPipe::new(pipe_wr));
+        let pipe_wr = NotifyPipe::new(pipe_wr);
 
         // SAFETY: daemonize_unchecked() is unsafe and requires the caller to
         // ensure the process is single-threaded. The checked daemonize()
@@ -418,9 +418,7 @@ pub(crate) unsafe fn daemonize_inner(
                 // directly, so close the write end silently rather than let
                 // the NotifyPipe Drop safety net write into a pipe whose only
                 // reader is this same process.
-                if let Some(pipe) = pipe_wr {
-                    pipe.close();
-                }
+                pipe_wr.close();
                 return Err(e);
             }
         };
@@ -429,9 +427,7 @@ pub(crate) unsafe fn daemonize_inner(
                 // Parent: close the write end *silently* (it only reads) then
                 // read and exit. A plain drop would trip the NotifyPipe Drop
                 // safety net and make the parent read its own failure bytes.
-                if let Some(pipe) = pipe_wr {
-                    pipe.close();
-                }
+                pipe_wr.close();
                 parent_pipe_reader(pipe_rd, forker);
             }
             ForkResult::Child => {
@@ -439,6 +435,8 @@ pub(crate) unsafe fn daemonize_inner(
                 drop(pipe_rd);
             }
         }
+
+        let mut pipe_wr = Some(pipe_wr);
 
         // Step 2: setsid
         if let Err(e) = forker.setsid() {
