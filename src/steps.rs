@@ -424,10 +424,10 @@ fn truncate(stream: &OpenStream) -> Result<(), DaemonizeError> {
 /// (R146). stdout is on fd 1 before stderr is opened, so a stderr of
 /// `/dev/stdout` names the stdout file and shares its descriptor.
 ///
-/// A failure changes nothing (R147). Each stdio slot is saved before it moves
-/// and put back if anything after fails; the truncations, which cannot be
-/// undone, come last. The one exception is an I/O error truncating stderr
-/// after stdout's truncation succeeded.
+/// A failure undoes what this did (R147). Each stdio slot is saved before it
+/// moves and put back if anything after fails; the truncations, which cannot be
+/// undone, come last. A stream file it created stays, empty, and an I/O error
+/// truncating stderr after stdout's truncation succeeded leaves stdout emptied.
 pub(crate) fn redirect_output(
     stdout: Option<&Path>,
     stderr: Option<&Path>,
