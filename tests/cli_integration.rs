@@ -381,13 +381,12 @@ fn verbose_mode_prints_diagnostics() {
         "daemonize should succeed, stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
+    let _daemon = wait_for_daemon(&pidfile).expect("pidfile should appear");
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         stderr.contains("daemonize:"),
         "verbose mode should print diagnostics, got: {stderr}"
     );
-
-    let _daemon = wait_for_daemon(&pidfile).expect("pidfile should appear");
 }
 
 // Covers: R53
@@ -412,13 +411,12 @@ fn no_verbose_no_diagnostics() {
         "daemonize should succeed, stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
+    let _daemon = wait_for_daemon(&pidfile).expect("pidfile should appear");
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         stderr.is_empty(),
         "without -v should have no stderr, got: {stderr}"
     );
-
-    let _daemon = wait_for_daemon(&pidfile).expect("pidfile should appear");
 }
 
 // Covers: R24, R25
