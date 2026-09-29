@@ -506,7 +506,8 @@ impl StdioSlot {
 }
 
 /// Moves `source` onto stdio slot `target`, saved in `moved` when `rollback`
-/// asks for it.
+/// asks for it. The choice lives here, not in [`SavedSlot`], so a
+/// `SavedSlot` always holds what it saved.
 fn move_slot(
     source: &OwnedFd,
     target: StdioSlot,
