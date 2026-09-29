@@ -144,12 +144,12 @@ const TERM_GRACE: Duration = Duration::from_secs(2);
 
 /// How long a test's long-running daemon runs, in seconds: `sleep` this long.
 ///
-/// Longer than any test can live, so a daemon always outlasts the test that
-/// checks it — nextest kills a test at 4x30s on the gate and privileged
-/// profiles (.config/nextest.toml); raise this if those bounds pass it. Bounded
-/// all the same, so a daemon whose test was killed before [`Daemon`] could stop
-/// it — a nextest timeout, a Ctrl-C, a cancelled CI job — exits by itself
-/// rather than running forever.
+/// Longer than the gate and privileged nextest profiles let a test run (they
+/// kill it at 4x30s, .config/nextest.toml), so a daemon outlasts the test that
+/// checks it there; raise this if those bounds pass it. Bounded all the same,
+/// so a daemon whose test was killed before [`Daemon`] could stop it — a
+/// nextest timeout, a Ctrl-C, a cancelled CI job — exits by itself rather than
+/// running forever.
 pub const DAEMON_LIFETIME: &str = "600";
 
 /// A daemon that runs until it is stopped, stopped when this is dropped.
