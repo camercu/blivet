@@ -17,10 +17,9 @@ use crate::unsafe_ops;
 /// syscalls; `NullForker` (test-only) provides configurable results.
 #[allow(unsafe_code)]
 pub(crate) trait Forker {
-    /// Makes the pipe the daemon reports its start through: `(read, write)`,
-    /// or `None` to run without one. Runs in the caller's process, so a
-    /// failure is an error for the caller.
-    fn create_notification_pipe(&mut self) -> Result<Option<(OwnedFd, OwnedFd)>, DaemonizeError>;
+    /// Makes the pipe the daemon reports its start through: `(read, write)`.
+    /// Runs in the caller's process, so a failure is an error for the caller.
+    fn create_notification_pipe(&mut self) -> Result<(OwnedFd, OwnedFd), DaemonizeError>;
     /// # Safety
     ///
     /// Calling `fork()` in a multithreaded process is undefined behavior.
@@ -35,7 +34,7 @@ pub(crate) struct RealForker;
 
 #[allow(unsafe_code)]
 impl Forker for RealForker {
-    fn create_notification_pipe(&mut self) -> Result<Option<(OwnedFd, OwnedFd)>, DaemonizeError> {
+    fn create_notification_pipe(&mut self) -> Result<(OwnedFd, OwnedFd), DaemonizeError> {
         use nix::fcntl::{fcntl, FcntlArg, FdFlag};
 
         let failed = |e| DaemonizeError::SystemError(format!("notification pipe: {e}"));
@@ -46,7 +45,7 @@ impl Forker for RealForker {
         for end in [&rd, &wr] {
             fcntl(end.as_fd(), FcntlArg::F_SETFD(FdFlag::FD_CLOEXEC)).map_err(failed)?;
         }
-        Ok(Some((rd, wr)))
+        Ok((rd, wr))
     }
 
     unsafe fn fork(&mut self) -> Result<ForkResult, DaemonizeError> {
@@ -84,9 +83,7 @@ pub(crate) mod null_forker {
     /// What [`NullForker`]'s
     /// [`create_notification_pipe`](Forker::create_notification_pipe) does.
     enum Pipe {
-        /// Returns `None`; the parent branch exits without reading.
-        Absent,
-        /// Returns a real pipe.
+        /// Returns a real pipe, and keeps a copy of its read end.
         Real,
         /// Fails, as a full descriptor table does.
         Fails,
@@ -100,17 +97,9 @@ pub(crate) mod null_forker {
             Self {
                 fork_results: fork_results.into(),
                 setsid_result: Some(setsid_result),
-                pipe: Pipe::Absent,
+                pipe: Pipe::Real,
                 pipe_reader: None,
             }
-        }
-
-        /// Make [`create_notification_pipe`](Forker::create_notification_pipe)
-        /// return a real pipe instead of `None`, so a test can observe what
-        /// the fork sequence writes — or must not write — on the wire.
-        pub(crate) fn with_pipe(mut self) -> Self {
-            self.pipe = Pipe::Real;
-            self
         }
 
         /// Make [`create_notification_pipe`](Forker::create_notification_pipe)
@@ -120,8 +109,9 @@ pub(crate) mod null_forker {
             self
         }
 
-        /// Take the test-side duplicate of the pipe's read end (created by
-        /// [`with_pipe`](Self::with_pipe)). `daemonize_inner` drops its own
+        /// Take the test-side duplicate of the pipe's read end, so a test can
+        /// observe what the fork sequence writes — or must not write — on the
+        /// wire. `daemonize_inner` drops its own
         /// read-end copy in the child branch; this duplicate lets the test
         /// read what reached the pipe afterwards.
         pub(crate) fn take_pipe_reader(&mut self) -> Option<OwnedFd> {
@@ -186,18 +176,15 @@ pub(crate) mod null_forker {
 
     #[allow(unsafe_code)]
     impl Forker for NullForker {
-        fn create_notification_pipe(
-            &mut self,
-        ) -> Result<Option<(OwnedFd, OwnedFd)>, DaemonizeError> {
+        fn create_notification_pipe(&mut self) -> Result<(OwnedFd, OwnedFd), DaemonizeError> {
             match self.pipe {
-                Pipe::Absent => Ok(None),
                 Pipe::Fails => Err(DaemonizeError::SystemError(
                     "notification pipe: injected failure".into(),
                 )),
                 Pipe::Real => {
                     let (rd, wr) = nix::unistd::pipe().expect("failed to create test pipe");
                     self.pipe_reader = Some(rd.try_clone().expect("failed to dup test read end"));
-                    Ok(Some((rd, wr)))
+                    Ok((rd, wr))
                 }
             }
         }
@@ -281,8 +268,7 @@ mod tests {
     fn notification_pipe_ends_have_cloexec() {
         let (rd, wr) = RealForker
             .create_notification_pipe()
-            .expect("RealForker creates a pipe")
-            .expect("RealForker always returns a pipe");
+            .expect("RealForker creates a pipe");
         for fd in [rd.as_fd(), wr.as_fd()] {
             let flags = fcntl(fd, FcntlArg::F_GETFD).expect("F_GETFD");
             assert!(

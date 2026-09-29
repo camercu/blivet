@@ -403,11 +403,8 @@ pub(crate) unsafe fn daemonize_inner(
         // Step 1: Create notification pipe and first fork
         // Made in the caller's process, before any fork, so a failure
         // returns to the caller.
-        let pipe = forker.create_notification_pipe()?;
-        let (pipe_rd, mut pipe_wr) = match pipe {
-            Some((rd, wr)) => (Some(rd), Some(NotifyPipe::new(wr))),
-            None => (None, None),
-        };
+        let (pipe_rd, pipe_wr) = forker.create_notification_pipe()?;
+        let mut pipe_wr = Some(NotifyPipe::new(pipe_wr));
 
         // SAFETY: daemonize_unchecked() is unsafe and requires the caller to
         // ensure the process is single-threaded. The checked daemonize()
@@ -435,11 +432,7 @@ pub(crate) unsafe fn daemonize_inner(
                 if let Some(pipe) = pipe_wr {
                     pipe.close();
                 }
-                if let Some(rd) = pipe_rd {
-                    parent_pipe_reader(rd, forker);
-                }
-                // If no pipe (NullForker), just exit
-                forker.exit(0);
+                parent_pipe_reader(pipe_rd, forker);
             }
             ForkResult::Child => {
                 // Child: close read end, continue
@@ -733,7 +726,7 @@ mod tests {
         // read its own bytes and report a failure for a healthy start. With the
         // write end closed silently, the reader sees EOF -> success -> exit(0).
         let config = DaemonConfig::new();
-        let mut forker = NullForker::first_parent().with_pipe();
+        let mut forker = NullForker::first_parent();
         let result = catch_unwind(std::panic::AssertUnwindSafe(|| {
             run_inner(&config, &mut forker)
         }));
@@ -755,7 +748,7 @@ mod tests {
         // The intermediate child's write-end copy must also close without
         // writing: the grandchild daemon is the sole writer on the pipe.
         let config = DaemonConfig::new();
-        let mut forker = NullForker::second_parent().with_pipe();
+        let mut forker = NullForker::second_parent();
         let result = catch_unwind(std::panic::AssertUnwindSafe(|| {
             run_inner(&config, &mut forker)
         }));
@@ -763,7 +756,7 @@ mod tests {
 
         let rd = forker
             .take_pipe_reader()
-            .expect("with_pipe stores a reader for the test");
+            .expect("NullForker stores a reader for the test");
         let mut buf = Vec::new();
         std::fs::File::from(rd).read_to_end(&mut buf).unwrap();
         assert_eq!(
@@ -799,13 +792,13 @@ mod tests {
         // the pipe, whose only reader is this same process. A plain drop would
         // fire the NotifyPipe Drop safety net into it.
         let config = DaemonConfig::new();
-        let mut forker = NullForker::first_fork_fails().with_pipe();
+        let mut forker = NullForker::first_fork_fails();
         let result = run_inner(&config, &mut forker);
         assert!(matches!(result, Err(DaemonizeError::ForkFailed(_))));
 
         let rd = forker
             .take_pipe_reader()
-            .expect("with_pipe stores a reader");
+            .expect("NullForker stores a reader");
         let mut buf = Vec::new();
         std::fs::File::from(rd).read_to_end(&mut buf).unwrap();
         assert_eq!(
@@ -1032,10 +1025,12 @@ mod tests {
         config.close_fds(false).stdout(&log);
         let mut forker = NullForker::both_child();
 
-        // Fill every descriptor under a small limit, then free one: step 6
+        // Fill every descriptor under a small limit, then free three. The
+        // notification pipe takes them: both ends and the NullForker's copy of
+        // the read end. The child drops its read end, freeing one; step 6
         // borrows it for /dev/null and gives it back, and the stdout file then
         // takes it, so saving fd 1 would find none.
-        let held = crate::test_support::fill_fd_table(1);
+        let held = crate::test_support::fill_fd_table(3);
 
         let result = catch_unwind(std::panic::AssertUnwindSafe(|| {
             run_inner(&config, &mut forker)
