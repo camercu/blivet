@@ -722,8 +722,10 @@ them.
    and no comparison of spellings sees every way two names reach one
    file — a symlink whose target does not exist yet, a case-insensitive
    filesystem, a hard link. This is where the files themselves are
-   compared. Then save fd 1 (foreground mode) and `dup2` stdout onto
-   it.
+   compared. By then step 8 has written the PID, so a refused stream
+   that is the pidfile already holds the new PID; the file is the
+   pidfile, so that is what it should hold. Then save fd 1 (foreground
+   mode) and `dup2` stdout onto it.
 2. Open and compare stderr the same way. Because stdout is already on
    fd 1, a stderr of `/dev/stdout` names the stdout file. A stderr that
    is the stdout file takes fd 1's descriptor, so the two share one
