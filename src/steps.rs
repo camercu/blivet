@@ -1432,7 +1432,6 @@ mod tests {
     #[test]
     #[ignore]
     fn execute_redirect_that_cannot_save_stdout_changes_nothing_subprocess() {
-        use nix::sys::resource::{getrlimit, setrlimit, Resource};
         use nix::sys::stat::fstat;
 
         if !is_subprocess() {
@@ -1445,13 +1444,7 @@ mod tests {
 
         // Fill every descriptor under a small limit, then free one: the stdout
         // file takes it, and saving fd 1 finds none.
-        let (_, hard) = getrlimit(Resource::RLIMIT_NOFILE).unwrap();
-        setrlimit(Resource::RLIMIT_NOFILE, 64, hard).unwrap();
-        let mut held = Vec::new();
-        while let Ok(fd) = std::io::stdin().as_fd().try_clone_to_owned() {
-            held.push(fd);
-        }
-        held.pop();
+        let held = crate::test_support::fill_fd_table(1);
 
         let result = redirect_output(Some(&log), None, false, &[], Rollback::PutBack);
         drop(held);

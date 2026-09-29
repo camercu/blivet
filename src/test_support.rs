@@ -141,3 +141,30 @@ pub(crate) fn subprocess_report(test_name: &str, output: &Output) -> String {
 pub(crate) fn tmp_dir() -> std::path::PathBuf {
     std::env::temp_dir()
 }
+
+/// Fills the descriptor table under a lowered `RLIMIT_NOFILE`, then frees
+/// `free` of the descriptors that fill it. Returns the rest; dropping them
+/// frees them too.
+///
+/// Subprocess tests only: the lowered limit stays for the process.
+pub(crate) fn fill_fd_table(free: usize) -> Vec<std::os::fd::OwnedFd> {
+    use nix::sys::resource::{getrlimit, setrlimit, Resource};
+    use std::os::fd::AsFd;
+
+    let (_, hard) = getrlimit(Resource::RLIMIT_NOFILE).unwrap();
+    setrlimit(Resource::RLIMIT_NOFILE, hard.min(64), hard).unwrap();
+    let mut held = Vec::new();
+    let full = loop {
+        match std::io::stdin().as_fd().try_clone_to_owned() {
+            Ok(fd) => held.push(fd),
+            Err(e) => break e,
+        }
+    };
+    assert_eq!(
+        full.raw_os_error(),
+        Some(libc::EMFILE),
+        "the fd table did not fill: {full}"
+    );
+    held.truncate(held.len() - free);
+    held
+}
