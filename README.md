@@ -231,7 +231,8 @@ a `compile_error!` naming the target, not a wall of type errors.
 
 Android is supported from API level 24 (Android 7.0): group lookup links
 `getgrnam_r`, which bionic added then, so a build for an older API level fails
-to link. One behaviour differs: bionic rejects `AT_EACCESS`, so the pre-fork
+to link. CI links at 24 and runs on an API 34 emulator; levels in between are
+not run. One behaviour differs: bionic rejects `AT_EACCESS`, so the pre-fork
 writability check there answers for the real UID rather than the effective one.
 
 Android is also the one Supported platform whose "real OS" is split across two
