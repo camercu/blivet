@@ -77,8 +77,19 @@ pub(crate) mod null_forker {
     pub(crate) struct NullForker {
         fork_results: VecDeque<Result<ForkResult, DaemonizeError>>,
         setsid_result: Option<Result<(), DaemonizeError>>,
-        use_pipe: bool,
+        pipe: Pipe,
         pipe_reader: Option<OwnedFd>,
+    }
+
+    /// What [`NullForker`]'s
+    /// [`create_notification_pipe`](Forker::create_notification_pipe) does.
+    enum Pipe {
+        /// Returns `None`; the parent branch exits without reading.
+        Absent,
+        /// Returns a real pipe.
+        Real,
+        /// Fails, as a full descriptor table does.
+        Fails,
     }
 
     impl NullForker {
@@ -89,7 +100,7 @@ pub(crate) mod null_forker {
             Self {
                 fork_results: fork_results.into(),
                 setsid_result: Some(setsid_result),
-                use_pipe: false,
+                pipe: Pipe::Absent,
                 pipe_reader: None,
             }
         }
@@ -98,7 +109,14 @@ pub(crate) mod null_forker {
         /// return a real pipe instead of `None`, so a test can observe what
         /// the fork sequence writes — or must not write — on the wire.
         pub(crate) fn with_pipe(mut self) -> Self {
-            self.use_pipe = true;
+            self.pipe = Pipe::Real;
+            self
+        }
+
+        /// Make [`create_notification_pipe`](Forker::create_notification_pipe)
+        /// fail.
+        pub(crate) fn with_failing_pipe(mut self) -> Self {
+            self.pipe = Pipe::Fails;
             self
         }
 
@@ -171,13 +189,17 @@ pub(crate) mod null_forker {
         fn create_notification_pipe(
             &mut self,
         ) -> Result<Option<(OwnedFd, OwnedFd)>, DaemonizeError> {
-            if !self.use_pipe {
-                // Default: skip the pipe; the parent branch exits immediately.
-                return Ok(None);
+            match self.pipe {
+                Pipe::Absent => Ok(None),
+                Pipe::Fails => Err(DaemonizeError::SystemError(
+                    "notification pipe: injected failure".into(),
+                )),
+                Pipe::Real => {
+                    let (rd, wr) = nix::unistd::pipe().expect("failed to create test pipe");
+                    self.pipe_reader = Some(rd.try_clone().expect("failed to dup test read end"));
+                    Ok(Some((rd, wr)))
+                }
             }
-            let (rd, wr) = nix::unistd::pipe().expect("failed to create test pipe");
-            self.pipe_reader = Some(rd.try_clone().expect("failed to dup test read end"));
-            Ok(Some((rd, wr)))
         }
 
         unsafe fn fork(&mut self) -> Result<ForkResult, DaemonizeError> {
@@ -225,6 +247,31 @@ mod tests {
             output.status.success(),
             "{}",
             crate::test_support::subprocess_report(NAME, &output)
+        );
+    }
+
+    // Covers: R148
+    #[test]
+    fn notification_pipe_with_no_descriptor_free_is_an_error() {
+        crate::test_support::run_in_subprocess(
+            "forker::tests::notification_pipe_with_no_descriptor_free_is_an_error_subprocess",
+        );
+    }
+
+    #[test]
+    #[ignore]
+    fn notification_pipe_with_no_descriptor_free_is_an_error_subprocess() {
+        if !crate::test_support::is_subprocess() {
+            return;
+        }
+        let held = crate::test_support::fill_fd_table(0);
+
+        let result = RealForker.create_notification_pipe();
+        drop(held);
+
+        assert!(
+            matches!(result, Err(DaemonizeError::SystemError(_))),
+            "{result:?}"
         );
     }
 
