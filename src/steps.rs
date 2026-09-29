@@ -356,16 +356,6 @@ pub(crate) fn plan_output_redirect(
     })
 }
 
-/// Duplicate `source` onto a stdio target fd (0=stdin, 1=stdout, 2=stderr).
-fn dup2_stdio(source: impl AsFd, target_fd: i32) -> Result<(), nix::errno::Errno> {
-    match target_fd {
-        0 => unistd::dup2_stdin(source),
-        1 => unistd::dup2_stdout(source),
-        2 => unistd::dup2_stderr(source),
-        _ => unreachable!("dup2_stdio called with non-stdio target: {target_fd}"),
-    }
-}
-
 /// A stream's file, opened but not yet truncated or redirected.
 struct OpenStream<'a> {
     path: &'a Path,
@@ -442,7 +432,7 @@ pub(crate) fn redirect_output(
         Some(path) => {
             let out = open_stream(path, append)?;
             plan_output_redirect(Some(out.id), None, owned).map_err(|c| refusal(&c, &out))?;
-            move_slot(&out.fd, 1, rollback, &mut moved)?;
+            move_slot(&out.fd, StdioSlot::Stdout, rollback, &mut moved)?;
             Some(out)
         }
         None => None,
@@ -451,14 +441,11 @@ pub(crate) fn redirect_output(
     let err = match stderr {
         Some(path) => {
             let err = open_checked_stderr(path, append, out.as_ref(), owned)?;
-            let source = match (&err, &out) {
-                (Stderr::Own(err), _) => &err.fd,
-                (Stderr::SharesStdout, Some(out)) => &out.fd,
-                (Stderr::SharesStdout, None) => {
-                    unreachable!("stderr shares a stdout that was not opened")
-                }
+            let source = match &err {
+                Stderr::Own(err) => &err.fd,
+                Stderr::SharesStdout(out) => &out.fd,
             };
-            move_slot(source, 2, rollback, &mut moved)?;
+            move_slot(source, StdioSlot::Stderr, rollback, &mut moved)?;
             Some(err)
         }
         None => None,
@@ -487,11 +474,42 @@ pub(crate) enum Rollback {
     Skip,
 }
 
+/// A stdio slot step 12 moves a stream onto.
+#[derive(Clone, Copy)]
+enum StdioSlot {
+    Stdout,
+    Stderr,
+}
+
+impl StdioSlot {
+    fn fd(self) -> i32 {
+        match self {
+            Self::Stdout => 1,
+            Self::Stderr => 2,
+        }
+    }
+
+    /// A copy of what the slot holds; `EBADF` if it is closed.
+    fn save(self) -> std::io::Result<OwnedFd> {
+        match self {
+            Self::Stdout => std::io::stdout().as_fd().try_clone_to_owned(),
+            Self::Stderr => std::io::stderr().as_fd().try_clone_to_owned(),
+        }
+    }
+
+    fn dup2(self, source: impl AsFd) -> Result<(), nix::errno::Errno> {
+        match self {
+            Self::Stdout => unistd::dup2_stdout(source),
+            Self::Stderr => unistd::dup2_stderr(source),
+        }
+    }
+}
+
 /// Moves `source` onto stdio slot `target`, saved in `moved` when `rollback`
 /// asks for it.
 fn move_slot(
     source: &OwnedFd,
-    target: i32,
+    target: StdioSlot,
     rollback: Rollback,
     moved: &mut Vec<SavedSlot>,
 ) -> Result<(), DaemonizeError> {
@@ -503,41 +521,41 @@ fn move_slot(
 }
 
 /// Moves `source` onto stdio slot `target`.
-fn dup2_slot(source: &OwnedFd, target: i32) -> Result<(), DaemonizeError> {
-    dup2_stdio(source, target)
-        .map_err(|e| DaemonizeError::OutputFileError(format!("dup2 fd {target}: {e}")))
+fn dup2_slot(source: &OwnedFd, target: StdioSlot) -> Result<(), DaemonizeError> {
+    target
+        .dup2(source)
+        .map_err(|e| DaemonizeError::OutputFileError(format!("dup2 fd {}: {e}", target.fd())))
 }
 
 /// stderr as step 12 opened it.
-enum Stderr<'a> {
+enum Stderr<'a, 'o> {
     /// A file of its own.
     Own(OpenStream<'a>),
     /// The stdout file, which stderr then writes through stdout's descriptor,
     /// sharing its offset.
-    SharesStdout,
+    SharesStdout(&'o OpenStream<'a>),
 }
 
 /// Opens stderr and compares it, with stdout already on fd 1.
-fn open_checked_stderr<'a>(
+fn open_checked_stderr<'a, 'o>(
     path: &'a Path,
     append: bool,
-    out: Option<&OpenStream>,
+    out: Option<&'o OpenStream<'a>>,
     owned: &[(&'static str, FileId)],
-) -> Result<Stderr<'a>, DaemonizeError> {
+) -> Result<Stderr<'a, 'o>, DaemonizeError> {
     let err = open_stream(path, append)?;
     let plan = plan_output_redirect(out.map(|o| o.id), Some(err.id), owned)
         .map_err(|c| refusal(&c, &err))?;
-    Ok(if plan.stderr_shares_stdout {
-        Stderr::SharesStdout
-    } else {
-        Stderr::Own(err)
+    Ok(match out.filter(|_| plan.stderr_shares_stdout) {
+        Some(out) => Stderr::SharesStdout(out),
+        None => Stderr::Own(err),
     })
 }
 
 /// A stdio slot step 12 has moved, put back as it was when this is dropped —
 /// on any failure after the move — unless [`keep`](Self::keep) is called.
 struct SavedSlot {
-    target: i32,
+    target: StdioSlot,
     /// What the slot held, or `None` if it was closed.
     was: Option<OwnedFd>,
     restore: bool,
@@ -546,18 +564,14 @@ struct SavedSlot {
 impl SavedSlot {
     /// Saves `target` and moves `source` onto it. Fails before the move if
     /// the slot cannot be saved, so nothing has changed then.
-    fn redirect(source: &OwnedFd, target: i32) -> Result<Self, DaemonizeError> {
-        let current = match target {
-            1 => std::io::stdout().as_fd().try_clone_to_owned(),
-            2 => std::io::stderr().as_fd().try_clone_to_owned(),
-            _ => unreachable!("step 12 moves only fd 1 and fd 2, not {target}"),
-        };
-        let was = match current {
+    fn redirect(source: &OwnedFd, target: StdioSlot) -> Result<Self, DaemonizeError> {
+        let was = match target.save() {
             Ok(fd) => Some(fd),
             Err(e) if e.raw_os_error() == Some(libc::EBADF) => None,
             Err(e) => {
                 return Err(DaemonizeError::OutputFileError(format!(
-                    "cannot save fd {target}: {e}"
+                    "cannot save fd {}: {e}",
+                    target.fd()
                 )));
             }
         };
@@ -582,9 +596,9 @@ impl Drop for SavedSlot {
         }
         match &self.was {
             Some(fd) => {
-                let _ = dup2_stdio(fd, self.target);
+                let _ = self.target.dup2(fd);
             }
-            None => crate::unsafe_ops::raw_close(self.target),
+            None => crate::unsafe_ops::raw_close(self.target.fd()),
         }
     }
 }
@@ -722,6 +736,16 @@ mod tests {
     use super::*;
     use crate::test_support::{is_subprocess, run_in_subprocess};
     use serial_test::serial;
+
+    /// Duplicate `source` onto a stdio target fd (0=stdin, 1=stdout, 2=stderr).
+    fn dup2_stdio(source: impl AsFd, target_fd: i32) -> Result<(), nix::errno::Errno> {
+        match target_fd {
+            0 => unistd::dup2_stdin(source),
+            1 => unistd::dup2_stdout(source),
+            2 => unistd::dup2_stderr(source),
+            _ => unreachable!("dup2_stdio called with non-stdio target: {target_fd}"),
+        }
+    }
 
     /// Guard that saves file descriptors on creation and restores them on drop.
     ///
@@ -1354,6 +1378,42 @@ mod tests {
             nix::fcntl::fcntl(std::io::stdout(), nix::fcntl::FcntlArg::F_GETFD),
             Err(nix::errno::Errno::EBADF),
             "a failed redirect left fd 1 open"
+        );
+        assert_eq!(std::fs::read_to_string(&log).unwrap(), "the previous run\n");
+    }
+
+    // Covers: R147
+    #[test]
+    fn execute_redirect_that_fails_with_stderr_closed_leaves_it_closed() {
+        run_in_subprocess(
+            "steps::tests::execute_redirect_that_fails_with_stderr_closed_leaves_it_closed_subprocess",
+        );
+    }
+
+    /// The fd 2 counterpart: a failure after stderr moved must close fd 2
+    /// again, not fd 1.
+    #[test]
+    #[ignore]
+    fn execute_redirect_that_fails_with_stderr_closed_leaves_it_closed_subprocess() {
+        if !is_subprocess() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("app.err");
+        std::fs::write(&log, "the previous run\n").unwrap();
+        nix::unistd::close(2).unwrap();
+        failpoints::STREAM_TRUNCATE_FAILS.store(true, std::sync::atomic::Ordering::Relaxed);
+
+        let result = redirect_output(None, Some(&log), false, &[], Rollback::PutBack);
+
+        assert!(
+            matches!(result, Err(DaemonizeError::OutputFileError(_))),
+            "{result:?}"
+        );
+        assert_eq!(
+            nix::fcntl::fcntl(std::io::stderr(), nix::fcntl::FcntlArg::F_GETFD),
+            Err(nix::errno::Errno::EBADF),
+            "a failed redirect left fd 2 open"
         );
         assert_eq!(std::fs::read_to_string(&log).unwrap(), "the previous run\n");
     }
