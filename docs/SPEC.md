@@ -1067,7 +1067,7 @@ The double-fork sequence and notification pipe are abstracted behind a
 pub(crate) trait Forker {
     fn create_notification_pipe(&mut self)
         -> Result<(OwnedFd, OwnedFd), DaemonizeError>;
-    fn fork(&mut self) -> Result<ForkResult, DaemonizeError>;
+    unsafe fn fork(&mut self) -> Result<ForkResult, DaemonizeError>;
     fn setsid(&mut self) -> Result<(), DaemonizeError>;
     fn exit(&self, code: i32) -> !;
 }
