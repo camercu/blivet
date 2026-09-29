@@ -1066,7 +1066,8 @@ The double-fork sequence and notification pipe are abstracted behind a
 
 ```rust
 pub(crate) trait Forker {
-    fn create_notification_pipe(&mut self) -> Option<(OwnedFd, OwnedFd)>;
+    fn create_notification_pipe(&mut self)
+        -> Result<Option<(OwnedFd, OwnedFd)>, DaemonizeError>;
     fn fork(&mut self) -> Result<ForkResult, DaemonizeError>;
     fn setsid(&mut self) -> Result<(), DaemonizeError>;
     fn exit(&self, code: i32) -> !;
@@ -1078,7 +1079,9 @@ Forker)`. `RealForker` (in `forker.rs`) wraps the real `fork`/`setsid`/pipe
 syscalls.
 `NullForker` exists only under `#[cfg(test)]` with configurable fork
 results and error flags. `NullForker::create_notification_pipe()`
-returns `None` (pipe is skipped; the parent branch exits immediately).
+returns `Ok(None)` by default (pipe is skipped; the parent branch exits
+immediately), a real pipe after `with_pipe()`, and `SystemError` after
+`with_failing_pipe()`.
 `NullForker::exit` panics; tests use `catch_unwind`.
 
 > The injection pattern keeps the production code path identical to the
