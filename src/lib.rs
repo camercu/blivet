@@ -1035,7 +1035,16 @@ mod tests {
         let result = catch_unwind(std::panic::AssertUnwindSafe(|| {
             run_inner(&config, &mut forker)
         }));
+        // Exactly one descriptor is free now: the stdout file's own, closed
+        // once it was on fd 1. A second would have let step 12 save fd 1, and
+        // the test would prove nothing.
+        let clone = || std::os::fd::AsFd::as_fd(&std::io::stdin()).try_clone_to_owned();
+        let spare = (clone(), clone());
         drop(held);
+        assert!(
+            spare.0.is_ok() && spare.1.is_err(),
+            "not exactly one descriptor free: {spare:?}"
+        );
 
         let ctx = result
             .expect("a daemon with no free descriptor must start, not exit")
