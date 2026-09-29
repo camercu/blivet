@@ -105,6 +105,9 @@ or flaky in practice; it trades the real kernel for far less plumbing.
   `getgrnam_r`, which bionic added at 24, so the binary does not link below it.
   The emulator job builds with `cargo ndk -P 24` so the floor is what CI links
   against; its first hosted run, at cargo-ndk's lower default, failed to link.
+  Only linking is proven at 24: the emulator runs API 34, and no level in
+  between runs. A second emulator at 24 would prove it, at the cost of another
+  slow, flaky job.
 - `getpwnam`/`getgrnam` resolve differently on bionic (built-in AID table, no
   `/etc/passwd`). The identity tests move from assumption to evidence by
   running in tiers 2 and 3.

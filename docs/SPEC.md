@@ -62,7 +62,8 @@ forms are the supported path there. A non-Unix target is a
 
 Android is supported from API level 24 (Android 7.0), the first whose
 bionic has `getgrnam_r`, which group lookup links; a build for an older
-API level fails to link. One behaviour diverges: bionic rejects
+API level fails to link. CI links at 24 and runs on an API 34 emulator;
+levels in between are not run. One behaviour diverges: bionic rejects
 `AT_EACCESS`, so the pre-fork writability check answers for the real
 UID (see [Validation](#validation)).
 
