@@ -1083,7 +1083,6 @@ parent branch reads that pipe as in production. The constructors whose
 script ends before step 13 also keep a copy of the read end for the
 test; step 13 would close a copy behind the forker's back, so a forker
 that runs the whole sequence keeps none.
-`NullForker::exit` panics; tests use `catch_unwind`.
 
 > The injection pattern keeps the production code path identical to the
 > test path (unlike `#[cfg(test)]` swaps). The trait boundary
