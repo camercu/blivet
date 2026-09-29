@@ -42,6 +42,10 @@ pub(crate) mod failpoints {
     /// disk then is not this process's to remove.
     pub(crate) static PIDFILE_OPEN_FAILS: AtomicBool = AtomicBool::new(false);
 
+    /// Fails step 12's truncation of a stream file, the last thing it does:
+    /// every stdio slot has moved by then.
+    pub(crate) static STREAM_TRUNCATE_FAILS: AtomicBool = AtomicBool::new(false);
+
     /// Stands in for the fd limit `getrlimit` would report, or 0 to use the
     /// real one.
     ///
@@ -397,6 +401,12 @@ fn truncate(stream: &OpenStream) -> Result<(), DaemonizeError> {
     if !stream.regular {
         return Ok(());
     }
+    #[cfg(test)]
+    if failpoints::injected(&failpoints::STREAM_TRUNCATE_FAILS) {
+        return Err(DaemonizeError::OutputFileError(
+            "truncate: injected failure".into(),
+        ));
+    }
     nix::unistd::ftruncate(&stream.fd, 0).map_err(|e| {
         DaemonizeError::OutputFileError(format!("truncate {}: {e}", stream.path.display()))
     })
@@ -409,51 +419,46 @@ fn truncate(stream: &OpenStream) -> Result<(), DaemonizeError> {
 /// [`drop_privileges`](crate::DaemonContext::drop_privileges) chowns them to
 /// the target user afterward.
 ///
-/// All or nothing (R146). Each stream is opened without truncating it and
-/// compared by identity with `owned` — the files the sequence holds, by the
-/// name to report them under — and stdout is on fd 1 before stderr is opened,
-/// so a stderr of `/dev/stdout` names the stdout file and shares its
-/// descriptor. Only once both have passed is anything truncated. If stderr
-/// fails, fd 1 is put back as it was, so a failed start leaves the previous
-/// run's logs and the caller's stdout untouched.
+/// Each stream is opened without truncating it and compared by identity with
+/// `owned` — the files the sequence holds, by the name to report them under
+/// (R146). stdout is on fd 1 before stderr is opened, so a stderr of
+/// `/dev/stdout` names the stdout file and shares its descriptor.
+///
+/// A failure changes nothing (R147). Each stdio slot is saved before it moves
+/// and put back if anything after fails; the truncations, which cannot be
+/// undone, come last. The one exception is an I/O error truncating stderr
+/// after stdout's truncation succeeded.
 pub(crate) fn redirect_output(
     stdout: Option<&Path>,
     stderr: Option<&Path>,
     append: bool,
     owned: &[(&'static str, FileId)],
 ) -> Result<(), DaemonizeError> {
+    let mut moved = Vec::new();
+
     let out = match stdout {
         Some(path) => {
             let out = open_stream(path, append)?;
             plan_output_redirect(Some(out.id), None, owned).map_err(|c| refusal(&c, &out))?;
+            moved.push(SavedSlot::redirect(&out.fd, 1)?);
             Some(out)
         }
         None => None,
     };
 
-    // stdout goes onto fd 1 before stderr is opened; the fd 1 it replaces is
-    // kept, to be put back if stderr fails.
-    let replaced = match &out {
-        Some(out) => {
-            // Kept to put back if stderr fails. A fd 1 that cannot be kept —
-            // closed, or no descriptor left — is not put back; nothing has been
-            // truncated at that point either way, so the logs are safe.
-            let replaced = std::io::stdout().as_fd().try_clone_to_owned().ok();
-            dup2_stdio(&out.fd, 1)
-                .map_err(|e| DaemonizeError::OutputFileError(format!("dup2 fd 1: {e}")))?;
-            replaced
+    let err = match stderr {
+        Some(path) => {
+            let err = open_checked_stderr(path, append, out.as_ref(), owned)?;
+            let source = match (&err, &out) {
+                (Stderr::Own(err), _) => &err.fd,
+                (Stderr::SharesStdout, Some(out)) => &out.fd,
+                (Stderr::SharesStdout, None) => {
+                    unreachable!("stderr shares a stdout that was not opened")
+                }
+            };
+            moved.push(SavedSlot::redirect(source, 2)?);
+            Some(err)
         }
-        None => None,
-    };
-
-    let err = match stderr.map(|path| open_checked_stderr(path, append, out.as_ref(), owned)) {
-        Some(Err(e)) => {
-            if let Some(replaced) = &replaced {
-                let _ = dup2_stdio(replaced, 1);
-            }
-            return Err(e);
-        }
-        Some(Ok(err)) => Some(err),
         None => None,
     };
 
@@ -461,33 +466,94 @@ pub(crate) fn redirect_output(
         if let Some(out) = &out {
             truncate(out)?;
         }
-        if let Some((err, false)) = &err {
+        if let Some(Stderr::Own(err)) = &err {
             truncate(err)?;
         }
     }
-    if let Some((err, shares_stdout)) = &err {
-        let source = match (shares_stdout, &out) {
-            (true, Some(out)) => &out.fd,
-            _ => &err.fd,
-        };
-        dup2_stdio(source, 2)
-            .map_err(|e| DaemonizeError::OutputFileError(format!("dup2 fd 2: {e}")))?;
-    }
+    moved.into_iter().for_each(SavedSlot::keep);
     Ok(())
 }
 
-/// Opens stderr and compares it, with stdout already on fd 1. Returns the
-/// stream and whether it is the stdout file, to share its descriptor.
+/// stderr as step 12 opened it.
+enum Stderr<'a> {
+    /// A file of its own.
+    Own(OpenStream<'a>),
+    /// The stdout file, which stderr then writes through stdout's descriptor,
+    /// sharing its offset.
+    SharesStdout,
+}
+
+/// Opens stderr and compares it, with stdout already on fd 1.
 fn open_checked_stderr<'a>(
     path: &'a Path,
     append: bool,
     out: Option<&OpenStream>,
     owned: &[(&'static str, FileId)],
-) -> Result<(OpenStream<'a>, bool), DaemonizeError> {
+) -> Result<Stderr<'a>, DaemonizeError> {
     let err = open_stream(path, append)?;
     let plan = plan_output_redirect(out.map(|o| o.id), Some(err.id), owned)
         .map_err(|c| refusal(&c, &err))?;
-    Ok((err, plan.stderr_shares_stdout))
+    Ok(if plan.stderr_shares_stdout {
+        Stderr::SharesStdout
+    } else {
+        Stderr::Own(err)
+    })
+}
+
+/// A stdio slot step 12 has moved, put back as it was when this is dropped —
+/// on any failure after the move — unless [`keep`](Self::keep) is called.
+struct SavedSlot {
+    target: i32,
+    /// What the slot held, or `None` if it was closed.
+    was: Option<OwnedFd>,
+    restore: bool,
+}
+
+impl SavedSlot {
+    /// Saves `target` and moves `source` onto it. Fails before the move if
+    /// the slot cannot be saved, so nothing has changed then.
+    fn redirect(source: &OwnedFd, target: i32) -> Result<Self, DaemonizeError> {
+        let current = match target {
+            1 => std::io::stdout().as_fd().try_clone_to_owned(),
+            2 => std::io::stderr().as_fd().try_clone_to_owned(),
+            _ => unreachable!("step 12 moves only fd 1 and fd 2, not {target}"),
+        };
+        let was = match current {
+            Ok(fd) => Some(fd),
+            Err(e) if e.raw_os_error() == Some(libc::EBADF) => None,
+            Err(e) => {
+                return Err(DaemonizeError::OutputFileError(format!(
+                    "cannot save fd {target}: {e}"
+                )));
+            }
+        };
+        dup2_stdio(source, target)
+            .map_err(|e| DaemonizeError::OutputFileError(format!("dup2 fd {target}: {e}")))?;
+        Ok(Self {
+            target,
+            was,
+            restore: true,
+        })
+    }
+
+    /// Leaves the slot where it was moved.
+    fn keep(mut self) {
+        self.restore = false;
+    }
+}
+
+impl Drop for SavedSlot {
+    fn drop(&mut self) {
+        if !self.restore {
+            return;
+        }
+        match &self.was {
+            Some(fd) => {
+                let _ = dup2_stdio(fd, self.target);
+            }
+            None => crate::unsafe_ops::raw_close(self.target),
+        }
+    }
 }
 
 /// The refusal for a stream that turned out to be an owned file.
@@ -1168,7 +1234,7 @@ mod tests {
         );
     }
 
-    // Covers: R146
+    // Covers: R147
     #[test]
     fn execute_redirect_that_fails_on_stderr_changes_nothing() {
         run_in_subprocess(
@@ -1208,6 +1274,137 @@ mod tests {
             (stdout_after.st_dev, stdout_after.st_ino),
             "a failed redirect left fd 1 redirected"
         );
+    }
+
+    // Covers: R147
+    #[test]
+    fn execute_redirect_that_fails_with_stdout_closed_leaves_it_closed() {
+        run_in_subprocess(
+            "steps::tests::execute_redirect_that_fails_with_stdout_closed_leaves_it_closed_subprocess",
+        );
+    }
+
+    /// A caller with fd 1 closed must find it closed after a failed start, not
+    /// open on the log at offset 0, where its next write would overwrite the
+    /// start of the previous run's output.
+    #[test]
+    #[ignore]
+    fn execute_redirect_that_fails_with_stdout_closed_leaves_it_closed_subprocess() {
+        if !is_subprocess() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("app.log");
+        std::fs::write(&log, "the previous run\n").unwrap();
+        nix::unistd::close(1).unwrap();
+
+        let result = redirect_output(Some(&log), Some(dir.path()), false, &[]);
+
+        assert!(
+            matches!(result, Err(DaemonizeError::OutputFileError(_))),
+            "{result:?}"
+        );
+        assert_eq!(
+            nix::fcntl::fcntl(std::io::stdout(), nix::fcntl::FcntlArg::F_GETFD),
+            Err(nix::errno::Errno::EBADF),
+            "a failed redirect left fd 1 open"
+        );
+        assert_eq!(std::fs::read_to_string(&log).unwrap(), "the previous run\n");
+    }
+
+    // Covers: R147
+    #[test]
+    fn execute_redirect_that_cannot_save_stdout_changes_nothing() {
+        run_in_subprocess(
+            "steps::tests::execute_redirect_that_cannot_save_stdout_changes_nothing_subprocess",
+        );
+    }
+
+    /// With no descriptor left to save fd 1 in, the redirect must fail before
+    /// moving it, not treat fd 1 as closed and carry on.
+    #[test]
+    #[ignore]
+    fn execute_redirect_that_cannot_save_stdout_changes_nothing_subprocess() {
+        use nix::sys::resource::{getrlimit, setrlimit, Resource};
+        use nix::sys::stat::fstat;
+
+        if !is_subprocess() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("app.log");
+        std::fs::write(&log, "the previous run\n").unwrap();
+        let stdout_before = fstat(std::io::stdout()).unwrap();
+
+        // Fill every descriptor under a small limit, then free one: the stdout
+        // file takes it, and saving fd 1 finds none.
+        let (_, hard) = getrlimit(Resource::RLIMIT_NOFILE).unwrap();
+        setrlimit(Resource::RLIMIT_NOFILE, 64, hard).unwrap();
+        let mut held = Vec::new();
+        while let Ok(fd) = std::io::stdin().as_fd().try_clone_to_owned() {
+            held.push(fd);
+        }
+        held.pop();
+
+        let result = redirect_output(Some(&log), None, false, &[]);
+        drop(held);
+
+        assert!(
+            matches!(&result, Err(DaemonizeError::OutputFileError(m)) if m.contains("fd 1")),
+            "{result:?}"
+        );
+        let stdout_after = fstat(std::io::stdout()).unwrap();
+        assert_eq!(
+            (stdout_before.st_dev, stdout_before.st_ino),
+            (stdout_after.st_dev, stdout_after.st_ino),
+            "a failed redirect left fd 1 redirected"
+        );
+        assert_eq!(std::fs::read_to_string(&log).unwrap(), "the previous run\n");
+    }
+
+    // Covers: R147
+    #[test]
+    fn execute_redirect_that_fails_late_puts_both_slots_back() {
+        run_in_subprocess(
+            "steps::tests::execute_redirect_that_fails_late_puts_both_slots_back_subprocess",
+        );
+    }
+
+    /// A failure after both slots have moved — here, the truncation, the last
+    /// step — must put fd 1 and fd 2 back as they were.
+    #[test]
+    #[ignore]
+    fn execute_redirect_that_fails_late_puts_both_slots_back_subprocess() {
+        use nix::sys::stat::fstat;
+
+        if !is_subprocess() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("app.log");
+        let err = dir.path().join("app.err");
+        std::fs::write(&out, "previous out\n").unwrap();
+        std::fs::write(&err, "previous err\n").unwrap();
+        let id = |st: nix::sys::stat::FileStat| (st.st_dev, st.st_ino);
+        let before = (
+            id(fstat(std::io::stdout()).unwrap()),
+            id(fstat(std::io::stderr()).unwrap()),
+        );
+        failpoints::STREAM_TRUNCATE_FAILS.store(true, std::sync::atomic::Ordering::Relaxed);
+
+        let result = redirect_output(Some(&out), Some(&err), false, &[]);
+
+        let after = (
+            id(fstat(std::io::stdout()).unwrap()),
+            id(fstat(std::io::stderr()).unwrap()),
+        );
+        assert!(
+            matches!(result, Err(DaemonizeError::OutputFileError(_))),
+            "{result:?}"
+        );
+        assert_eq!(before, after, "a failed redirect left fd 1 or fd 2 moved");
+        assert_eq!(std::fs::read_to_string(&out).unwrap(), "previous out\n");
+        assert_eq!(std::fs::read_to_string(&err).unwrap(), "previous err\n");
     }
 
     // Covers: R146

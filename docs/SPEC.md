@@ -697,10 +697,14 @@ responsibility (via `drop_privileges()`), files are created as the
 current user (typically root); `drop_privileges()` chowns them to the
 target user before switching.
 
-Step 12 is all or nothing: nothing is truncated until both streams have
-been opened and compared, and a stderr that fails puts fd 1 back as it
-was, so a failed start leaves the previous run's logs and the caller's
-stdout untouched.
+A failed step 12 changes nothing (R147). Each stdio slot is saved
+before it moves and put back if anything after fails: to what it held,
+or closed again if it was closed. The truncations, which cannot be
+undone, come last, once both streams are open, compared and in place.
+So a failed start leaves the previous run's logs and the caller's
+stdout and stderr as they were. The one exception is an I/O error
+truncating stderr after stdout's truncation succeeded: stdout's log is
+then already empty.
 
 1. Open stdout with `O_WRONLY | O_CREAT`, plus `O_APPEND` per the
    append flag, but without `O_TRUNC`. Mode 0644 (subject to umask from
@@ -711,16 +715,17 @@ stdout untouched.
    and no comparison of spellings sees every way two names reach one
    file — a symlink whose target does not exist yet, a case-insensitive
    filesystem, a hard link. This is where the files themselves are
-   compared. Then `dup2` it to fd 1.
+   compared. Then save fd 1 and `dup2` stdout onto it.
 2. Open and compare stderr the same way. Because stdout is already on
    fd 1, a stderr of `/dev/stdout` names the stdout file. A stderr that
    is the stdout file takes fd 1's descriptor, so the two share one
    file description and write offset rather than overwriting each
-   other.
+   other. Then save fd 2 and `dup2` stderr's descriptor onto it.
 3. Unless appending, truncate each distinct regular file once — a FIFO
-   or a device such as `/dev/null` has nothing to truncate — and `dup2`
-   stderr's descriptor to fd 2. `dup2` failure returns
-   `OutputFileError`.
+   or a device such as `/dev/null` has nothing to truncate.
+
+A slot that cannot be saved (other than because it is closed), a
+`dup2` failure and a truncation failure return `OutputFileError`.
 
 The append flag applies uniformly to both stdout and stderr.
 
@@ -1491,3 +1496,8 @@ verification points.
   pidfile or the lockfile, under any name, is refused with
   `ValidationError`; stdout and stderr that are one file share a
   descriptor.
+- R147. A step 12 that fails changes nothing: every stdio slot it moved
+  is put back as it was, closed if it was closed, and no file is
+  truncated until both streams are open, compared and in place. The
+  exception is an I/O error truncating stderr after stdout's truncation
+  succeeded.
