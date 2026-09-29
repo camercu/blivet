@@ -101,12 +101,13 @@ fn signal_range() -> Vec<i32> {
     }
 }
 
-/// Close a file descriptor, ignoring errors.
+/// Close a file descriptor by number, ignoring errors.
 ///
-/// Used by `close_inherited_fds` which iterates 3..max_fd and closes
-/// speculatively — most fds aren't open, so EBADF is the common case.
-/// `nix::unistd::close` can't be used here because it requires `IntoRawFd`
-/// (no safe conversion from a bare `i32`), and it treats EBADF as an error.
+/// For a descriptor nothing owns: `close_inherited_fds` closes `3..max_fd`
+/// speculatively, where most fds aren't open and EBADF is the common case, and
+/// step 12 recloses a stdio slot that was closed before it moved.
+/// `nix::unistd::close` can't be used because it requires `IntoRawFd` (no safe
+/// conversion from a bare `i32`), and it treats EBADF as an error.
 pub(crate) fn raw_close(fd: i32) {
     unsafe { libc::close(fd) };
 }
