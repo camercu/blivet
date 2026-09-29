@@ -750,14 +750,6 @@ mod tests {
 
     // Covers: R57
     #[test]
-    fn first_fork_fails_returns_error() {
-        let config = DaemonConfig::new();
-        let mut forker = NullForker::first_fork_fails();
-        let result = run_inner(&config, &mut forker);
-        assert!(matches!(result, Err(DaemonizeError::ForkFailed(_))));
-    }
-
-    #[test]
     fn first_fork_failure_closes_pipe_silently() {
         // The error goes back to the caller directly — nothing should reach
         // the pipe, whose only reader is this same process. A plain drop would
