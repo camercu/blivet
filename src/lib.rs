@@ -706,16 +706,6 @@ mod tests {
         assert!(result.is_ok());
     }
 
-    #[test]
-    fn first_fork_parent_exits() {
-        let config = DaemonConfig::new();
-        let mut forker = NullForker::first_parent();
-        let result = catch_unwind(std::panic::AssertUnwindSafe(|| {
-            run_inner(&config, &mut forker)
-        }));
-        assert!(result.is_err()); // exit panics in NullForker
-    }
-
     // Covers: R137
     #[test]
     fn first_fork_parent_closes_pipe_silently() {
@@ -750,7 +740,12 @@ mod tests {
         let result = catch_unwind(std::panic::AssertUnwindSafe(|| {
             run_inner(&config, &mut forker)
         }));
-        assert!(result.is_err(), "intermediate child exits");
+        let panic_msg = result
+            .expect_err("intermediate child exits")
+            .downcast_ref::<String>()
+            .cloned()
+            .unwrap();
+        assert!(panic_msg.contains("NullForker::exit(0)"), "{panic_msg}");
 
         let rd = forker
             .take_pipe_reader()
@@ -763,16 +758,6 @@ mod tests {
             "intermediate child must close the pipe without writing; the \
              daemon is the sole writer"
         );
-    }
-
-    #[test]
-    fn second_fork_parent_exits() {
-        let config = DaemonConfig::new();
-        let mut forker = NullForker::second_parent();
-        let result = catch_unwind(std::panic::AssertUnwindSafe(|| {
-            run_inner(&config, &mut forker)
-        }));
-        assert!(result.is_err());
     }
 
     // Covers: R57
@@ -854,24 +839,6 @@ mod tests {
         assert_eq!(
             buf,
             notify::error_bytes(&DaemonizeError::ForkFailed("second fork".into()))
-        );
-    }
-
-    #[test]
-    fn exit_panic_contains_code() {
-        let config = DaemonConfig::new();
-        let mut forker = NullForker::first_parent();
-        let result = catch_unwind(std::panic::AssertUnwindSafe(|| {
-            run_inner(&config, &mut forker)
-        }));
-        let panic_msg = result
-            .unwrap_err()
-            .downcast_ref::<String>()
-            .cloned()
-            .unwrap();
-        assert!(
-            panic_msg.contains("NullForker::exit(0)"),
-            "panic message should contain exit code, got: {panic_msg}"
         );
     }
 
