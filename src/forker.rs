@@ -197,11 +197,7 @@ pub(crate) mod null_forker {
                     "notification pipe: injected failure".into(),
                 )),
                 Pipe::Real { keep_reader } => {
-                    // RealForker's pipe, close-on-exec: a subprocess a
-                    // parallel test spawns must not hold the write end open.
-                    let (rd, wr) = RealForker
-                        .create_notification_pipe()
-                        .expect("failed to create test pipe");
+                    let (rd, wr) = crate::test_support::make_pipe();
                     if keep_reader {
                         self.pipe_reader =
                             Some(rd.try_clone().expect("failed to dup test read end"));

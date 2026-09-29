@@ -615,18 +615,8 @@ impl Drop for DaemonContext {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::{make_pipe, read_pipe};
     use std::io::Read;
-
-    fn make_pipe() -> (OwnedFd, OwnedFd) {
-        nix::unistd::pipe().unwrap()
-    }
-
-    fn read_pipe(rd: OwnedFd) -> Vec<u8> {
-        let mut buf = Vec::new();
-        let mut file = std::fs::File::from(rd);
-        file.read_to_end(&mut buf).unwrap();
-        buf
-    }
 
     /// Build a context directly from a configured `DaemonConfig` plus the
     /// optional runtime resources. Mirrors `DaemonContext::new` without a
