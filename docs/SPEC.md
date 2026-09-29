@@ -1092,15 +1092,18 @@ that runs the whole sequence keeps none.
 
 ### Double-fork unit tests (via NullForker)
 
-Tests call `daemonize_inner()` directly, one per code path:
+Tests call `daemonize_inner()` directly and cover each code path:
 
-- Pipe creation fails: `SystemError`, no fork.
+- Pipe creation fails: `SystemError` returned, no fork.
 - Both forks Child: success.
-- First fork Parent: exit(0); `catch_unwind` verifies.
-- First Child, second Parent: exit(0) after setsid; `catch_unwind`.
-- First fork fails: `ForkFailed`.
-- Setsid fails: `SetsidFailed`.
-- Second fork fails: `ForkFailed`.
+- First fork Parent: reads EOF from the pipe, exit(0).
+- First Child, second Parent: closes the pipe unwritten, exit(0).
+- First fork fails: `ForkFailed` returned, pipe unwritten.
+- Setsid fails: `SetsidFailed` on the pipe, exit(71).
+- Second fork fails: `ForkFailed` on the pipe, exit(71).
+
+`NullForker::exit` panics with the code, so tests read it through
+`catch_unwind`.
 
 ### Config validation tests
 
