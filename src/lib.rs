@@ -954,6 +954,46 @@ mod tests {
 
     // Covers: R147
     #[test]
+    fn foreground_redirect_that_fails_puts_stdout_back() {
+        run_in_subprocess("tests::foreground_redirect_that_fails_puts_stdout_back_subprocess");
+    }
+
+    /// A foreground caller sees its stdio after a failed start, so step 12
+    /// must save and restore fd 1 there.
+    #[test]
+    #[ignore]
+    fn foreground_redirect_that_fails_puts_stdout_back_subprocess() {
+        use nix::sys::stat::fstat;
+
+        if !is_subprocess() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = DaemonConfig::new();
+        config
+            .foreground(true)
+            .close_fds(false)
+            .stdout(dir.path().join("app.log"));
+        let mut forker = NullForker::new(vec![], Ok(()));
+        let before = fstat(std::io::stdout()).unwrap();
+        steps::failpoints::STREAM_TRUNCATE_FAILS.store(true, std::sync::atomic::Ordering::Relaxed);
+
+        let result = run_inner(&config, &mut forker);
+
+        assert!(
+            matches!(result, Err(DaemonizeError::OutputFileError(_))),
+            "{result:?}"
+        );
+        let after = fstat(std::io::stdout()).unwrap();
+        assert_eq!(
+            (before.st_dev, before.st_ino),
+            (after.st_dev, after.st_ino),
+            "a failed foreground step 12 left fd 1 moved"
+        );
+    }
+
+    // Covers: R147
+    #[test]
     fn daemon_redirect_starts_with_no_descriptor_free_to_save_stdout() {
         run_in_subprocess(
             "tests::daemon_redirect_starts_with_no_descriptor_free_to_save_stdout_subprocess",
