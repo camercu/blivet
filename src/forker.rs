@@ -83,11 +83,9 @@ pub(crate) mod null_forker {
     /// What [`NullForker`]'s
     /// [`create_notification_pipe`](Forker::create_notification_pipe) does.
     enum Pipe {
-        /// Returns a real pipe.
-        Real,
-        /// Returns a real pipe, and keeps a copy of its read end for
-        /// [`NullForker::take_pipe_reader`].
-        RealKeepingReader,
+        /// Returns a real pipe, and with `keep_reader` keeps a copy of its
+        /// read end for [`NullForker::take_pipe_reader`].
+        Real { keep_reader: bool },
         /// Fails, as a full descriptor table does.
         Fails,
     }
@@ -100,7 +98,7 @@ pub(crate) mod null_forker {
             Self {
                 fork_results: fork_results.into(),
                 setsid_result: Some(setsid_result),
-                pipe: Pipe::Real,
+                pipe: Pipe::Real { keep_reader: false },
                 pipe_reader: None,
             }
         }
@@ -120,17 +118,17 @@ pub(crate) mod null_forker {
             setsid_result: Result<(), DaemonizeError>,
         ) -> Self {
             Self {
-                pipe: Pipe::RealKeepingReader,
+                pipe: Pipe::Real { keep_reader: true },
                 ..Self::new(fork_results, setsid_result)
             }
         }
 
         /// Take the test-side duplicate of the pipe's read end, so a test can
         /// observe what the fork sequence writes — or must not write — on the
-        /// wire. `None` from a forker that runs the whole sequence, which keeps
-        /// no copy. `daemonize_inner` drops its own read-end copy in the child
+        /// wire. `daemonize_inner` drops its own read-end copy in the child
         /// branch; this duplicate lets the test read what reached the pipe
-        /// afterwards.
+        /// afterwards. `Some` only once, and only from a fork-sequence
+        /// constructor whose pipe was made.
         pub(crate) fn take_pipe_reader(&mut self) -> Option<OwnedFd> {
             self.pipe_reader.take()
         }
@@ -198,13 +196,13 @@ pub(crate) mod null_forker {
                 Pipe::Fails => Err(DaemonizeError::SystemError(
                     "notification pipe: injected failure".into(),
                 )),
-                Pipe::Real | Pipe::RealKeepingReader => {
+                Pipe::Real { keep_reader } => {
                     // RealForker's pipe, close-on-exec: a subprocess a
                     // parallel test spawns must not hold the write end open.
                     let (rd, wr) = RealForker
                         .create_notification_pipe()
                         .expect("failed to create test pipe");
-                    if matches!(self.pipe, Pipe::RealKeepingReader) {
+                    if keep_reader {
                         self.pipe_reader =
                             Some(rd.try_clone().expect("failed to dup test read end"));
                     }
