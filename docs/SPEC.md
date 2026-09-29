@@ -335,6 +335,7 @@ are lowercase with no trailing punctuation.
 | `ForkFailed`       | `fork()` returns an error                               |
 | `SetsidFailed`     | `setsid()` returns an error                             |
 | `ChdirFailed`      | `chdir()` fails at runtime after fork                   |
+| `SystemError`      | A system call with no more specific variant fails: creating the notification pipe, opening `/dev/null`, `sigaction`, `sigprocmask`, `getrlimit` |
 | `PermissionDenied` | Non-root caller with user/group switch, or setuid/setgid/chown fail |
 | `PidfileError`     | Pidfile cannot be written                               |
 | `OutputFileError`  | stdout/stderr file cannot be opened, truncated or dup2'd, or, in foreground mode, fd 1/2 cannot be saved first |
@@ -584,8 +585,10 @@ chdir, stdin redirect, and env changes may already have happened).
 
 1. **Create notification pipe, first fork.** *(Skipped in foreground
    mode.)* Create a pipe with `O_CLOEXEC` on both ends (`pipe_rd`,
-   `pipe_wr`). Fork. If fork fails, close both pipe ends and return
-   `Err(ForkFailed)` to the caller — no pipe protocol is involved.
+   `pipe_wr`). If the pipe cannot be created — no descriptor free, say
+   — return `Err(SystemError)` to the caller. Fork. If fork fails,
+   close both pipe ends and return `Err(ForkFailed)` to the caller —
+   no pipe protocol is involved.
    On success: parent closes `pipe_wr` and enters the parent-side
    pipe reader (see notification protocol); child closes `pipe_rd`
    and continues with `pipe_wr`.
@@ -1161,8 +1164,8 @@ continues; (2) split-phase with `drop_privileges()` →
   undeterminable). Document the per-OS thread-count source and the
   deprecated stub on unsupported targets.
 - `daemonize_unchecked()`: `# Safety` (threading), `# Errors` (all
-  variants), `# Panics` (broken-OS conditions). Document foreground mode
-  behavior.
+  variants). Document foreground mode behavior. A broken OS is an
+  error, not a panic.
 - `validate()`: `# Errors`.
 - `lockfile_fd()`: CLOEXEC clearing use case, lifetime semantics.
 - `drop_privileges()`: numeric ID resolution, four user/group

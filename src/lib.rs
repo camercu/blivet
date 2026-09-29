@@ -260,13 +260,9 @@ use notify::NotifyPipe;
 /// during the daemonization sequence. Pre-fork errors are returned
 /// directly; post-fork errors are reported via the notification pipe.
 /// In foreground mode every error is returned directly — the library
-/// never exits the caller's process.
-///
-/// # Panics
-///
-/// Panics if `/dev/null` cannot be opened, `dup2` to a standard fd fails,
-/// `sigprocmask` fails, `getrlimit` fails, or other OS-level invariants
-/// are violated (indicating a fundamentally broken environment).
+/// never exits the caller's process. A system call that fails with no more
+/// specific variant, such as creating the notification pipe with no
+/// descriptor free, returns `SystemError`.
 #[cfg(unix)]
 #[allow(unsafe_code)]
 pub unsafe fn daemonize_unchecked(config: &DaemonConfig) -> Result<DaemonContext, DaemonizeError> {
@@ -405,7 +401,9 @@ pub(crate) unsafe fn daemonize_inner(
         None
     } else {
         // Step 1: Create notification pipe and first fork
-        let pipe = forker.create_notification_pipe();
+        // Made in the caller's process, before any fork, so a failure
+        // returns to the caller.
+        let pipe = forker.create_notification_pipe()?;
         let (pipe_rd, mut pipe_wr) = match pipe {
             Some((rd, wr)) => (Some(rd), Some(NotifyPipe::new(wr))),
             None => (None, None),
@@ -949,6 +947,46 @@ mod tests {
             (stdout_before.st_dev, stdout_before.st_ino),
             (stdout_after.st_dev, stdout_after.st_ino),
             "foreground mode redirected stdout"
+        );
+    }
+
+    // Covers: R95
+    #[test]
+    fn daemonize_with_no_descriptor_free_for_the_pipe_returns_err() {
+        run_in_subprocess(
+            "tests::daemonize_with_no_descriptor_free_for_the_pipe_returns_err_subprocess",
+        );
+    }
+
+    /// The notification pipe is made in the caller's process before the first
+    /// fork, so a caller whose descriptor table is full gets an error back,
+    /// not a panic.
+    #[test]
+    #[ignore]
+    #[allow(unsafe_code)]
+    fn daemonize_with_no_descriptor_free_for_the_pipe_returns_err_subprocess() {
+        use nix::sys::resource::{getrlimit, setrlimit, Resource};
+        use std::os::fd::AsFd;
+
+        if !is_subprocess() {
+            return;
+        }
+        let config = DaemonConfig::new();
+        let (_, hard) = getrlimit(Resource::RLIMIT_NOFILE).unwrap();
+        setrlimit(Resource::RLIMIT_NOFILE, 64, hard).unwrap();
+        let mut held = Vec::new();
+        while let Ok(fd) = std::io::stdin().as_fd().try_clone_to_owned() {
+            held.push(fd);
+        }
+
+        // SAFETY: the pipe fails before any fork, so no fork happens here.
+        let result = catch_unwind(|| unsafe { daemonize_unchecked(&config) });
+        drop(held);
+
+        let result = result.expect("a full descriptor table must not panic");
+        assert!(
+            matches!(result, Err(DaemonizeError::SystemError(_))),
+            "{result:?}"
         );
     }
 

@@ -17,7 +17,10 @@ use crate::unsafe_ops;
 /// syscalls; `NullForker` (test-only) provides configurable results.
 #[allow(unsafe_code)]
 pub(crate) trait Forker {
-    fn create_notification_pipe(&mut self) -> Option<(OwnedFd, OwnedFd)>;
+    /// Makes the pipe the daemon reports its start through: `(read, write)`,
+    /// or `None` to run without one. Runs in the caller's process, so a
+    /// failure is an error for the caller.
+    fn create_notification_pipe(&mut self) -> Result<Option<(OwnedFd, OwnedFd)>, DaemonizeError>;
     /// # Safety
     ///
     /// Calling `fork()` in a multithreaded process is undefined behavior.
@@ -32,18 +35,18 @@ pub(crate) struct RealForker;
 
 #[allow(unsafe_code)]
 impl Forker for RealForker {
-    fn create_notification_pipe(&mut self) -> Option<(OwnedFd, OwnedFd)> {
+    fn create_notification_pipe(&mut self) -> Result<Option<(OwnedFd, OwnedFd)>, DaemonizeError> {
         use nix::fcntl::{fcntl, FcntlArg, FdFlag};
 
-        let (rd, wr) = nix::unistd::pipe().expect("failed to create notification pipe");
+        let failed = |e| DaemonizeError::SystemError(format!("notification pipe: {e}"));
+        let (rd, wr) = nix::unistd::pipe().map_err(failed)?;
         // Set O_CLOEXEC on both ends. pipe2(O_CLOEXEC) would be atomic, but
         // macOS lacks pipe2. The two-step approach is safe here because
         // daemonize() requires single-threaded execution.
-        fcntl(rd.as_fd(), FcntlArg::F_SETFD(FdFlag::FD_CLOEXEC))
-            .expect("failed to set CLOEXEC on pipe read end");
-        fcntl(wr.as_fd(), FcntlArg::F_SETFD(FdFlag::FD_CLOEXEC))
-            .expect("failed to set CLOEXEC on pipe write end");
-        Some((rd, wr))
+        for end in [&rd, &wr] {
+            fcntl(end.as_fd(), FcntlArg::F_SETFD(FdFlag::FD_CLOEXEC)).map_err(failed)?;
+        }
+        Ok(Some((rd, wr)))
     }
 
     unsafe fn fork(&mut self) -> Result<ForkResult, DaemonizeError> {
@@ -165,14 +168,16 @@ pub(crate) mod null_forker {
 
     #[allow(unsafe_code)]
     impl Forker for NullForker {
-        fn create_notification_pipe(&mut self) -> Option<(OwnedFd, OwnedFd)> {
+        fn create_notification_pipe(
+            &mut self,
+        ) -> Result<Option<(OwnedFd, OwnedFd)>, DaemonizeError> {
             if !self.use_pipe {
                 // Default: skip the pipe; the parent branch exits immediately.
-                return None;
+                return Ok(None);
             }
             let (rd, wr) = nix::unistd::pipe().expect("failed to create test pipe");
             self.pipe_reader = Some(rd.try_clone().expect("failed to dup test read end"));
-            Some((rd, wr))
+            Ok(Some((rd, wr)))
         }
 
         unsafe fn fork(&mut self) -> Result<ForkResult, DaemonizeError> {
@@ -229,7 +234,8 @@ mod tests {
     fn notification_pipe_ends_have_cloexec() {
         let (rd, wr) = RealForker
             .create_notification_pipe()
-            .expect("RealForker creates a pipe");
+            .expect("RealForker creates a pipe")
+            .expect("RealForker always returns a pipe");
         for fd in [rd.as_fd(), wr.as_fd()] {
             let flags = fcntl(fd, FcntlArg::F_GETFD).expect("F_GETFD");
             assert!(
