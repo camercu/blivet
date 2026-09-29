@@ -965,19 +965,11 @@ mod tests {
     #[ignore]
     #[allow(unsafe_code)]
     fn daemonize_with_no_descriptor_free_for_the_pipe_returns_err_subprocess() {
-        use nix::sys::resource::{getrlimit, setrlimit, Resource};
-        use std::os::fd::AsFd;
-
         if !is_subprocess() {
             return;
         }
         let config = DaemonConfig::new();
-        let (_, hard) = getrlimit(Resource::RLIMIT_NOFILE).unwrap();
-        setrlimit(Resource::RLIMIT_NOFILE, 64, hard).unwrap();
-        let mut held = Vec::new();
-        while let Ok(fd) = std::io::stdin().as_fd().try_clone_to_owned() {
-            held.push(fd);
-        }
+        let held = crate::test_support::fill_fd_table(0);
 
         // SAFETY: the pipe fails before any fork, so no fork happens here.
         let result = catch_unwind(|| unsafe { daemonize_unchecked(&config) });
@@ -1043,9 +1035,7 @@ mod tests {
     #[test]
     #[ignore]
     fn daemon_redirect_starts_with_no_descriptor_free_to_save_stdout_subprocess() {
-        use nix::sys::resource::{getrlimit, setrlimit, Resource};
         use nix::sys::stat::{fstat, stat};
-        use std::os::fd::AsFd;
 
         if !is_subprocess() {
             return;
@@ -1059,13 +1049,7 @@ mod tests {
         // Fill every descriptor under a small limit, then free one: step 6
         // borrows it for /dev/null and gives it back, and the stdout file then
         // takes it, so saving fd 1 would find none.
-        let (_, hard) = getrlimit(Resource::RLIMIT_NOFILE).unwrap();
-        setrlimit(Resource::RLIMIT_NOFILE, 64, hard).unwrap();
-        let mut held = Vec::new();
-        while let Ok(fd) = std::io::stdin().as_fd().try_clone_to_owned() {
-            held.push(fd);
-        }
-        held.pop();
+        let held = crate::test_support::fill_fd_table(1);
 
         let result = catch_unwind(std::panic::AssertUnwindSafe(|| {
             run_inner(&config, &mut forker)
