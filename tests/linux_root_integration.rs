@@ -103,7 +103,7 @@ fn user_switch_sets_uid_and_gid() {
             "--",
             "sh",
             "-c",
-            "id -u; id -g; exec tail -f /dev/null",
+            format!("id -u; id -g; exec sleep {DAEMON_LIFETIME}").as_str(),
         ])
         .output()
         .unwrap();
@@ -169,7 +169,7 @@ fn user_switch_sets_env_vars() {
             "--",
             "sh",
             "-c",
-            "echo USER=$USER; echo HOME=$HOME; echo LOGNAME=$LOGNAME; exec tail -f /dev/null",
+            format!("echo USER=$USER; echo HOME=$HOME; echo LOGNAME=$LOGNAME; exec sleep {DAEMON_LIFETIME}").as_str(),
         ])
         .output()
         .unwrap();
@@ -237,7 +237,7 @@ fn output_file_owned_by_target_user() {
             "--",
             "sh",
             "-c",
-            "echo hello; echo err >&2; exec tail -f /dev/null",
+            format!("echo hello; echo err >&2; exec sleep {DAEMON_LIFETIME}").as_str(),
         ])
         .output()
         .unwrap();
@@ -311,9 +311,8 @@ fn daemon_cwd_via_proc() {
             "-c",
             chdir,
             "--",
-            "tail",
-            "-f",
-            "/dev/null",
+            "sleep",
+            DAEMON_LIFETIME,
         ])
         .output()
         .unwrap();
@@ -373,7 +372,7 @@ fn user_switch_sets_supplementary_groups() {
             "--",
             "sh",
             "-c",
-            "id -G; exec tail -f /dev/null",
+            format!("id -G; exec sleep {DAEMON_LIFETIME}").as_str(),
         ])
         .output()
         .unwrap();
@@ -456,9 +455,8 @@ fn group_only_switch_sets_gid() {
             "-p",
             pidfile.to_str().unwrap(),
             "--",
-            "tail",
-            "-f",
-            "/dev/null",
+            "sleep",
+            DAEMON_LIFETIME,
         ])
         .output()
         .unwrap();
@@ -505,9 +503,8 @@ fn user_and_group_switch_sets_independent_gid() {
             "-p",
             pidfile.to_str().unwrap(),
             "--",
-            "tail",
-            "-f",
-            "/dev/null",
+            "sleep",
+            DAEMON_LIFETIME,
         ])
         .output()
         .unwrap();
@@ -590,7 +587,7 @@ fn user_and_group_switch_seeds_supplementary_from_user() {
             "--",
             "sh",
             "-c",
-            "id -G; exec tail -f /dev/null",
+            format!("id -G; exec sleep {DAEMON_LIFETIME}").as_str(),
         ])
         .output()
         .unwrap();
@@ -656,9 +653,8 @@ fn numeric_uid_switch() {
             "-p",
             pidfile.to_str().unwrap(),
             "--",
-            "tail",
-            "-f",
-            "/dev/null",
+            "sleep",
+            DAEMON_LIFETIME,
         ])
         .output()
         .unwrap();

@@ -22,9 +22,8 @@ fn happy_path_daemon_is_orphaned_and_in_new_session() {
             "-c",
             chdir,
             "--",
-            "tail",
-            "-f",
-            "/dev/null",
+            "sleep",
+            DAEMON_LIFETIME,
         ])
         .output()
         .unwrap();
@@ -72,9 +71,8 @@ fn default_cwd_is_root() {
             "-p",
             pidfile.to_str().unwrap(),
             "--",
-            "tail",
-            "-f",
-            "/dev/null",
+            "sleep",
+            DAEMON_LIFETIME,
         ])
         .output()
         .unwrap();
@@ -221,9 +219,8 @@ fn lockfile_exclusion_second_instance_fails() {
             "-l",
             lockfile.to_str().unwrap(),
             "--",
-            "tail",
-            "-f",
-            "/dev/null",
+            "sleep",
+            DAEMON_LIFETIME,
         ])
         .output()
         .unwrap();
@@ -373,9 +370,8 @@ fn verbose_mode_prints_diagnostics() {
             "-p",
             pidfile.to_str().unwrap(),
             "--",
-            "tail",
-            "-f",
-            "/dev/null",
+            "sleep",
+            DAEMON_LIFETIME,
         ])
         .output()
         .unwrap();
@@ -405,9 +401,8 @@ fn no_verbose_no_diagnostics() {
             "-p",
             pidfile.to_str().unwrap(),
             "--",
-            "tail",
-            "-f",
-            "/dev/null",
+            "sleep",
+            DAEMON_LIFETIME,
         ])
         .output()
         .unwrap();
@@ -1125,9 +1120,8 @@ fn bare_program_name_uses_path_search() {
             "-p",
             pidfile.to_str().unwrap(),
             "--",
-            "tail",
-            "-f",
-            "/dev/null",
+            "sleep",
+            DAEMON_LIFETIME,
         ])
         .output()
         .unwrap();
@@ -1156,9 +1150,8 @@ fn shared_lockfile_pidfile_path() {
             "-l",
             shared.to_str().unwrap(),
             "--",
-            "tail",
-            "-f",
-            "/dev/null",
+            "sleep",
+            DAEMON_LIFETIME,
         ])
         .output()
         .unwrap();
@@ -1193,9 +1186,8 @@ fn pidfile_without_lockfile_enforces_single_instance() {
             "-p",
             pidfile.to_str().unwrap(),
             "--",
-            "tail",
-            "-f",
-            "/dev/null",
+            "sleep",
+            DAEMON_LIFETIME,
         ])
         .output()
         .unwrap();
@@ -1234,9 +1226,8 @@ fn no_lock_flag_disables_single_instance() {
             pidfile.to_str().unwrap(),
             "--no-lock",
             "--",
-            "tail",
-            "-f",
-            "/dev/null",
+            "sleep",
+            DAEMON_LIFETIME,
         ])
         .output()
         .unwrap();
@@ -1254,9 +1245,8 @@ fn no_lock_flag_disables_single_instance() {
             pidfile.to_str().unwrap(),
             "--no-lock",
             "--",
-            "tail",
-            "-f",
-            "/dev/null",
+            "sleep",
+            DAEMON_LIFETIME,
         ])
         .output()
         .unwrap();
@@ -1448,9 +1438,8 @@ fn foreground_lock_conflict_reports_error() {
             "-p",
             pidfile.to_str().unwrap(),
             "--",
-            "tail",
-            "-f",
-            "/dev/null",
+            "sleep",
+            DAEMON_LIFETIME,
         ])
         .output()
         .unwrap();
