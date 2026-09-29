@@ -748,7 +748,7 @@ mod tests {
         // The intermediate child's write-end copy must also close without
         // writing: the grandchild daemon is the sole writer on the pipe.
         let config = DaemonConfig::new();
-        let mut forker = NullForker::second_parent();
+        let mut forker = NullForker::second_parent().keeping_pipe_reader();
         let result = catch_unwind(std::panic::AssertUnwindSafe(|| {
             run_inner(&config, &mut forker)
         }));
@@ -792,7 +792,7 @@ mod tests {
         // the pipe, whose only reader is this same process. A plain drop would
         // fire the NotifyPipe Drop safety net into it.
         let config = DaemonConfig::new();
-        let mut forker = NullForker::first_fork_fails();
+        let mut forker = NullForker::first_fork_fails().keeping_pipe_reader();
         let result = run_inner(&config, &mut forker);
         assert!(matches!(result, Err(DaemonizeError::ForkFailed(_))));
 
@@ -1025,12 +1025,12 @@ mod tests {
         config.close_fds(false).stdout(&log);
         let mut forker = NullForker::both_child();
 
-        // Fill every descriptor under a small limit, then free three. The
-        // notification pipe takes them: both ends and the NullForker's copy of
-        // the read end. The child drops its read end, freeing one; step 6
+        // Fill every descriptor under a small limit, then free two, which the
+        // notification pipe's ends take. The child drops its read end, freeing
+        // one; step 6
         // borrows it for /dev/null and gives it back, and the stdout file then
         // takes it, so saving fd 1 would find none.
-        let held = crate::test_support::fill_fd_table(3);
+        let held = crate::test_support::fill_fd_table(2);
 
         let result = catch_unwind(std::panic::AssertUnwindSafe(|| {
             run_inner(&config, &mut forker)

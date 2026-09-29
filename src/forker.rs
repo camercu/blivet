@@ -83,8 +83,11 @@ pub(crate) mod null_forker {
     /// What [`NullForker`]'s
     /// [`create_notification_pipe`](Forker::create_notification_pipe) does.
     enum Pipe {
-        /// Returns a real pipe, and keeps a copy of its read end.
+        /// Returns a real pipe.
         Real,
+        /// Returns a real pipe, and keeps a copy of its read end for
+        /// [`NullForker::take_pipe_reader`].
+        RealKeepingReader,
         /// Fails, as a full descriptor table does.
         Fails,
     }
@@ -106,6 +109,15 @@ pub(crate) mod null_forker {
         /// fail.
         pub(crate) fn with_failing_pipe(mut self) -> Self {
             self.pipe = Pipe::Fails;
+            self
+        }
+
+        /// Keep a copy of the pipe's read end for
+        /// [`take_pipe_reader`](Self::take_pipe_reader). Step 13 would close
+        /// that copy behind the forker's back, so only tests that stop before
+        /// it keep one: the fork-sequence tests here.
+        pub(crate) fn keeping_pipe_reader(mut self) -> Self {
+            self.pipe = Pipe::RealKeepingReader;
             self
         }
 
@@ -181,7 +193,8 @@ pub(crate) mod null_forker {
                 Pipe::Fails => Err(DaemonizeError::SystemError(
                     "notification pipe: injected failure".into(),
                 )),
-                Pipe::Real => {
+                Pipe::Real => Ok(nix::unistd::pipe().expect("failed to create test pipe")),
+                Pipe::RealKeepingReader => {
                     let (rd, wr) = nix::unistd::pipe().expect("failed to create test pipe");
                     self.pipe_reader = Some(rd.try_clone().expect("failed to dup test read end"));
                     Ok((rd, wr))
