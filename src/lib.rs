@@ -704,7 +704,8 @@ mod tests {
             return;
         }
         let mut config = DaemonConfig::new();
-        config.close_fds(false); // Don't close fds in test subprocess (systemd aborts on EBADF)
+        // The fork arms are under test here; step 13 has its own tests.
+        config.close_fds(false);
         let mut forker = NullForker::both_child();
         let result = run_inner(&config, &mut forker);
         assert!(result.is_ok());
