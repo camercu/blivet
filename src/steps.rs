@@ -424,15 +424,17 @@ fn truncate(stream: &OpenStream) -> Result<(), DaemonizeError> {
 /// (R146). stdout is on fd 1 before stderr is opened, so a stderr of
 /// `/dev/stdout` names the stdout file and shares its descriptor.
 ///
-/// A failure undoes what this did (R147). Each stdio slot is saved before it
-/// moves and put back if anything after fails; the truncations, which cannot be
-/// undone, come last. A stream file it created stays, empty, and an I/O error
-/// truncating stderr after stdout's truncation succeeded leaves stdout emptied.
+/// With [`Rollback::PutBack`], a failure undoes what this did (R147). Each
+/// stdio slot is saved before it moves and put back if anything after fails;
+/// the truncations, which cannot be undone, come last. A stream file it created
+/// stays, empty, and an I/O error truncating stderr after stdout's truncation
+/// succeeded leaves stdout emptied.
 pub(crate) fn redirect_output(
     stdout: Option<&Path>,
     stderr: Option<&Path>,
     append: bool,
     owned: &[(&'static str, FileId)],
+    rollback: Rollback,
 ) -> Result<(), DaemonizeError> {
     let mut moved = Vec::new();
 
@@ -440,7 +442,7 @@ pub(crate) fn redirect_output(
         Some(path) => {
             let out = open_stream(path, append)?;
             plan_output_redirect(Some(out.id), None, owned).map_err(|c| refusal(&c, &out))?;
-            moved.push(SavedSlot::redirect(&out.fd, 1)?);
+            move_slot(&out.fd, 1, rollback, &mut moved)?;
             Some(out)
         }
         None => None,
@@ -456,7 +458,7 @@ pub(crate) fn redirect_output(
                     unreachable!("stderr shares a stdout that was not opened")
                 }
             };
-            moved.push(SavedSlot::redirect(source, 2)?);
+            move_slot(source, 2, rollback, &mut moved)?;
             Some(err)
         }
         None => None,
@@ -472,6 +474,38 @@ pub(crate) fn redirect_output(
     }
     moved.into_iter().for_each(SavedSlot::keep);
     Ok(())
+}
+
+/// Whether a failed step 12 puts the stdio slots it moved back (R147).
+#[derive(Clone, Copy)]
+pub(crate) enum Rollback {
+    /// Save each slot before moving it, and restore it on failure. Saving
+    /// needs a free descriptor, so this fails when none is left.
+    PutBack,
+    /// Move the slots without saving them. For a daemon child, which exits on
+    /// any failure, so no one sees the slots afterward.
+    Skip,
+}
+
+/// Moves `source` onto stdio slot `target`, saved in `moved` when `rollback`
+/// asks for it.
+fn move_slot(
+    source: &OwnedFd,
+    target: i32,
+    rollback: Rollback,
+    moved: &mut Vec<SavedSlot>,
+) -> Result<(), DaemonizeError> {
+    match rollback {
+        Rollback::PutBack => moved.push(SavedSlot::redirect(source, target)?),
+        Rollback::Skip => dup2_slot(source, target)?,
+    }
+    Ok(())
+}
+
+/// Moves `source` onto stdio slot `target`.
+fn dup2_slot(source: &OwnedFd, target: i32) -> Result<(), DaemonizeError> {
+    dup2_stdio(source, target)
+        .map_err(|e| DaemonizeError::OutputFileError(format!("dup2 fd {target}: {e}")))
 }
 
 /// stderr as step 12 opened it.
@@ -527,8 +561,7 @@ impl SavedSlot {
                 )));
             }
         };
-        dup2_stdio(source, target)
-            .map_err(|e| DaemonizeError::OutputFileError(format!("dup2 fd {target}: {e}")))?;
+        dup2_slot(source, target)?;
         Ok(Self {
             target,
             was,
@@ -1169,7 +1202,13 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let stdout_path = dir.path().join("stdout.log");
         let stderr_path = dir.path().join("stderr.log");
-        let result = redirect_output(Some(&stdout_path), Some(&stderr_path), false, &[]);
+        let result = redirect_output(
+            Some(&stdout_path),
+            Some(&stderr_path),
+            false,
+            &[],
+            Rollback::PutBack,
+        );
         assert!(result.is_ok());
         assert!(stdout_path.exists());
         assert!(stderr_path.exists());
@@ -1185,7 +1224,7 @@ mod tests {
         // Truncate mode. The old content is longer than the new, so a skipped
         // truncate leaves a tail behind instead of being overwritten exactly.
         std::fs::write(&stdout_path, "old content, longer than what replaces it\n").unwrap();
-        redirect_output(Some(&stdout_path), None, false, &[]).unwrap();
+        redirect_output(Some(&stdout_path), None, false, &[], Rollback::PutBack).unwrap();
         std::io::stdout().write_all(b"new content\n").unwrap();
         std::io::stdout().flush().unwrap();
         // Not an exact match: under a shared harness (`cargo test --lib`, as
@@ -1200,7 +1239,7 @@ mod tests {
         );
 
         // Append mode
-        redirect_output(Some(&stdout_path), None, true, &[]).unwrap();
+        redirect_output(Some(&stdout_path), None, true, &[], Rollback::PutBack).unwrap();
         std::io::stdout().write_all(b"appended\n").unwrap();
         std::io::stdout().flush().unwrap();
         let content = std::fs::read_to_string(&stdout_path).unwrap();
@@ -1214,7 +1253,14 @@ mod tests {
         let _restore = SavedFds::new(&[1, 2]);
         let dir = tempfile::tempdir().unwrap();
         let combined = dir.path().join("combined.log");
-        redirect_output(Some(&combined), Some(&combined), false, &[]).unwrap();
+        redirect_output(
+            Some(&combined),
+            Some(&combined),
+            false,
+            &[],
+            Rollback::PutBack,
+        )
+        .unwrap();
 
         std::io::stdout().write_all(b"stdout\n").unwrap();
         std::io::stdout().flush().unwrap();
@@ -1261,7 +1307,7 @@ mod tests {
         std::fs::write(&log, "the previous run\n").unwrap();
         let stdout_before = fstat(std::io::stdout()).unwrap();
 
-        let result = redirect_output(Some(&log), Some(dir.path()), false, &[]);
+        let result = redirect_output(Some(&log), Some(dir.path()), false, &[], Rollback::PutBack);
 
         assert!(
             matches!(result, Err(DaemonizeError::OutputFileError(_))),
@@ -1298,7 +1344,7 @@ mod tests {
         std::fs::write(&log, "the previous run\n").unwrap();
         nix::unistd::close(1).unwrap();
 
-        let result = redirect_output(Some(&log), Some(dir.path()), false, &[]);
+        let result = redirect_output(Some(&log), Some(dir.path()), false, &[], Rollback::PutBack);
 
         assert!(
             matches!(result, Err(DaemonizeError::OutputFileError(_))),
@@ -1346,7 +1392,7 @@ mod tests {
         }
         held.pop();
 
-        let result = redirect_output(Some(&log), None, false, &[]);
+        let result = redirect_output(Some(&log), None, false, &[], Rollback::PutBack);
         drop(held);
 
         assert!(
@@ -1392,7 +1438,7 @@ mod tests {
         );
         failpoints::STREAM_TRUNCATE_FAILS.store(true, std::sync::atomic::Ordering::Relaxed);
 
-        let result = redirect_output(Some(&out), Some(&err), false, &[]);
+        let result = redirect_output(Some(&out), Some(&err), false, &[], Rollback::PutBack);
 
         let after = (
             id(fstat(std::io::stdout()).unwrap()),
@@ -1418,7 +1464,14 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let log = dir.path().join("combined.log");
 
-        redirect_output(Some(&log), Some(Path::new("/dev/stdout")), false, &[]).unwrap();
+        redirect_output(
+            Some(&log),
+            Some(Path::new("/dev/stdout")),
+            false,
+            &[],
+            Rollback::PutBack,
+        )
+        .unwrap();
         std::io::stdout().write_all(b"stdout\n").unwrap();
         std::io::stdout().flush().unwrap();
         std::io::stderr().write_all(b"stderr\n").unwrap();
@@ -1439,7 +1492,7 @@ mod tests {
         let _restore = SavedFds::new(&[2]);
         let dir = tempfile::tempdir().unwrap();
         let stderr_path = dir.path().join("stderr.log");
-        redirect_output(None, Some(&stderr_path), false, &[]).unwrap();
+        redirect_output(None, Some(&stderr_path), false, &[], Rollback::PutBack).unwrap();
         assert!(stderr_path.exists());
 
         std::io::stderr().write_all(b"stderr content\n").unwrap();
@@ -1457,7 +1510,14 @@ mod tests {
         let stderr_path = dir.path().join("stderr.log");
         std::fs::write(&stderr_path, "stale stderr from a previous run\n").unwrap();
 
-        redirect_output(Some(&stdout_path), Some(&stderr_path), false, &[]).unwrap();
+        redirect_output(
+            Some(&stdout_path),
+            Some(&stderr_path),
+            false,
+            &[],
+            Rollback::PutBack,
+        )
+        .unwrap();
 
         let content = std::fs::read_to_string(&stderr_path).unwrap();
         assert!(
@@ -1483,7 +1543,7 @@ mod tests {
         let stdout_path = dir.path().join("stdout.log");
         nix::unistd::close(1).unwrap();
 
-        redirect_output(Some(&stdout_path), None, false, &[]).unwrap();
+        redirect_output(Some(&stdout_path), None, false, &[], Rollback::PutBack).unwrap();
 
         let written = nix::unistd::write(std::io::stdout(), b"reached\n");
         assert_eq!(written, Ok(8), "fd 1 is not open after the redirect");
@@ -1508,7 +1568,7 @@ mod tests {
         let stderr_path = dir.path().join("stderr.log");
         nix::unistd::close(2).unwrap();
 
-        redirect_output(None, Some(&stderr_path), false, &[]).unwrap();
+        redirect_output(None, Some(&stderr_path), false, &[], Rollback::PutBack).unwrap();
 
         let written = nix::unistd::write(std::io::stderr(), b"reached\n");
         assert_eq!(written, Ok(8), "fd 2 is not open after the redirect");
@@ -1528,7 +1588,7 @@ mod tests {
             file_id(std::fs::File::open(&pidfile).unwrap()).unwrap(),
         )];
 
-        let result = redirect_output(Some(&pidfile), None, false, &owned);
+        let result = redirect_output(Some(&pidfile), None, false, &owned, Rollback::PutBack);
 
         let named = pidfile.display().to_string();
         assert!(
@@ -1545,7 +1605,14 @@ mod tests {
         // ftruncate refuses a device where O_TRUNC ignored it; `-o /dev/null`
         // must keep working.
         let _restore = SavedFds::new(&[1]);
-        redirect_output(Some(Path::new("/dev/null")), None, false, &[]).unwrap();
+        redirect_output(
+            Some(Path::new("/dev/null")),
+            None,
+            false,
+            &[],
+            Rollback::PutBack,
+        )
+        .unwrap();
     }
 
     // --- Step 13: close inherited fds (pure plan tests) ---

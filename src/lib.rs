@@ -597,13 +597,19 @@ fn run_post_fork(
     // Step 11: Set environment variables
     steps::set_env_vars(&config.env);
 
-    // Step 12: Redirect stdout/stderr to configured files
+    // Step 12: Redirect stdout/stderr to configured files. Only a foreground
+    // caller sees the slots after a failure, so only it pays for saving them.
     if config.stdout.is_some() || config.stderr.is_some() {
         steps::redirect_output(
             config.stdout.as_deref(),
             config.stderr.as_deref(),
             config.append,
             &owned,
+            if config.foreground {
+                steps::Rollback::PutBack
+            } else {
+                steps::Rollback::Skip
+            },
         )?;
     }
 
@@ -943,6 +949,62 @@ mod tests {
             (stdout_before.st_dev, stdout_before.st_ino),
             (stdout_after.st_dev, stdout_after.st_ino),
             "foreground mode redirected stdout"
+        );
+    }
+
+    // Covers: R147
+    #[test]
+    fn daemon_redirect_starts_with_no_descriptor_free_to_save_stdout() {
+        run_in_subprocess(
+            "tests::daemon_redirect_starts_with_no_descriptor_free_to_save_stdout_subprocess",
+        );
+    }
+
+    /// Step 12 saves fd 1 only where a failure could be seen: a daemon child
+    /// that inherited descriptors up to its limit still starts, and step 13
+    /// closes them later.
+    #[test]
+    #[ignore]
+    fn daemon_redirect_starts_with_no_descriptor_free_to_save_stdout_subprocess() {
+        use nix::sys::resource::{getrlimit, setrlimit, Resource};
+        use nix::sys::stat::{fstat, stat};
+        use std::os::fd::AsFd;
+
+        if !is_subprocess() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("app.log");
+        let mut config = DaemonConfig::new();
+        config.close_fds(false).stdout(&log);
+        let mut forker = NullForker::both_child();
+
+        // Fill every descriptor under a small limit, then free one: step 6
+        // borrows it for /dev/null and gives it back, and the stdout file then
+        // takes it, so saving fd 1 would find none.
+        let (_, hard) = getrlimit(Resource::RLIMIT_NOFILE).unwrap();
+        setrlimit(Resource::RLIMIT_NOFILE, 64, hard).unwrap();
+        let mut held = Vec::new();
+        while let Ok(fd) = std::io::stdin().as_fd().try_clone_to_owned() {
+            held.push(fd);
+        }
+        held.pop();
+
+        let result = catch_unwind(std::panic::AssertUnwindSafe(|| {
+            run_inner(&config, &mut forker)
+        }));
+        drop(held);
+
+        let ctx = result
+            .expect("a daemon with no free descriptor must start, not exit")
+            .unwrap();
+        drop(ctx);
+        let on_fd1 = fstat(std::io::stdout()).unwrap();
+        let file = stat(&log).unwrap();
+        assert_eq!(
+            (on_fd1.st_dev, on_fd1.st_ino),
+            (file.st_dev, file.st_ino),
+            "fd 1 is not the stdout file"
         );
     }
 
