@@ -1076,9 +1076,9 @@ pub(crate) trait Forker {
 `daemonize()` delegates to `daemonize_inner(&DaemonConfig, &mut impl
 Forker)`. `RealForker` (in `forker.rs`) wraps the real `fork`/`setsid`/pipe
 syscalls.
-`NullForker` exists only under `#[cfg(test)]` with configurable fork
-results and error flags. `NullForker::create_notification_pipe()`
-returns a real pipe, or `SystemError` after `with_failing_pipe()`. The
+`NullForker` exists only under `#[cfg(test)]` with scripted fork and
+setsid results. `NullForker::create_notification_pipe()` returns
+`RealForker`'s pipe, or `SystemError` after `with_failing_pipe()`. The
 parent branch reads that pipe as in production. The constructors whose
 script ends before step 13 also keep a copy of the read end for the
 test; step 13 would close a copy behind the forker's back, so a forker
