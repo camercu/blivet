@@ -474,7 +474,9 @@ pub(crate) unsafe fn daemonize_inner(
         Ok(ctx) => Ok(ctx),
         Err(e) if foreground => Err(e),
         Err(e) => {
-            signal_error_to_parent(&mut pipe_wr, &e);
+            if let Some(pipe) = pipe_wr.take() {
+                pipe.signal_error(&e);
+            }
             forker.exit(e.exit_code() as i32);
         }
     }
@@ -629,16 +631,6 @@ fn parent_pipe_reader(rd: OwnedFd, forker: &impl Forker) -> ! {
             eprintln!("{message}");
             forker.exit(code);
         }
-    }
-}
-
-/// Report a daemonization error to the parent via the notification pipe
-/// (best-effort), consuming the write end if present. Used by the fork-sequence
-/// and post-fork error paths that abort with `forker.exit` immediately after.
-#[cfg(unix)]
-fn signal_error_to_parent(pipe_wr: &mut Option<NotifyPipe>, err: &DaemonizeError) {
-    if let Some(pipe) = pipe_wr.take() {
-        pipe.signal_error(err);
     }
 }
 
@@ -867,30 +859,6 @@ mod tests {
         assert!(
             panic_msg.contains("NullForker::exit(71)"),
             "must exit with ChdirFailed's EX_OSERR code 71, got: {panic_msg}"
-        );
-    }
-
-    #[test]
-    fn signal_error_to_parent_noop_with_none() {
-        signal_error_to_parent(&mut None, &DaemonizeError::ForkFailed("test".into()));
-    }
-
-    #[test]
-    fn signal_error_to_parent_writes_protocol() {
-        let (rd, wr) = nix::unistd::pipe().unwrap();
-        let mut pipe_wr = Some(NotifyPipe::new(wr));
-        let err = DaemonizeError::ForkFailed("test error".into());
-        signal_error_to_parent(&mut pipe_wr, &err);
-        assert!(pipe_wr.is_none(), "write end consumed after signalling");
-
-        let mut file = std::fs::File::from(rd);
-        let mut buf = Vec::new();
-        file.read_to_end(&mut buf).unwrap();
-
-        assert_eq!(buf[0], 71); // EX_OSERR
-        assert_eq!(
-            std::str::from_utf8(&buf[1..]).unwrap(),
-            "fork failed: test error"
         );
     }
 
