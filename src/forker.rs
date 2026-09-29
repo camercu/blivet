@@ -112,20 +112,25 @@ pub(crate) mod null_forker {
             self
         }
 
-        /// Keep a copy of the pipe's read end for
-        /// [`take_pipe_reader`](Self::take_pipe_reader). Step 13 would close
-        /// that copy behind the forker's back, so only tests that stop before
-        /// it keep one: the fork-sequence tests here.
-        pub(crate) fn keeping_pipe_reader(mut self) -> Self {
-            self.pipe = Pipe::RealKeepingReader;
-            self
+        /// A forker whose script ends the sequence before step 13, so it can
+        /// keep a copy of the pipe's read end: step 13 would close that copy
+        /// behind its back. Only the fork-sequence constructors use this.
+        fn stopping_before_step_13(
+            fork_results: Vec<Result<ForkResult, DaemonizeError>>,
+            setsid_result: Result<(), DaemonizeError>,
+        ) -> Self {
+            Self {
+                pipe: Pipe::RealKeepingReader,
+                ..Self::new(fork_results, setsid_result)
+            }
         }
 
         /// Take the test-side duplicate of the pipe's read end, so a test can
         /// observe what the fork sequence writes — or must not write — on the
-        /// wire. `daemonize_inner` drops its own
-        /// read-end copy in the child branch; this duplicate lets the test
-        /// read what reached the pipe afterwards.
+        /// wire. `None` from a forker that runs the whole sequence, which keeps
+        /// no copy. `daemonize_inner` drops its own read-end copy in the child
+        /// branch; this duplicate lets the test read what reached the pipe
+        /// afterwards.
         pub(crate) fn take_pipe_reader(&mut self) -> Option<OwnedFd> {
             self.pipe_reader.take()
         }
@@ -137,7 +142,7 @@ pub(crate) mod null_forker {
 
         /// First fork returns Parent.
         pub(crate) fn first_parent() -> Self {
-            Self::new(
+            Self::stopping_before_step_13(
                 vec![Ok(ForkResult::Parent {
                     child: Pid::from_raw(42),
                 })],
@@ -147,7 +152,7 @@ pub(crate) mod null_forker {
 
         /// First fork Child, second fork Parent.
         pub(crate) fn second_parent() -> Self {
-            Self::new(
+            Self::stopping_before_step_13(
                 vec![
                     Ok(ForkResult::Child),
                     Ok(ForkResult::Parent {
@@ -160,7 +165,7 @@ pub(crate) mod null_forker {
 
         /// First fork fails.
         pub(crate) fn first_fork_fails() -> Self {
-            Self::new(
+            Self::stopping_before_step_13(
                 vec![Err(DaemonizeError::ForkFailed("first fork".into()))],
                 Ok(()),
             )
@@ -168,7 +173,7 @@ pub(crate) mod null_forker {
 
         /// Setsid fails.
         pub(crate) fn setsid_fails() -> Self {
-            Self::new(
+            Self::stopping_before_step_13(
                 vec![Ok(ForkResult::Child)],
                 Err(DaemonizeError::SetsidFailed("test".into())),
             )
@@ -176,7 +181,7 @@ pub(crate) mod null_forker {
 
         /// Second fork fails.
         pub(crate) fn second_fork_fails() -> Self {
-            Self::new(
+            Self::stopping_before_step_13(
                 vec![
                     Ok(ForkResult::Child),
                     Err(DaemonizeError::ForkFailed("second fork".into())),
@@ -193,10 +198,12 @@ pub(crate) mod null_forker {
                 Pipe::Fails => Err(DaemonizeError::SystemError(
                     "notification pipe: injected failure".into(),
                 )),
-                Pipe::Real => Ok(nix::unistd::pipe().expect("failed to create test pipe")),
-                Pipe::RealKeepingReader => {
+                Pipe::Real | Pipe::RealKeepingReader => {
                     let (rd, wr) = nix::unistd::pipe().expect("failed to create test pipe");
-                    self.pipe_reader = Some(rd.try_clone().expect("failed to dup test read end"));
+                    if matches!(self.pipe, Pipe::RealKeepingReader) {
+                        self.pipe_reader =
+                            Some(rd.try_clone().expect("failed to dup test read end"));
+                    }
                     Ok((rd, wr))
                 }
             }
