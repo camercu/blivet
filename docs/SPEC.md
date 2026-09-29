@@ -1090,8 +1090,9 @@ pipe as in production.
 
 ### Double-fork unit tests (via NullForker)
 
-Tests call `daemonize_inner()` directly. 6 code paths:
+Tests call `daemonize_inner()` directly, one per code path:
 
+- Pipe creation fails: `SystemError`, no fork.
 - Both forks Child: success.
 - First fork Parent: exit(0); `catch_unwind` verifies.
 - First Child, second Parent: exit(0) after setsid; `catch_unwind`.
