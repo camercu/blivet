@@ -337,7 +337,7 @@ are lowercase with no trailing punctuation.
 | `ChdirFailed`      | `chdir()` fails at runtime after fork                   |
 | `PermissionDenied` | Non-root caller with user/group switch, or setuid/setgid/chown fail |
 | `PidfileError`     | Pidfile cannot be written                               |
-| `OutputFileError`  | stdout/stderr file cannot be opened/dup2'd              |
+| `OutputFileError`  | stdout/stderr file cannot be opened, truncated or dup2'd, or fd 1/2 cannot be saved first |
 | `ChownError`       | chown of pidfile/lockfile/output file failed             |
 | `ExecFailed`       | CLI-only: exec of target program failed (other than `ENOENT`/`EACCES`) |
 | `NotifyFailed`     | Writing the readiness byte to the notification pipe failed |
@@ -698,14 +698,15 @@ responsibility (via `drop_privileges()`), files are created as the
 current user (typically root); `drop_privileges()` chowns them to the
 target user before switching.
 
-A failed step 12 changes nothing (R147). Each stdio slot is saved
+A failed step 12 undoes what it did (R147). Each stdio slot is saved
 before it moves and put back if anything after fails: to what it held,
 or closed again if it was closed. The truncations, which cannot be
 undone, come last, once both streams are open, compared and in place.
-So a failed start leaves the previous run's logs and the caller's
-stdout and stderr as they were. The one exception is an I/O error
-truncating stderr after stdout's truncation succeeded: stdout's log is
-then already empty.
+So a failed step 12 leaves the previous run's logs and the caller's
+stdout and stderr as they were. Two things stay: a stream file it
+created, empty, and — after an I/O error truncating stderr once
+stdout's truncation succeeded — an emptied stdout log. This covers
+step 12 only; a later step that fails does not undo it.
 
 1. Open stdout with `O_WRONLY | O_CREAT`, plus `O_APPEND` per the
    append flag, but without `O_TRUNC`. Mode 0644 (subject to umask from
@@ -1497,8 +1498,8 @@ verification points.
   pidfile or the lockfile, under any name, is refused with
   `ValidationError`; stdout and stderr that are one file share a
   descriptor.
-- R147. A step 12 that fails changes nothing: every stdio slot it moved
-  is put back as it was, closed if it was closed, and no file is
-  truncated until both streams are open, compared and in place. The
-  exception is an I/O error truncating stderr after stdout's truncation
-  succeeded.
+- R147. A step 12 that fails puts every stdio slot it moved back as it
+  was, closed if it was closed, and truncates no file until both
+  streams are open, compared and in place. A stream file it created
+  stays, empty. The one truncation it cannot undo is stdout's, when
+  truncating stderr then fails with an I/O error.
