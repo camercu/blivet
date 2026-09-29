@@ -192,6 +192,7 @@ impl Drop for KillOnDrop {
 }
 
 /// Wait for a long-running daemon's pidfile, and hold the daemon it names.
+#[must_use = "dropping the Daemon stops it; bind it for as long as the test needs it"]
 pub fn wait_for_daemon(pidfile: &Path) -> Option<Daemon> {
     wait_for_pidfile(pidfile).map(|pid| Daemon { pid })
 }
