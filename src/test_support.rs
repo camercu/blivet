@@ -168,3 +168,23 @@ pub(crate) fn fill_fd_table(free: usize) -> Vec<std::os::fd::OwnedFd> {
     held.truncate(held.len() - free);
     held
 }
+
+/// A pipe for a test to read to EOF: `(read, write)`, close-on-exec like the
+/// notification pipe, so a subprocess a parallel `cargo test` thread spawns
+/// does not inherit the write end and hold the read open. `RealForker` sets
+/// the flag in a second step (macOS has no `pipe2`), so a spawn in between
+/// can still inherit it; the read then waits for that subprocess to exit.
+pub(crate) fn make_pipe() -> (std::os::fd::OwnedFd, std::os::fd::OwnedFd) {
+    use crate::forker::{Forker, RealForker};
+    RealForker
+        .create_notification_pipe()
+        .expect("failed to create test pipe")
+}
+
+/// Drains a pipe's read end to EOF.
+pub(crate) fn read_pipe(rd: std::os::fd::OwnedFd) -> Vec<u8> {
+    use std::io::Read;
+    let mut buf = Vec::new();
+    std::fs::File::from(rd).read_to_end(&mut buf).unwrap();
+    buf
+}

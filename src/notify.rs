@@ -165,19 +165,7 @@ pub(crate) fn decode(buf: &[u8]) -> Outcome {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Read;
-
-    /// Create a pipe and return its (read, write) ends.
-    fn make_pipe() -> (OwnedFd, OwnedFd) {
-        nix::unistd::pipe().unwrap()
-    }
-
-    /// Drain the read end to EOF.
-    fn read_pipe(rd: OwnedFd) -> Vec<u8> {
-        let mut buf = Vec::new();
-        std::fs::File::from(rd).read_to_end(&mut buf).unwrap();
-        buf
-    }
+    use crate::test_support::{make_pipe, read_pipe};
 
     #[test]
     fn signal_ready_writes_success_byte() {
