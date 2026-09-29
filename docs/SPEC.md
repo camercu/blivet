@@ -337,7 +337,7 @@ are lowercase with no trailing punctuation.
 | `ChdirFailed`      | `chdir()` fails at runtime after fork                   |
 | `PermissionDenied` | Non-root caller with user/group switch, or setuid/setgid/chown fail |
 | `PidfileError`     | Pidfile cannot be written                               |
-| `OutputFileError`  | stdout/stderr file cannot be opened, truncated or dup2'd, or fd 1/2 cannot be saved first |
+| `OutputFileError`  | stdout/stderr file cannot be opened, truncated or dup2'd, or, in foreground mode, fd 1/2 cannot be saved first |
 | `ChownError`       | chown of pidfile/lockfile/output file failed             |
 | `ExecFailed`       | CLI-only: exec of target program failed (other than `ENOENT`/`EACCES`) |
 | `NotifyFailed`     | Writing the readiness byte to the notification pipe failed |
@@ -698,15 +698,20 @@ responsibility (via `drop_privileges()`), files are created as the
 current user (typically root); `drop_privileges()` chowns them to the
 target user before switching.
 
-A failed step 12 undoes what it did (R147). Each stdio slot is saved
-before it moves and put back if anything after fails: to what it held,
-or closed again if it was closed. The truncations, which cannot be
-undone, come last, once both streams are open, compared and in place.
-So a failed step 12 leaves the previous run's logs and the caller's
-stdout and stderr as they were. Two things stay: a stream file it
+In foreground mode a failed step 12 undoes what it did (R147). Each
+stdio slot is saved before it moves and put back if anything after
+fails: to what it held, or closed again if it was closed. In both modes
+the truncations, which cannot be undone, come last, once both streams
+are open, compared and in place. So a failed step 12 leaves the
+previous run's logs, and a foreground caller's stdout and stderr, as
+they were. Two things stay: a stream file it
 created, empty, and — after an I/O error truncating stderr once
 stdout's truncation succeeded — an emptied stdout log. This covers
-step 12 only; a later step that fails does not undo it.
+step 12 only; a later step that fails does not undo it. Daemon mode
+moves the slots without saving them: the child exits on any failure,
+so no one sees them. Saving needs a free descriptor, and a daemon that
+inherited descriptors up to its limit must still start; step 13 closes
+them.
 
 1. Open stdout with `O_WRONLY | O_CREAT`, plus `O_APPEND` per the
    append flag, but without `O_TRUNC`. Mode 0644 (subject to umask from
@@ -717,16 +722,19 @@ step 12 only; a later step that fails does not undo it.
    and no comparison of spellings sees every way two names reach one
    file — a symlink whose target does not exist yet, a case-insensitive
    filesystem, a hard link. This is where the files themselves are
-   compared. Then save fd 1 and `dup2` stdout onto it.
+   compared. Then save fd 1 (foreground mode) and `dup2` stdout onto
+   it.
 2. Open and compare stderr the same way. Because stdout is already on
    fd 1, a stderr of `/dev/stdout` names the stdout file. A stderr that
    is the stdout file takes fd 1's descriptor, so the two share one
    file description and write offset rather than overwriting each
-   other. Then save fd 2 and `dup2` stderr's descriptor onto it.
+   other. Then save fd 2 (foreground mode) and `dup2` stderr's
+   descriptor onto it.
 3. Unless appending, truncate each distinct regular file once — a FIFO
    or a device such as `/dev/null` has nothing to truncate.
 
-A slot that cannot be saved (other than because it is closed), a
+A foreground slot that cannot be saved (other than because it is
+closed), a
 `dup2` failure and a truncation failure return `OutputFileError`.
 
 The append flag applies uniformly to both stdout and stderr.
@@ -1498,8 +1506,9 @@ verification points.
   pidfile or the lockfile, under any name, is refused with
   `ValidationError`; stdout and stderr that are one file share a
   descriptor.
-- R147. A step 12 that fails puts every stdio slot it moved back as it
-  was, closed if it was closed, and truncates no file until both
-  streams are open, compared and in place. A stream file it created
+- R147. A step 12 that fails truncates no file until both streams are
+  open, compared and in place. In foreground mode it also puts every
+  stdio slot it moved back as it was, closed if it was closed; daemon
+  mode does not save the slots, so it starts with no descriptor free. A stream file it created
   stays, empty. The one truncation it cannot undo is stdout's, when
   truncating stderr then fails with an I/O error.

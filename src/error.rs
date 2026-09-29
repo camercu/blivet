@@ -74,7 +74,8 @@ pub enum DaemonizeError {
     #[error("pidfile error: {0}")]
     PidfileError(String),
 
-    /// stdout/stderr file cannot be opened or dup2'd.
+    /// stdout/stderr file cannot be opened, truncated or dup2'd, or, in
+    /// foreground mode, fd 1/2 cannot be saved first.
     #[error("output file error: {0}")]
     OutputFileError(String),
 
