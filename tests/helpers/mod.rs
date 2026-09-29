@@ -150,6 +150,7 @@ const TERM_GRACE: Duration = Duration::from_secs(2);
 /// program has exited its PID can be handed to an unrelated one, which the drop
 /// would then signal. A test whose program exits by itself waits with
 /// [`wait_for_pidfile`] instead.
+#[must_use = "dropping a Daemon stops it; bind it for as long as the test needs it"]
 pub struct Daemon {
     pid: u32,
 }
