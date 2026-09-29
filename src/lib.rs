@@ -1018,9 +1018,8 @@ mod tests {
 
         // Fill every descriptor under a small limit, then free two, which the
         // notification pipe's ends take. The child drops its read end, freeing
-        // one; step 6
-        // borrows it for /dev/null and gives it back, and the stdout file then
-        // takes it, so saving fd 1 would find none.
+        // one; step 6 borrows it for /dev/null and gives it back, and the
+        // stdout file then takes it, so saving fd 1 would find none.
         let held = crate::test_support::fill_fd_table(2);
 
         let result = catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -1032,15 +1031,15 @@ mod tests {
         let clone = || std::os::fd::AsFd::as_fd(&std::io::stdin()).try_clone_to_owned();
         let spare = (clone(), clone());
         drop(held);
-        assert!(
-            spare.0.is_ok() && spare.1.is_err(),
-            "not exactly one descriptor free: {spare:?}"
-        );
 
         let ctx = result
             .expect("a daemon with no free descriptor must start, not exit")
             .unwrap();
         drop(ctx);
+        assert!(
+            spare.0.is_ok() && spare.1.is_err(),
+            "not exactly one descriptor free: {spare:?}"
+        );
         let on_fd1 = fstat(std::io::stdout()).unwrap();
         let file = stat(&log).unwrap();
         assert_eq!(
