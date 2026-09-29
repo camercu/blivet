@@ -436,11 +436,9 @@ pub(crate) unsafe fn daemonize_inner(
             }
         }
 
-        let mut pipe_wr = Some(pipe_wr);
-
         // Step 2: setsid
         if let Err(e) = forker.setsid() {
-            signal_error_to_parent(&mut pipe_wr, &e);
+            pipe_wr.signal_error(&e);
             forker.exit(e.exit_code() as i32);
         }
 
@@ -451,21 +449,19 @@ pub(crate) unsafe fn daemonize_inner(
                 // Intermediate child exits silently: the grandchild daemon is
                 // the sole writer, so close the write-end copy without tripping
                 // the NotifyPipe Drop safety net.
-                if let Some(pipe) = pipe_wr {
-                    pipe.close();
-                }
+                pipe_wr.close();
                 forker.exit(0);
             }
             Ok(ForkResult::Child) => {
                 // Grandchild continues
             }
             Err(e) => {
-                signal_error_to_parent(&mut pipe_wr, &e);
+                pipe_wr.signal_error(&e);
                 forker.exit(e.exit_code() as i32);
             }
         }
 
-        pipe_wr
+        Some(pipe_wr)
     };
 
     // Steps 4–14 run in the final daemon process and report failures as a
