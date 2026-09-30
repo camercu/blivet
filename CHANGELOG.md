@@ -1,3 +1,10 @@
+## [0.14.1](https://github.com/camercu/blivet/compare/v0.14.0...v0.14.1) (2026-09-30)
+
+### Bug Fixes
+
+* **release:** build the man page from a small pinned shell, fetched first ([215be51](https://github.com/camercu/blivet/commit/215be517c575791cd1173b54940d4e975dafad6a))
+* **release:** bump only blivet's own entry in Cargo.lock ([133a3c9](https://github.com/camercu/blivet/commit/133a3c9b9b5aeb4b69208a9e66fc83660dedaeea))
+
 ## [0.14.0](https://github.com/camercu/blivet/compare/v0.13.0...v0.14.0) (2026-09-30)
 
 ### ⚠ BREAKING CHANGES
