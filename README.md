@@ -9,7 +9,7 @@
 **A correct, full-featured Unix daemon library and CLI for Rust.**
 
 Backgrounding a process is easy; doing it *correctly* is not. A daemon that
-forks, detaches, then dies mid-init looks exactly like success -- the launcher
+forks, detaches, then fails mid-init looks exactly like success -- the launcher
 has already exited 0. `blivet` closes that gap: it reports readiness or failure
 back over a notification pipe, with `sysexits.h` exit codes, so the launcher
 sees a real result. And it gets the rest right by default -- signal and fd
@@ -75,10 +75,13 @@ launcher ── daemonize() ──► fork → setsid → fork ──► grandch
    └───────────── readiness / error  (pipe) ─────────────┘
 ```
 
-That byte releases the launcher, which exits 0. If the daemon instead dies or
-calls `report_error()` before notifying, the launcher exits non-zero with the
-matching `sysexits.h` code -- so it sees a real result, not a process that
-detached and then crashed.
+That byte releases the launcher, which exits 0. If the daemon calls
+`report_error()`, the launcher exits with that error's `sysexits.h` code. If the
+daemon returns early or panics, the `DaemonContext` drops without notifying,
+reports a failure, and the launcher exits non-zero. One gap remains. A daemon
+that ends before `ctx` drops, because a signal killed it or it called
+`std::process::exit`, closes the pipe with no message. The launcher reads that
+as success, as it does when the CLI's `exec` closes the pipe.
 
 Steps 1 and 2 must run **single-threaded**. [Safety](#safety) explains why.
 
