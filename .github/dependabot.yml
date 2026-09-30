@@ -19,16 +19,6 @@ updates:
     groups:
       cargo-deps:
         patterns: ["*"]
-    ignore:
-      # serial_test 4.x declares rust-version 1.93.1. The openbsd smoke job
-      # runs `cargo test --locked --lib` against OpenBSD's packaged rust
-      # (`pkg_add rust`, 1.90.0 as of OpenBSD 7.8) — Tier 3, no rustup — so a
-      # 4.x dev-dep fails resolution there before any test runs.
-      # Drop this ignore once OpenBSD packages rust >= serial_test's MSRV, and
-      # raise `openbsd_rust` in the justfile in the same commit — `just
-      # msrv-check` enforces that floor locally and in the `ci` job.
-      - dependency-name: serial_test
-        versions: [">=4.0.0"]
 
   - package-ecosystem: github-actions
     directory: /

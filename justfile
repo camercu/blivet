@@ -64,7 +64,7 @@ check-cross:
 # Lowest rustc that must be able to *resolve* the dev-dependency graph: the
 # rust OpenBSD ships via `pkg_add rust` (Tier 3, no rustup), which the openbsd
 # smoke job runs `cargo test --lib` under. Bump when OpenBSD packages a newer
-# rust; that is also what unblocks the serial_test ignore in dependabot.yml.
+# rust.
 openbsd_rust := "1.90"
 
 # Lowest rustc that must be able to *compile* the dev-dependency graph: the
@@ -88,8 +88,8 @@ docker_rust := "1.87"
 #
 # Cargo is not a backstop for either: the toolchain the msrv job pins (1.85)
 # predates the resolver diagnostic and silently compiled serial_test 4.x
-# (rust-version 1.93.1) — only OpenBSD's 1.90 cargo, which does enforce,
-# caught it. Reading metadata directly holds on every toolchain.
+# (rust-version 1.93.1), a dev-dependency at the time — only OpenBSD's 1.90
+# cargo, which does enforce, caught it. Reading metadata directly holds on every toolchain.
 msrv-check:
     #!/usr/bin/env bash
     set -euo pipefail
