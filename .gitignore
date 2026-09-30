@@ -1,7 +1,10 @@
 /target
 /mutants.out
 /mutants.out.old
-.claude/
+# Local Claude Code state stays out; the committed settings.json turns off
+# commit and PR attribution for every session, cloud ones included.
+/.claude/*
+!/.claude/settings.json
 .direnv/
 node_modules/
 /.harden/
