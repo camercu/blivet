@@ -2,7 +2,18 @@
 // commitlint.config.js, which rejects it at commit time, and
 // check-agent-attribution.mjs, which rejects it anywhere in history, so the
 // two cannot disagree.
-const PATTERN = /^(Claude-Session:|Co-Authored-By:.*(Claude|anthropic\.com)|.*Generated with \[?Claude)/im;
+
+// The exact trailers Claude Code writes, each anchored to the start of a
+// line: prose that mentions them, or a human co-author named Claude, is not
+// attribution.
+const PATTERN = new RegExp(
+  [
+    String.raw`^Claude-Session: https://claude\.ai/`,
+    String.raw`^Co-Authored-By: Claude\b[^<\n]*<noreply@anthropic\.com>`,
+    String.raw`^\S*\s*Generated with \[Claude Code\]`,
+  ].join('|'),
+  'im',
+);
 
 // Dependabot writes its own bodies, quoting upstream release notes that may
 // contain anything; it cannot add these trailers itself.

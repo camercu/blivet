@@ -1,0 +1,3 @@
+# Commits check-agent-attribution.mjs accepts although they match: one full
+# SHA per line, then the reason. For a false positive already on main, which
+# would otherwise block every CI run until history is rewritten.

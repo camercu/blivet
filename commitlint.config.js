@@ -11,7 +11,7 @@ module.exports = {
       rules: {
         'no-agent-attribution': ({ raw }) => [
           !AGENT_ATTRIBUTION.test(raw),
-          'agent attribution trailers (Claude-Session:, a Claude co-author) are not allowed',
+          'agent attribution trailers (Claude-Session:, a Claude co-author, Generated with Claude Code) are not allowed',
         ],
       },
     },
