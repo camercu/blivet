@@ -12,3 +12,4 @@ Format: `NNNN-kebab-case-title.md`, numbered in acceptance order.
 | [0001](0001-capability-based-platform-gating.md) | Gate platform differences on capabilities, not OS names | Accepted |
 | [0002](0002-android-support-and-test-tiers.md) | Android is a supported platform, proven by tiered CI | Accepted (tier 3's standing superseded by 0003) |
 | [0003](0003-the-emulator-tier-is-advisory.md) | The Android emulator tier is advisory, not a release gate | Accepted |
+| [0004](0004-privileged-init-runs-inside-daemonize.md) | Privileged init runs inside the daemonize call | Accepted |
