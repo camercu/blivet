@@ -159,7 +159,7 @@ jobs:
       - uses: cachix/install-nix-action@v31
       - name: Check manpage is up to date
         run: |
-          nix-shell --run 'just manpage'
+          nix-shell nix/manpage.nix --run 'just manpage'
           git diff --exit-code docs/daemonize.1 || {
             echo "::error::docs/daemonize.1 is out of date. Run 'just manpage' and commit."
             exit 1

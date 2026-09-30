@@ -27,6 +27,18 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 24
+      # Fetch the man-page shell before semantic-release starts, so a failed
+      # binary-cache download stops the job before anything is tagged or
+      # published. A download is retried because cache.nixos.org does fail
+      # transiently: run 36654854263 died on an HTTP 416 for openssl.
+      - name: Fetch the man-page shell
+        run: |
+          for attempt in 1 2 3; do
+            nix-shell nix/manpage.nix --run true && exit 0
+            echo "::warning::fetching nix/manpage.nix failed (attempt $attempt)"
+            sleep 30
+          done
+          exit 1
       - name: Release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

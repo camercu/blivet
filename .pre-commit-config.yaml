@@ -10,7 +10,7 @@ repos:
     hooks:
       - id: manpage-check
         name: manpage up to date
-        entry: nix-shell --run 'just manpage'
+        entry: nix-shell nix/manpage.nix --run 'just manpage'
         language: system
         files: 'docs/daemonize\.1(\.md)?$'
         pass_filenames: false
