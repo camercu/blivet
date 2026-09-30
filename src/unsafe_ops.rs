@@ -292,7 +292,13 @@ pub(crate) fn install_pidfile_cleanup_signals(
 /// - **NetBSD:** `sysctl(KERN_PROC2/KERN_PROC_PID)` → `kinfo_proc2.p_nlwps`.
 /// - **OpenBSD:** `sysctl(KERN_PROC_PID | KERN_PROC_SHOW_THREADS)`; the kernel
 ///   returns one record per thread, so the count is `oldlen / record_size`.
+// The per-OS kernel queries below carry `mutants::skip`. cargo-mutants
+// mutates a `cfg`-gated function even where it is not compiled, so on the
+// Linux mutation run each one "survives" whenever a diff touches it: no test
+// there can see it. Each is tested on its own OS instead, by the capability
+// probes (`thread_count_is_readable`) in the tier that runs that OS.
 #[cfg(target_os = "macos")]
+#[cfg_attr(test, mutants::skip)] // not compiled on the Linux mutation run
 pub(crate) fn thread_count() -> std::io::Result<usize> {
     let mut info: libc::proc_taskinfo = unsafe { std::mem::zeroed() };
     let size = std::mem::size_of::<libc::proc_taskinfo>() as libc::c_int;
@@ -316,6 +322,7 @@ pub(crate) fn thread_count() -> std::io::Result<usize> {
 }
 
 #[cfg(target_os = "freebsd")]
+#[cfg_attr(test, mutants::skip)] // see the note above the macOS query
 pub(crate) fn thread_count() -> std::io::Result<usize> {
     let mut kp: libc::kinfo_proc = unsafe { std::mem::zeroed() };
     let mut size = std::mem::size_of::<libc::kinfo_proc>();
@@ -344,6 +351,7 @@ pub(crate) fn thread_count() -> std::io::Result<usize> {
 }
 
 #[cfg(target_os = "netbsd")]
+#[cfg_attr(test, mutants::skip)] // see the note above the macOS query
 pub(crate) fn thread_count() -> std::io::Result<usize> {
     let mut kp: libc::kinfo_proc2 = unsafe { std::mem::zeroed() };
     let mut size = std::mem::size_of::<libc::kinfo_proc2>();
@@ -373,6 +381,7 @@ pub(crate) fn thread_count() -> std::io::Result<usize> {
 }
 
 #[cfg(target_os = "openbsd")]
+#[cfg_attr(test, mutants::skip)] // see the note above the macOS query
 pub(crate) fn thread_count() -> std::io::Result<usize> {
     let elem = std::mem::size_of::<libc::kinfo_proc>();
 
