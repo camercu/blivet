@@ -37,22 +37,17 @@ show that form. See [Platform support](#platform-support).
 
 ## Why blivet
 
-- **Correct by default.** Double-fork, `setsid`, signal reset
-  (including real-time signals on Linux and Android; SIGPIPE stays ignored so
-  pipe writes keep returning errors instead of killing the daemon), signal-mask
-  clear, fd close, and `/dev/null` redirect -- the things hand-rolled
-  daemonizers forget.
+- **Correct by default.** Double-fork, `setsid`, reset signal dispositions
+  (real-time signals too, on Linux and Android), a cleared signal mask, closed
+  fds, and `/dev/null` on stdio. `SIGPIPE` stays ignored, so a write to a
+  closed pipe returns an error instead of killing the daemon.
+- **No `unsafe` in your code.** `daemonize()` and `drop_privileges()` check
+  that the process is single-threaded before the steps that need it. Inside
+  the crate, `#![deny(unsafe_code)]` makes each `unsafe` block opt in.
 - **Split-phase privileges.** `daemonize()` returns while still privileged, so
   you can bind port 80 or `chroot` before `drop_privileges()`.
-- **Safe by default.** The checked entry points verify single-threadedness, so
-  you write no `unsafe`; the crate's own `unsafe` (libc FFI, `fork`, `setenv`)
-  is isolated under `#![deny(unsafe_code)]` and documented. Opt-out variants are
-  there when you manage the single-threaded contract yourself.
-- **Library and CLI.** A builder API in the familiar shape --
-  infallible setters, deferred validation, `?`-friendly errors with `sysexits.h`
-  codes -- or the standalone `daemonize` binary (`cargo install blivet`) that
-  wraps any program. The ergonomics of the simple wrappers, with the power they
-  skip.
+- **Library and CLI.** A builder with infallible setters and deferred
+  validation, or the `daemonize` binary, which wraps any program.
 
 ## How it works
 
