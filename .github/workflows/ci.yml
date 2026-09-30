@@ -138,9 +138,9 @@ jobs:
       - uses: taiki-e/install-action@cargo-llvm-cov
       - uses: taiki-e/install-action@nextest
       # Under nextest, and on the gate profile, for the reasons the justfile's
-      # `test` recipe is: the tests that close std fds process-wide corrupt a
-      # shared harness's result pipe, and the gate profile kills a hung test
-      # without killing a healthy one on a loaded machine. Through the
+      # `test` recipe is: the gate profile kills a hung test without killing a
+      # healthy one on a loaded machine, and one process per test contains
+      # anything that slips past the isolation assert. Through the
       # vacuous-run guard like every other tier: a coverage report measured
       # from zero tests is a confident 0%.
       - name: Generate coverage

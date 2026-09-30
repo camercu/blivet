@@ -89,7 +89,8 @@ docker_rust := "1.87"
 # Cargo is not a backstop for either: the toolchain the msrv job pins (1.85)
 # predates the resolver diagnostic and silently compiled serial_test 4.x
 # (rust-version 1.93.1), a dev-dependency at the time — only OpenBSD's 1.90
-# cargo, which does enforce, caught it. Reading metadata directly holds on every toolchain.
+# cargo, which does enforce, caught it. Reading metadata directly holds on
+# every toolchain.
 msrv-check:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -190,12 +191,11 @@ check: fmt-check lint lint-deny doc msrv-check check-cross check-non-unix check-
 
 # Run tests (excludes ignored root/Linux tests)
 #
-# Under nextest, for the reason `coverage` is: several tests have process-wide
-# side effects (redirecting and closing std fds) that clobber the shared
-# harness's result pipe, failing the run with a BrokenPipe unrelated to any
-# change. nextest gives each test its own process, so none of them can corrupt
-# the collector. A gate that fails now and then teaches its readers to re-run
-# it, which is how a real red gets waved through.
+# Under nextest, on the gate profile: it kills a hung test after a bound where
+# the plain harness would wait forever, and giving each test its own process
+# contains anything that changes process-wide state and slips past
+# test_support::assert_isolated. The package and bionic tiers run the plain
+# harness, so a test that breaks it still fails somewhere.
 #
 # nextest does not run doctests, so they run after it on the plain harness.
 # They are compiled fresh by rustdoc every time and touch no process state, so
