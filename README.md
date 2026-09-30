@@ -192,59 +192,6 @@ guarded). `daemonize_unchecked()` and `drop_privileges_unchecked()` are the
 `unsafe` opt-outs for callers who manage the contract themselves, or who run on
 a target without a thread-count source.
 
-## Platform support
-
-What a platform claim is worth depends on what CI proves about it, so the
-claims are tiered:
-
-| Tier | What CI proves | Platforms |
-| --- | --- | --- |
-| **Supported** | The library test suite runs on the real OS | Linux, Android, macOS, FreeBSD, NetBSD, OpenBSD |
-| **Cross-checked** | The crate type-checks for the target; no test runs there | Other architectures of the above, e.g. `aarch64-linux-android` |
-| **Best-effort** | It type-checks and takes the fallback for every capability | Any other Unix `nix` supports — illumos stands in for the tier, type-checked on every run and CLI-smoke-tested in CI |
-
-Platform differences are decided one capability at a time — is the thread count
-readable, is there a trustworthy open-fd directory, does libc reserve real-time
-signals, does `faccessat` accept `AT_EACCESS` — rather than by OS name, so a new
-platform can be partly supported instead of falling off a cliff into every
-fallback at once. Each capability is checked against the running system by a
-probe test.
-
-One carve-out, so the Supported row means what it says. Tests that check this
-repository against itself test the repository, not the platform, and not every
-tier reaches them. They are integration tests, so only the tiers that build
-integration targets run them: Linux and macOS, both on every pull request. The
-exception has to live in the library: the exit-code table is checked against
-the error type by a library test, which bakes the README into the binary and so
-travels to the cross-built tiers with it.
-
-"Any other Unix" is not a checkable class, and one member of it does not hold:
-`x86_64-pc-solaris` fails to compile, because `nix` gates `Flock` and
-`sys::resource` away there. What the row is backed by is illumos — a Unix the
-capability table does not list, so it takes every fallback branch — type-checked
-with `--all-targets` under `-D warnings` on every run.
-
-On a best-effort target `daemonize()` and `drop_privileges()` are `#[deprecated]`
-stubs: using one warns with guidance by default and is a hard error under
-`-D warnings`, and the `unsafe` forms are the way through. Non-Unix targets are
-a `compile_error!` naming the target, not a wall of type errors.
-
-Android is supported from API level 24 (Android 7.0): group lookup links
-`getgrnam_r`, which bionic added then, so a build for an older API level fails
-to link. CI links at 24, runs the library suite on the Termux image's bionic
-and the CLI on an API 34 emulator; nothing runs at 24 itself. One behaviour
-differs: bionic rejects `AT_EACCESS`, so the pre-fork
-writability check there answers for the real UID rather than the effective one.
-
-Android is also the one Supported platform whose "real OS" is split across two
-jobs. The blocking one runs the library suite against bionic and the real
-dynamic linker, on a Linux kernel in a container. The one with a real Android
-kernel and SELinux is the emulator smoke test, which is advisory — it is the
-slowest job in the matrix and the likeliest to flake, and gating releases on a
-booted emulator held up every commit in a push when one failed to start. So
-what blocks on Android is the libc and the linker; the kernel and SELinux are
-proven, but a failure there is read rather than enforced.
-
 ## API reference
 
 Full reference is on [docs.rs](https://docs.rs/blivet); the essentials:
@@ -431,6 +378,31 @@ them.
 | `-g` | `--group NAME\|GID` | Switch to group after daemonizing (requires root) |
 | `-f` | `--foreground`      | Stay in foreground (no fork/setsid) |
 | `-v` | `--verbose`         | Print diagnostic info before daemonizing |
+
+## Platform support
+
+| Tier | What CI proves | Platforms |
+| --- | --- | --- |
+| **Supported** | The library tests pass on x86_64 (macOS: arm64) | Linux, Android, macOS, FreeBSD, NetBSD, OpenBSD |
+| **Cross-checked** | The crate compiles; no tests run | `aarch64-linux-android` |
+| **Best-effort** | The crate compiles, and the CLI runs on illumos | Other Unix targets that `nix` supports |
+
+CI builds no other architecture of a Supported OS. aarch64 Linux, for example,
+uses the same code as x86_64 Linux, but nothing checks it.
+
+On a best-effort target, `daemonize()` and `drop_privileges()` are
+`#[deprecated]` stubs that panic. Call `daemonize_unchecked()` and
+`drop_privileges_unchecked()` instead. Solaris (`x86_64-pc-solaris`) does not
+compile, because `nix` lacks `Flock` there. A non-Unix target fails with one
+`compile_error!` that names it.
+
+Android needs API level 24 (Android 7.0) or later. There, the pre-fork check
+that the pidfile, lockfile, and output directories are writable tests the real
+UID, not the effective UID, because bionic rejects `AT_EACCESS`. CI runs the
+Android library tests against bionic in a Linux container. An emulator runs
+the CLI on a real Android kernel, but that job does not block a release.
+
+[docs/SPEC.md](docs/SPEC.md#platform-support) has the details.
 
 ## Minimum supported Rust version
 

@@ -51,9 +51,11 @@ Support is tiered by what CI proves:
 
 | Tier | What CI proves | Platforms |
 | --- | --- | --- |
-| Supported | The library test suite runs on the real OS | Linux, Android, macOS, FreeBSD, NetBSD, OpenBSD |
-| Cross-checked | The crate type-checks for the target; no test runs there | Other architectures of the above |
+| Supported | The library test suite runs on the OS, on x86_64 (macOS: arm64) | Linux, Android, macOS, FreeBSD, NetBSD, OpenBSD |
+| Cross-checked | The crate type-checks for the target; no test runs there | `aarch64-linux-android` |
 | Best-effort | It type-checks and takes the fallback for every capability | Any other Unix `nix` supports; illumos stands in for the tier |
+
+CI builds no other architecture of a Supported OS.
 
 On a best-effort target `daemonize()` and `drop_privileges()` are
 `#[deprecated]` stubs that panic if called; the `unsafe` unchecked
