@@ -155,6 +155,7 @@ fn open_above_stdio<P: ?Sized + nix::NixPath>(
 /// Returns [`SystemError`](DaemonizeError::SystemError) if `/dev/null` cannot
 /// be opened or a `dup2` fails (e.g. a minimal container with no `/dev/null`),
 /// so the caller can report the failure to the parent rather than crashing.
+#[allow(clippy::disallowed_methods)] // a stdio mover; asserts isolation under test
 pub(crate) fn redirect_to_devnull(stdout_stderr: bool) -> Result<(), DaemonizeError> {
     #[cfg(test)]
     crate::test_support::assert_isolated("redirect_to_devnull");
@@ -501,6 +502,7 @@ impl StdioSlot {
         }
     }
 
+    #[allow(clippy::disallowed_methods)] // the stdio mover redirect_output uses
     fn dup2(self, source: impl AsFd) -> Result<(), nix::errno::Errno> {
         match self {
             Self::Stdout => unistd::dup2_stdout(source),

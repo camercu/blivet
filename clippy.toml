@@ -1,3 +1,6 @@
 disallowed-methods = [
     { path = "nix::unistd::pipe", reason = "leaves both ends inheritable; use RealForker's pipe (tests: test_support::make_pipe)" },
+    { path = "nix::unistd::dup2_stdin", reason = "moves a stdio slot; only redirect_to_devnull and StdioSlot::dup2 may, and they assert test isolation" },
+    { path = "nix::unistd::dup2_stdout", reason = "moves a stdio slot; only redirect_to_devnull and StdioSlot::dup2 may, and they assert test isolation" },
+    { path = "nix::unistd::dup2_stderr", reason = "moves a stdio slot; only redirect_to_devnull and StdioSlot::dup2 may, and they assert test isolation" },
 ]
