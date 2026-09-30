@@ -35,20 +35,27 @@ pub(crate) struct RealForker;
 #[allow(unsafe_code)]
 impl Forker for RealForker {
     fn create_notification_pipe(&mut self) -> Result<(OwnedFd, OwnedFd), DaemonizeError> {
-        use nix::fcntl::{fcntl, FcntlArg};
-        use std::os::fd::FromRawFd;
+        use nix::fcntl::{fcntl, FcntlArg, FdFlag};
+        use std::os::fd::{AsRawFd, FromRawFd};
 
         let failed = |e| DaemonizeError::SystemError(format!("notification pipe: {e}"));
         #[allow(clippy::disallowed_methods)] // the one place close-on-exec is set
         let (rd, wr) = nix::unistd::pipe().map_err(failed)?;
-        // Move each end to descriptor 3 or above, close-on-exec (R107, R152).
-        // With stdio closed, `pipe` returns 0 and 1, and step 6 would `dup2`
-        // /dev/null over them. pipe2(O_CLOEXEC) would set the flag atomically,
-        // but macOS lacks it; the separate step is safe because daemonize()
-        // requires single-threaded execution. The originals close on drop.
+        // Make each end close-on-exec (R107) and keep it above descriptor 2
+        // (R152): with stdio closed, `pipe` returns 0 and 1, and step 6 would
+        // `dup2` /dev/null over them. Only such an end is moved, so a table
+        // with just two descriptors free still gets a pipe (R148 keeps
+        // failure for none free). pipe2(O_CLOEXEC) would set the flag
+        // atomically, but macOS lacks it; the separate step is safe because
+        // daemonize() requires single-threaded execution.
         let above_stdio = |end: OwnedFd| -> Result<OwnedFd, DaemonizeError> {
+            if end.as_raw_fd() > 2 {
+                fcntl(end.as_fd(), FcntlArg::F_SETFD(FdFlag::FD_CLOEXEC)).map_err(failed)?;
+                return Ok(end);
+            }
             let fd = fcntl(end.as_fd(), FcntlArg::F_DUPFD_CLOEXEC(3)).map_err(failed)?;
-            // SAFETY: F_DUPFD_CLOEXEC returned a new descriptor we alone own.
+            // SAFETY: F_DUPFD_CLOEXEC returned a new descriptor we alone own;
+            // the original closes when `end` drops.
             Ok(unsafe { OwnedFd::from_raw_fd(fd) })
         };
         Ok((above_stdio(rd)?, above_stdio(wr)?))
