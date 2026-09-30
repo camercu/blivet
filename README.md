@@ -37,9 +37,6 @@ show that form. See [Platform support](#platform-support).
 
 ## Why blivet
 
-- **Parent notification.** The launcher blocks until the daemon signals
-  readiness or reports an error -- no "did it start?" polling. Forget to call
-  `notify_parent()` and the launcher exits non-zero automatically.
 - **Correct by default.** Double-fork, `setsid`, signal reset
   (including real-time signals on Linux and Android; SIGPIPE stays ignored so
   pipe writes keep returning errors instead of killing the daemon), signal-mask
