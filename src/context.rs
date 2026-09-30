@@ -219,7 +219,11 @@ impl DaemonContext {
     /// refuses a signal whose default action does not end the process, such as
     /// `SIGCHLD`: the handler re-raises into that default, so it would remove
     /// the pidfile of a daemon that keeps running. `SIGUSR1` and the other
-    /// terminating signals are accepted. For a
+    /// terminating signals are accepted.
+    ///
+    /// Call this before any other thread installs signal handlers. The check
+    /// and the install are separate steps, so a handler another thread
+    /// registers between them is replaced. For a
     /// graceful shutdown, run your own signal loop instead and let this context
     /// drop, or call [`cleanup`](Self::cleanup) — see the
     /// [README](https://github.com/camercu/blivet#pidfile-cleanup-on-signals).
