@@ -1119,13 +1119,13 @@ shared harness runs other tests on other threads meanwhile. The
 functions that change that state assert it under test. The signal mask
 is per-thread, so its test stays in the shared process.
 
-- **Umask:** set, read back, assert, restore.
+- **Umask:** start from a different umask, set, read back, assert.
 - **Signal mask:** block signal, clear, read back, assert empty.
 - **Signal dispositions:** install handler for SIGUSR1, reset, assert
-  `SIG_DFL`. Repeat for SIGRTMIN. For SIGPIPE, assert the pre-reset
-  disposition (both `SIG_IGN` and `SIG_DFL`) survives unchanged.
+  `SIG_DFL`. For SIGPIPE, assert the pre-reset disposition (both
+  `SIG_IGN` and `SIG_DFL`) survives unchanged.
 - **Environment:** set pairs with duplicates, assert last-write-wins.
-- **chdir:** change to tempdir, assert current_dir, restore.
+- **chdir:** change to tempdir, assert current_dir.
 - **fd redirect:** redirect fd 1 to tempfile, write, read back, assert.
 - **fd closing:** open fds, close range with retained fd, assert
   retained open, others closed.
