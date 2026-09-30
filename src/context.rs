@@ -836,7 +836,7 @@ mod tests {
         let result = ctx(&cfg, None, None).cleanup_on_signals(&[libc::SIGHUP]);
 
         assert!(
-            matches!(&result, Err(DaemonizeError::ValidationError(_))),
+            matches!(&result, Err(DaemonizeError::ValidationError(m)) if m.contains(&libc::SIGHUP.to_string())),
             "{result:?}"
         );
     }
