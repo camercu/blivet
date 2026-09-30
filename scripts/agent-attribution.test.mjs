@@ -16,6 +16,7 @@ test('catches the trailers Claude Code writes', () => {
     'Co-Authored-By: Claude Opus 4.1 <noreply@anthropic.com>',
     'co-authored-by:  Claude <claude@anthropic.com>',
     '🤖 Generated with [Claude Code](https://claude.com/claude-code)',
+    'Generated with [Claude Code](https://claude.ai/code)',
   ]) {
     assert.ok(PATTERN.test(body(trailer)), trailer);
     assert.ok(PATTERN.test(body(trailer).replaceAll('\n', '\r\n')), `${trailer} (CRLF)`);
@@ -26,6 +27,10 @@ test('lets prose and human co-authors through', () => {
   for (const line of [
     'Drop the "Generated with Claude" footer from the notes.',
     'Drop the Generated with [Claude Code] footer from the notes.',
+    '- Generated with [Claude Code] is what the old footer said.',
+    'Note: Generated with [Claude Code] lines are rejected.',
+    'Generated with [Claude Code] was the footer, without a link.',
+    'Old notes end in 🤖 Generated with [Claude Code](https://claude.com/claude-code).',
     'Co-authored-by: Claude Shannon <claude@example.com>',
     'Claude-Session: wrapping onto a new line in prose',
     'See Claude-Session: https://claude.ai/code/x in the notes.',

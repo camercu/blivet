@@ -10,7 +10,7 @@ const PATTERN = new RegExp(
   [
     String.raw`^Claude-Session: https?://claude\.(?:ai|com)/`,
     String.raw`^Co-Authored-By:\s+Claude\b[^<\n]*<[^>\n]*@anthropic\.com>`,
-    String.raw`^\S*\s*Generated with \[Claude Code\]`,
+    String.raw`^(?:🤖 )?Generated with \[Claude Code\]\(`,
   ].join('|'),
   'im',
 );
