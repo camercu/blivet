@@ -6,7 +6,7 @@
 import { execFileSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 
-const AGENT_ATTRIBUTION = createRequire(import.meta.url)('./agent-attribution.cjs');
+const { PATTERN, isDependabot } = createRequire(import.meta.url)('./agent-attribution.cjs');
 
 const log = execFileSync('git', ['log', '--format=%h %s%x00%B%x1e', 'HEAD'], {
   encoding: 'utf8',
@@ -17,7 +17,7 @@ const offenders = log
   .map((entry) => entry.trim())
   .filter(Boolean)
   .map((entry) => entry.split('\x00'))
-  .filter(([, body]) => AGENT_ATTRIBUTION.test(body))
+  .filter(([, body]) => !isDependabot(body) && PATTERN.test(body))
   .map(([title]) => title);
 
 if (offenders.length > 0) {

@@ -2,7 +2,7 @@
 // history and release notes: 50 commits once carried a Claude-Session link
 // that ended up in the v0.14.0 notes. .claude/settings.json turns them off at
 // the source; this rejects any that get through.
-const AGENT_ATTRIBUTION = require('./scripts/agent-attribution.cjs');
+const { PATTERN: AGENT_ATTRIBUTION, isDependabot } = require('./scripts/agent-attribution.cjs');
 
 module.exports = {
   extends: ['@commitlint/config-conventional'],
@@ -21,5 +21,5 @@ module.exports = {
   },
   // Dependabot bodies embed release notes and long compare links that blow
   // past body-max-line-length; its commits are machine-generated, so skip.
-  ignores: [(message) => message.includes('Signed-off-by: dependabot[bot]')],
+  ignores: [isDependabot],
 };
