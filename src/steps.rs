@@ -825,10 +825,28 @@ mod tests {
     #[test]
     #[ignore]
     fn redirect_to_devnull_succeeds_subprocess() {
+        use nix::sys::stat::fstat;
+
         if !is_subprocess() {
             return;
         }
+        let devnull = fstat(open(c"/dev/null", OFlag::O_RDONLY, Mode::empty()).unwrap()).unwrap();
+
         redirect_to_devnull(true).unwrap();
+
+        // fd 2 is /dev/null too by now, so a failure here reports only through
+        // the exit status.
+        for (name, slot) in [
+            ("stdin", fstat(std::io::stdin()).unwrap()),
+            ("stdout", fstat(std::io::stdout()).unwrap()),
+            ("stderr", fstat(std::io::stderr()).unwrap()),
+        ] {
+            assert_eq!(
+                (slot.st_dev, slot.st_ino),
+                (devnull.st_dev, devnull.st_ino),
+                "{name} is not /dev/null"
+            );
+        }
     }
 
     /// With stdin closed, `open("/dev/null")` hands back fd 0 itself. The
