@@ -2,8 +2,7 @@
 // history and release notes: 50 commits once carried a Claude-Session link
 // that ended up in the v0.14.0 notes. .claude/settings.json turns them off at
 // the source; this rejects any that get through.
-const AGENT_ATTRIBUTION =
-  /^(Claude-Session:|Co-Authored-By:.*(Claude|anthropic\.com)|.*Generated with \[?Claude)/im;
+const AGENT_ATTRIBUTION = require('./scripts/agent-attribution.cjs');
 
 module.exports = {
   extends: ['@commitlint/config-conventional'],

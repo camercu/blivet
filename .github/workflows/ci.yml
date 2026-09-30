@@ -190,7 +190,6 @@ jobs:
       - run: node scripts/check-release-config.mjs
 
   commitlint:
-    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -200,7 +199,12 @@ jobs:
         with:
           node-version: 24
       - run: npm ci
+      # On every push too: a trailer that reaches main by direct push skips
+      # the commit-msg hook, and a green CI is what lets Release run.
+      - name: Reject agent attribution anywhere in history
+        run: node scripts/check-agent-attribution.mjs
       - name: Validate PR commits
+        if: github.event_name == 'pull_request'
         run: >-
           npx commitlint
           --from ${{ github.event.pull_request.base.sha }}
