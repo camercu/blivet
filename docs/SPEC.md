@@ -1552,3 +1552,13 @@ verification points.
   reports a failure and exits 1, so a daemon killed by a signal, or
   ended by `std::process::exit`, before it notifies is not reported as
   started.
+- R151. `cleanup_on_signals()` refuses, before changing anything, a
+  signal whose default action does not terminate the process (ignore,
+  stop, or continue: SIGCHLD, SIGURG, SIGWINCH, SIGCONT, SIGTSTP,
+  SIGTTIN, SIGTTOU on every platform. SIGIO and SIGINFO, ignored by
+  default on the BSDs and macOS only, are not in the list: telling them
+  apart needs a per-OS answer the capability table does not hold). Its
+  handler re-raises into the default action, so on such a signal it
+  would remove the pidfile of a daemon that keeps running. A signal
+  that terminates by default, SIGUSR1 included, is accepted. The error
+  names the signal.

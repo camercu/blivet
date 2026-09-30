@@ -163,6 +163,25 @@ pub(crate) extern "C" fn pidfile_cleanup_handler(signum: i32) {
     unsafe { libc::raise(signum) };
 }
 
+/// Whether `sig`'s default action ends the process (R151).
+///
+/// [`pidfile_cleanup_handler`] re-raises into the default action. On a signal
+/// whose default is to ignore, stop, or continue, it would remove the pidfile
+/// and leave the daemon running. The list holds the signals every supported
+/// platform treats that way.
+pub(crate) fn terminates_by_default(sig: i32) -> bool {
+    ![
+        libc::SIGCHLD,
+        libc::SIGURG,
+        libc::SIGWINCH,
+        libc::SIGCONT,
+        libc::SIGTSTP,
+        libc::SIGTTIN,
+        libc::SIGTTOU,
+    ]
+    .contains(&sig)
+}
+
 /// Install [`pidfile_cleanup_handler`] for each signal in `signals`.
 ///
 /// Stores `pidfile` (leaked, so it outlives any later free) for the handler to
@@ -175,7 +194,8 @@ pub(crate) extern "C" fn pidfile_cleanup_handler(signum: i32) {
 /// pointer are restored, and the returned error names the failing signal.
 ///
 /// Refuses (R149), before changing anything, a signal whose disposition is
-/// neither the default nor this handler.
+/// neither the default nor this handler, and (R151) one whose default action
+/// does not terminate the process.
 pub(crate) fn install_pidfile_cleanup_signals(
     pidfile: &std::ffi::CStr,
     signals: &[i32],
@@ -194,6 +214,12 @@ pub(crate) fn install_pidfile_cleanup_signals(
     // names the signal.
     let ours = pidfile_cleanup_handler as extern "C" fn(i32) as usize;
     for &sig in signals {
+        if !terminates_by_default(sig) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("signal {sig} does not terminate the process by default; its cleanup would remove a running daemon's pidfile"),
+            ));
+        }
         let mut current: libc::sigaction = unsafe { std::mem::zeroed() };
         // SAFETY: a null new action only reads the disposition into `current`.
         let queried = unsafe { libc::sigaction(sig, std::ptr::null(), &mut current) } == 0;
@@ -432,6 +458,39 @@ mod tests {
     use super::*;
     use crate::test_support::{is_subprocess, run_in_subprocess};
     use std::sync::atomic::Ordering;
+
+    // Covers: R151
+    #[test]
+    fn only_signals_that_terminate_by_default_qualify_for_cleanup() {
+        for sig in [
+            libc::SIGUSR1,
+            libc::SIGUSR2,
+            libc::SIGHUP,
+            libc::SIGINT,
+            libc::SIGQUIT,
+            libc::SIGTERM,
+            libc::SIGALRM,
+        ] {
+            assert!(
+                terminates_by_default(sig),
+                "signal {sig} terminates by default"
+            );
+        }
+        for sig in [
+            libc::SIGCHLD,
+            libc::SIGURG,
+            libc::SIGWINCH,
+            libc::SIGCONT,
+            libc::SIGTSTP,
+            libc::SIGTTIN,
+            libc::SIGTTOU,
+        ] {
+            assert!(
+                !terminates_by_default(sig),
+                "signal {sig} does not terminate by default"
+            );
+        }
+    }
 
     /// Current disposition of `sig` (the `sa_sigaction` word), read without
     /// changing it.

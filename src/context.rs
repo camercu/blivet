@@ -215,7 +215,11 @@ impl DaemonContext {
     ///
     /// One approach per signal: this replaces the signal's disposition, so it
     /// refuses a signal that already has a handler (one registered with
-    /// [`signal_hook`](https://docs.rs/signal-hook), say) or is ignored. For a
+    /// [`signal_hook`](https://docs.rs/signal-hook), say) or is ignored. It also
+    /// refuses a signal whose default action does not end the process, such as
+    /// `SIGCHLD`: the handler re-raises into that default, so it would remove
+    /// the pidfile of a daemon that keeps running. `SIGUSR1` and the other
+    /// terminating signals are accepted. For a
     /// graceful shutdown, run your own signal loop instead and let this context
     /// drop, or call [`cleanup`](Self::cleanup) — see the
     /// [README](https://github.com/camercu/blivet#pidfile-cleanup-on-signals).
@@ -846,6 +850,35 @@ mod tests {
     fn cleanup_on_signals_may_replace_its_own_handler() {
         crate::test_support::run_in_subprocess(
             "context::tests::cleanup_on_signals_may_replace_its_own_handler_subprocess",
+        );
+    }
+
+    // Covers: R151
+    #[test]
+    fn cleanup_on_signals_refuses_a_signal_that_does_not_terminate() {
+        crate::test_support::run_in_subprocess(
+            "context::tests::cleanup_on_signals_refuses_a_signal_that_does_not_terminate_subprocess",
+        );
+    }
+
+    /// SIGCHLD is ignored by default: a handler that unlinks the pidfile and
+    /// re-raises would delete a running daemon's pidfile at its first child
+    /// exit, and the daemon would carry on.
+    #[test]
+    #[ignore]
+    fn cleanup_on_signals_refuses_a_signal_that_does_not_terminate_subprocess() {
+        if !crate::test_support::is_subprocess() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let mut cfg = DaemonConfig::new();
+        cfg.pidfile(dir.path().join("x.pid"));
+
+        let result = ctx(&cfg, None, None).cleanup_on_signals(&[libc::SIGCHLD]);
+
+        assert!(
+            matches!(&result, Err(DaemonizeError::ValidationError(m)) if m.contains(&libc::SIGCHLD.to_string())),
+            "{result:?}"
         );
     }
 
