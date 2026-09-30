@@ -187,8 +187,9 @@ pub(crate) fn install_pidfile_cleanup_signals(
     // Refuse before changing anything if a signal already has a disposition
     // someone chose: another library's handler (signal-hook's, say) would be
     // silently replaced, and an ignored signal would start killing the
-    // process. Step 9 reset every disposition to the default, so anything
-    // else was installed since. This call's own handler, from an earlier call,
+    // process. Step 9 reset every disposition but SIGPIPE's to the default,
+    // so anything else was installed since. SIGPIPE keeps the Rust runtime's
+    // SIG_IGN and is refused like any ignored signal. This call's own handler, from an earlier call,
     // may be replaced. A query that fails is left to the install loop, which
     // names the signal.
     let ours = pidfile_cleanup_handler as extern "C" fn(i32) as usize;

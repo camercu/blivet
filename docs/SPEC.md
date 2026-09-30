@@ -1542,8 +1542,10 @@ verification points.
   signal whose disposition is neither the default nor its own handler:
   another library's handler (signal-hook's, say) is not silently
   replaced, and an ignored signal does not start killing the process.
-  The error names the signal. Step 9 resets every disposition, so any
-  other disposition was installed since.
+  The error names the signal. Step 9 resets every disposition except
+  SIGPIPE's, so any other was installed since. SIGPIPE keeps its
+  disposition, usually the Rust runtime's `SIG_IGN`, which is refused
+  like any other ignored signal.
 - R150. The launcher reads the notification pipe closing with no
   message as success only when `exec_notifies(true)` is set, which the
   CLI does: there a successful `exec` closes the pipe. Otherwise it
