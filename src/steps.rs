@@ -157,6 +157,8 @@ fn open_above_stdio<P: ?Sized + nix::NixPath>(
 /// so the caller can report the failure to the parent rather than crashing.
 pub(crate) fn redirect_to_devnull(stdout_stderr: bool) -> Result<(), DaemonizeError> {
     #[cfg(test)]
+    crate::test_support::assert_isolated("redirect_to_devnull");
+    #[cfg(test)]
     if failpoints::injected(&failpoints::DEVNULL_OPEN_FAILS) {
         return Err(DaemonizeError::SystemError(
             "open /dev/null: injected failure".into(),
@@ -426,6 +428,8 @@ pub(crate) fn redirect_output(
     owned: &[(&'static str, FileId)],
     rollback: Rollback,
 ) -> Result<(), DaemonizeError> {
+    #[cfg(test)]
+    crate::test_support::assert_isolated("redirect_output");
     let mut moved = Vec::new();
 
     let out = match stdout {
@@ -738,65 +742,6 @@ mod tests {
     use crate::test_support::{is_subprocess, run_in_subprocess};
     use serial_test::serial;
 
-    /// Duplicate `source` onto a stdio target fd (0=stdin, 1=stdout, 2=stderr).
-    fn dup2_stdio(source: impl AsFd, target_fd: i32) -> Result<(), nix::errno::Errno> {
-        match target_fd {
-            0 => unistd::dup2_stdin(source),
-            1 => unistd::dup2_stdout(source),
-            2 => unistd::dup2_stderr(source),
-            _ => unreachable!("dup2_stdio called with non-stdio target: {target_fd}"),
-        }
-    }
-
-    /// Guard that saves file descriptors on creation and restores them on drop.
-    ///
-    /// Tests that redirect stdout/stderr (fd 1/2) corrupt the test harness
-    /// because the harness writes results to those fds. This guard `dup`s the
-    /// originals before the test body runs, then `dup2`s them back when dropped.
-    struct SavedFds {
-        saved: Vec<(i32, OwnedFd)>, // (original_fd, saved_copy)
-    }
-
-    impl SavedFds {
-        fn new(fds: &[i32]) -> Self {
-            let saved = fds
-                .iter()
-                .map(|&fd| {
-                    let copy = match fd {
-                        0 => unistd::dup(std::io::stdin()),
-                        1 => unistd::dup(std::io::stdout()),
-                        2 => unistd::dup(std::io::stderr()),
-                        _ => panic!("SavedFds only supports stdio fds"),
-                    }
-                    .unwrap_or_else(|e| panic!("dup({fd}) failed: {e}"));
-                    (fd, copy)
-                })
-                .collect();
-            Self { saved }
-        }
-
-        /// Returns the raw fd numbers of the saved copies.
-        ///
-        /// Use this to build a skip list for `close_inherited_fds` so it
-        /// doesn't close the backup copies we need for restoration.
-        fn saved_fds(&self) -> Vec<i32> {
-            self.saved
-                .iter()
-                .map(|(_, copy)| copy.as_raw_fd())
-                .collect()
-        }
-    }
-
-    impl Drop for SavedFds {
-        fn drop(&mut self) {
-            for (orig, copy) in self.saved.drain(..) {
-                dup2_stdio(&copy, orig)
-                    .unwrap_or_else(|e| panic!("dup2({} -> {orig}) failed: {e}", copy.as_raw_fd()));
-                // copy is an OwnedFd — closed on drop
-            }
-        }
-    }
-
     // --- Step 4: umask ---
 
     #[test]
@@ -834,9 +779,16 @@ mod tests {
 
     // Covers: R7, R8
     #[test]
-    #[serial]
     fn redirect_to_devnull_succeeds() {
-        let _restore = SavedFds::new(&[0, 1, 2]);
+        run_in_subprocess("steps::tests::redirect_to_devnull_succeeds_subprocess");
+    }
+
+    #[test]
+    #[ignore]
+    fn redirect_to_devnull_succeeds_subprocess() {
+        if !is_subprocess() {
+            return;
+        }
         redirect_to_devnull(true).unwrap();
     }
 
@@ -869,11 +821,20 @@ mod tests {
 
     // Covers: R7
     #[test]
-    #[serial]
     fn redirect_to_devnull_foreground_preserves_stdout_stderr() {
+        run_in_subprocess(
+            "steps::tests::redirect_to_devnull_foreground_preserves_stdout_stderr_subprocess",
+        );
+    }
+
+    #[test]
+    #[ignore]
+    fn redirect_to_devnull_foreground_preserves_stdout_stderr_subprocess() {
+        if !is_subprocess() {
+            return;
+        }
         use nix::sys::stat::fstat;
 
-        let _restore = SavedFds::new(&[0, 1, 2]);
         let stdout_before = fstat(std::io::stdout()).unwrap();
         let stderr_before = fstat(std::io::stderr()).unwrap();
         redirect_to_devnull(false).unwrap();
@@ -1217,13 +1178,31 @@ mod tests {
         );
     }
 
-    // --- Step 12: redirect output (executor smoke tests, serial) ---
+    /// Outside a subprocess the stdio movers refuse to run. No paths, so the
+    /// call would move nothing even if the refusal were gone.
+    #[test]
+    #[should_panic(expected = "run_in_subprocess")]
+    fn redirect_output_refuses_the_shared_test_process() {
+        let _ = redirect_output(None, None, false, &[], Rollback::PutBack);
+    }
+
+    // --- Step 12: redirect output (executor smoke tests) ---
+    //
+    // Each body moves fd 1 or 2, so each runs in its own process: see
+    // crate::test_support::assert_isolated.
 
     // Covers: R98
     #[test]
-    #[serial]
     fn execute_redirect_creates_files() {
-        let _restore = SavedFds::new(&[1, 2]);
+        run_in_subprocess("steps::tests::execute_redirect_creates_files_subprocess");
+    }
+
+    #[test]
+    #[ignore]
+    fn execute_redirect_creates_files_subprocess() {
+        if !is_subprocess() {
+            return;
+        }
         let dir = tempfile::tempdir().unwrap();
         let stdout_path = dir.path().join("stdout.log");
         let stderr_path = dir.path().join("stderr.log");
@@ -1240,9 +1219,16 @@ mod tests {
     }
 
     #[test]
-    #[serial]
     fn execute_redirect_truncate_vs_append() {
-        let _restore = SavedFds::new(&[1]);
+        run_in_subprocess("steps::tests::execute_redirect_truncate_vs_append_subprocess");
+    }
+
+    #[test]
+    #[ignore]
+    fn execute_redirect_truncate_vs_append_subprocess() {
+        if !is_subprocess() {
+            return;
+        }
         let dir = tempfile::tempdir().unwrap();
         let stdout_path = dir.path().join("stdout.log");
 
@@ -1252,10 +1238,9 @@ mod tests {
         redirect_output(Some(&stdout_path), None, false, &[], Rollback::PutBack).unwrap();
         std::io::stdout().write_all(b"new content\n").unwrap();
         std::io::stdout().flush().unwrap();
-        // Not an exact match: under a shared harness (`cargo test --lib`, as
-        // the packaged and bionic tiers run) other tests' result lines reach
-        // the redirected fd 1 too. The old tail is what a skipped truncate
-        // would leave behind.
+        // Not an exact match: the child's own libtest lines may reach the
+        // redirected fd 1 too. The old tail is what a skipped truncate would
+        // leave behind.
         let content = std::fs::read_to_string(&stdout_path).unwrap();
         assert!(content.contains("new content\n"), "{content:?}");
         assert!(
@@ -1273,9 +1258,16 @@ mod tests {
     }
 
     #[test]
-    #[serial]
     fn execute_redirect_dup_stdout_to_stderr() {
-        let _restore = SavedFds::new(&[1, 2]);
+        run_in_subprocess("steps::tests::execute_redirect_dup_stdout_to_stderr_subprocess");
+    }
+
+    #[test]
+    #[ignore]
+    fn execute_redirect_dup_stdout_to_stderr_subprocess() {
+        if !is_subprocess() {
+            return;
+        }
         let dir = tempfile::tempdir().unwrap();
         let combined = dir.path().join("combined.log");
         redirect_output(
@@ -1294,8 +1286,8 @@ mod tests {
 
         // One descriptor means one offset, so stderr's line follows stdout's;
         // two would put both at offset 0 and one would overwrite the other.
-        // Positions rather than an exact match, since a shared harness writes
-        // its own lines into fd 1 as well.
+        // Positions rather than an exact match, since the child's libtest
+        // may write its own lines into fd 1 as well.
         let content = std::fs::read_to_string(&combined).unwrap();
         let out = content.find("stdout\n");
         let err = content.find("stderr\n");
@@ -1315,10 +1307,7 @@ mod tests {
 
     /// A start that fails must not have emptied the previous run's log, nor
     /// left the caller's stdout pointing somewhere else. A directory as stderr
-    /// fails to open for root too, so every tier sees the failure. In its own
-    /// process because the assertion is on the log's exact bytes, and under a
-    /// shared harness other tests' result lines reach fd 1 while it is
-    /// redirected.
+    /// fails to open for root too, so every tier sees the failure.
     #[test]
     #[ignore]
     fn execute_redirect_that_fails_on_stderr_changes_nothing_subprocess() {
@@ -1509,12 +1498,19 @@ mod tests {
 
     // Covers: R146
     #[test]
-    #[serial]
     fn execute_redirect_stderr_onto_dev_stdout_follows_the_redirected_stdout() {
+        run_in_subprocess("steps::tests::execute_redirect_stderr_onto_dev_stdout_follows_the_redirected_stdout_subprocess");
+    }
+
+    #[test]
+    #[ignore]
+    fn execute_redirect_stderr_onto_dev_stdout_follows_the_redirected_stdout_subprocess() {
+        if !is_subprocess() {
+            return;
+        }
         // `-e /dev/stdout` names whatever fd 1 is when stderr is opened, so
         // stderr must be opened after stdout has moved onto fd 1 — then it is
         // the stdout file, and shares its descriptor.
-        let _restore = SavedFds::new(&[1, 2]);
         let dir = tempfile::tempdir().unwrap();
         let log = dir.path().join("combined.log");
 
@@ -1541,9 +1537,16 @@ mod tests {
     }
 
     #[test]
-    #[serial]
     fn execute_redirect_stderr_only() {
-        let _restore = SavedFds::new(&[2]);
+        run_in_subprocess("steps::tests::execute_redirect_stderr_only_subprocess");
+    }
+
+    #[test]
+    #[ignore]
+    fn execute_redirect_stderr_only_subprocess() {
+        if !is_subprocess() {
+            return;
+        }
         let dir = tempfile::tempdir().unwrap();
         let stderr_path = dir.path().join("stderr.log");
         redirect_output(None, Some(&stderr_path), false, &[], Rollback::PutBack).unwrap();
@@ -1556,9 +1559,18 @@ mod tests {
     }
 
     #[test]
-    #[serial]
     fn execute_redirect_truncates_a_separate_stderr_file() {
-        let _restore = SavedFds::new(&[1, 2]);
+        run_in_subprocess(
+            "steps::tests::execute_redirect_truncates_a_separate_stderr_file_subprocess",
+        );
+    }
+
+    #[test]
+    #[ignore]
+    fn execute_redirect_truncates_a_separate_stderr_file_subprocess() {
+        if !is_subprocess() {
+            return;
+        }
         let dir = tempfile::tempdir().unwrap();
         let stdout_path = dir.path().join("stdout.log");
         let stderr_path = dir.path().join("stderr.log");
@@ -1631,9 +1643,18 @@ mod tests {
 
     // Covers: R146
     #[test]
-    #[serial]
     fn execute_redirect_refuses_an_owned_file_before_truncating_it() {
-        let _restore = SavedFds::new(&[1]);
+        run_in_subprocess(
+            "steps::tests::execute_redirect_refuses_an_owned_file_before_truncating_it_subprocess",
+        );
+    }
+
+    #[test]
+    #[ignore]
+    fn execute_redirect_refuses_an_owned_file_before_truncating_it_subprocess() {
+        if !is_subprocess() {
+            return;
+        }
         let dir = tempfile::tempdir().unwrap();
         let pidfile = dir.path().join("daemon.pid");
         std::fs::write(&pidfile, "4242\n").unwrap();
@@ -1654,11 +1675,20 @@ mod tests {
     }
 
     #[test]
-    #[serial]
     fn execute_redirect_into_a_device_does_not_truncate_it() {
+        run_in_subprocess(
+            "steps::tests::execute_redirect_into_a_device_does_not_truncate_it_subprocess",
+        );
+    }
+
+    #[test]
+    #[ignore]
+    fn execute_redirect_into_a_device_does_not_truncate_it_subprocess() {
+        if !is_subprocess() {
+            return;
+        }
         // ftruncate refuses a device where O_TRUNC ignored it; `-o /dev/null`
         // must keep working.
-        let _restore = SavedFds::new(&[1]);
         redirect_output(
             Some(Path::new("/dev/null")),
             None,
@@ -1807,19 +1837,13 @@ mod tests {
     ///
     /// Closes fds process-wide, so only an isolated subprocess may call it.
     fn assert_closes_all_but_skipped() {
-        // Save stdout/stderr so the test harness can still report results
-        // after we close all non-skipped fds (which includes harness-internal fds).
-        let restore = SavedFds::new(&[1, 2]);
         let (rd, wr) = crate::test_support::make_pipe();
         // A second pipe deliberately left out of the skip list: it must be
         // closed, or the step silently no-oped (a mutation sweep caught the
         // original test asserting only preservation, never closure).
         let (victim_rd, victim_wr) = crate::test_support::make_pipe();
         drop(victim_rd);
-        let mut skip = vec![rd.as_raw_fd(), wr.as_raw_fd()];
-        // Also skip the SavedFds backup copies so they survive for restoration.
-        skip.extend(restore.saved_fds());
-        close_inherited_fds(&skip).unwrap();
+        close_inherited_fds(&[rd.as_raw_fd(), wr.as_raw_fd()]).unwrap();
         // Our pipe fds should still be open
         assert!(nix::unistd::write(&wr, b"ok").is_ok());
         // The non-skipped fd must be gone.

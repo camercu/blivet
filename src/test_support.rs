@@ -188,3 +188,22 @@ pub(crate) fn read_pipe(rd: std::os::fd::OwnedFd) -> Vec<u8> {
     std::fs::File::from(rd).read_to_end(&mut buf).unwrap();
     buf
 }
+
+/// Panics unless this is an isolated subprocess ([`run_in_subprocess`]).
+///
+/// For code that moves fd 0, 1 or 2. In the shared test process other threads
+/// open descriptors while it runs, and replacing a live stdio slot is not
+/// atomic everywhere: NetBSD's `dup2` closes the target, drops the table lock,
+/// and closes it again if another thread was handed that number meanwhile. A
+/// concurrent `Command` spawn got fd 2 for its status pipe, lost it to the
+/// `dup2`, then closed "its" pipe: the harness's stderr. The next saved copy
+/// of fd 1 landed on 2, a redirect overwrote it, and the run printed nothing
+/// more, not even its summary. A subprocess runs one test, so nothing else
+/// opens descriptors under it.
+pub(crate) fn assert_isolated(what: &str) {
+    assert!(
+        is_subprocess(),
+        "{what} moves fd 0-2 of the shared test process; run the test body \
+         through run_in_subprocess"
+    );
+}
