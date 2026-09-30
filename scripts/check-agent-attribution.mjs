@@ -34,11 +34,21 @@ const allowed = new Set(
     .filter(Boolean),
 );
 
-const offenders = git('log', '--format=%H %s%x00%B%x1e', 'HEAD')
+const commits = git('log', '--format=%H %s%x00%B%x1e', 'HEAD')
   .split('\x1e')
   .map((entry) => entry.trim())
   .filter(Boolean)
-  .map((entry) => entry.split('\x00'))
+  .map((entry) => entry.split('\x00'));
+
+// A parse that drops or merges commits would scan less history and still
+// pass. Every commit git counts must have been read.
+const expected = Number(git('rev-list', '--count', 'HEAD').trim());
+if (commits.length !== expected) {
+  console.error(`parsed ${commits.length} commits but HEAD has ${expected}; not scanning a partial history`);
+  process.exit(1);
+}
+
+const offenders = commits
   .filter(([title, body]) => !allowed.has(title.split(' ')[0]))
   .filter(([, body]) => PATTERN.test(body))
   .map(([title]) => title);
