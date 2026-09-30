@@ -91,6 +91,24 @@ for (const line of expectedNotes) {
 }
 if (notes.includes('hidden from notes')) failures.push('release notes show a hidden docs commit');
 
+// The crate is published in the exec plugin's prepare step, after the
+// changelog is written and before @semantic-release/git commits and tags, so
+// a failed publish leaves no tag behind. semantic-release-cargo's own publish
+// step runs after the tag, so it must stay off.
+const pluginNames = JSON.parse(readFileSync('.releaserc.json', 'utf8')).plugins.map((plugin) =>
+  Array.isArray(plugin) ? plugin[0] : plugin,
+);
+const at = (name) => pluginNames.indexOf(name);
+if (pluginConfig('semantic-release-cargo').publish !== false) {
+  failures.push('semantic-release-cargo must not publish: it would publish after the tag');
+}
+if (!pluginConfig('@semantic-release/exec').prepareCmd?.includes('scripts/publish-crate.sh ${nextRelease.version}')) {
+  failures.push('the exec prepareCmd must publish the crate through scripts/publish-crate.sh');
+}
+if (!(at('@semantic-release/changelog') < at('@semantic-release/exec') && at('@semantic-release/exec') < at('@semantic-release/git'))) {
+  failures.push('exec must run after changelog (the crate ships CHANGELOG.md) and before git (no tag before publish)');
+}
+
 if (failures.length > 0) {
   console.error('Release config check failed:');
   for (const failure of failures) console.error(`  - ${failure}`);

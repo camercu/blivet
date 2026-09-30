@@ -21,15 +21,15 @@
     ],
     [
       "semantic-release-cargo",
-      { "publish": true, "alwaysVerifyToken": true }
+      { "publish": false, "alwaysVerifyToken": true }
     ],
+    "@semantic-release/changelog",
     [
       "@semantic-release/exec",
       {
-        "prepareCmd": "cargo update --workspace && nix-shell nix/manpage.nix --run 'just manpage'"
+        "prepareCmd": "cargo update --workspace && nix-shell nix/manpage.nix --run 'just manpage' && sh scripts/publish-crate.sh ${nextRelease.version}"
       }
     ],
-    "@semantic-release/changelog",
     [
       "@semantic-release/git",
       {
