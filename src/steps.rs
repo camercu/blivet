@@ -1335,23 +1335,20 @@ mod tests {
         redirect_output(Some(&stdout_path), None, false, &[], Rollback::PutBack).unwrap();
         std::io::stdout().write_all(b"new content\n").unwrap();
         std::io::stdout().flush().unwrap();
-        // Not an exact match: the child's own libtest lines may reach the
-        // redirected fd 1 too. The old tail is what a skipped truncate would
-        // leave behind.
-        let content = std::fs::read_to_string(&stdout_path).unwrap();
-        assert!(content.contains("new content\n"), "{content:?}");
-        assert!(
-            !content.contains("replaces it"),
-            "should have truncated: {content:?}"
+        // A skipped truncate would leave the old line's tail behind.
+        assert_eq!(
+            std::fs::read_to_string(&stdout_path).unwrap(),
+            "new content\n"
         );
 
         // Append mode
         redirect_output(Some(&stdout_path), None, true, &[], Rollback::PutBack).unwrap();
         std::io::stdout().write_all(b"appended\n").unwrap();
         std::io::stdout().flush().unwrap();
-        let content = std::fs::read_to_string(&stdout_path).unwrap();
-        assert!(content.contains("new content"), "should preserve existing");
-        assert!(content.contains("appended"));
+        assert_eq!(
+            std::fs::read_to_string(&stdout_path).unwrap(),
+            "new content\nappended\n"
+        );
     }
 
     #[test]
@@ -1383,14 +1380,9 @@ mod tests {
 
         // One descriptor means one offset, so stderr's line follows stdout's;
         // two would put both at offset 0 and one would overwrite the other.
-        // Positions rather than an exact match, since the child's libtest
-        // may write its own lines into fd 1 as well.
-        let content = std::fs::read_to_string(&combined).unwrap();
-        let out = content.find("stdout\n");
-        let err = content.find("stderr\n");
-        assert!(
-            matches!((out, err), (Some(o), Some(e)) if o < e),
-            "stderr should follow stdout on the shared descriptor: {content:?}"
+        assert_eq!(
+            std::fs::read_to_string(&combined).unwrap(),
+            "stdout\nstderr\n"
         );
     }
 
