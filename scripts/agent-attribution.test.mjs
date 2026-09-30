@@ -1,5 +1,5 @@
 // What scripts/agent-attribution.cjs must catch and must let through. Run by
-// CI's commitlint job: `node --test scripts/agent-attribution.test.mjs`.
+// `just check-attribution`, which CI's commitlint job runs.
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { test } from 'node:test';

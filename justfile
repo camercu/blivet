@@ -355,7 +355,7 @@ package-test:
     # vanished would otherwise report success having proven nothing.
     sh "$root/scripts/assert-tests-ran.sh" cargo test --locked --lib
 
-# Run everything CI runs (except Docker)
+# Run CI's Rust checks and tests, the fast tier (no Docker, no node checks)
 ci: check test
 
 # Agent-facing CI: same steps as `ci`, but routes the compile-heavy recipes
@@ -364,8 +364,14 @@ ci: check test
 ci-rtk:
     RTK_CARGO="rtk cargo" just ci
 
-# Run the full CI suite including both container tiers
-ci-full: check test package-test docker-test termux-test
+# Run the full CI suite including both container tiers and the node checks
+ci-full: check test package-test docker-test termux-test check-attribution check-release-config
+
+# Tests the attribution pattern, then rejects agent attribution anywhere in
+# history. Needs full history: the scan refuses a shallow clone.
+check-attribution:
+    node --test scripts/agent-attribution.test.mjs
+    node scripts/check-agent-attribution.mjs
 
 # Checks that .releaserc.json's plugins still pick the right release type and
 # render commits into the notes. A preset/plugin major mismatch otherwise
