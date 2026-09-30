@@ -173,6 +173,9 @@ extern "C" fn pidfile_cleanup_handler(signum: i32) {
 /// for one that cannot be caught, like SIGKILL/SIGSTOP), the dispositions
 /// already replaced for earlier signals in the slice and the prior pidfile
 /// pointer are restored, and the returned error names the failing signal.
+///
+/// Refuses (R149), before changing anything, a signal whose disposition is
+/// neither the default nor this handler.
 pub(crate) fn install_pidfile_cleanup_signals(
     pidfile: &std::ffi::CStr,
     signals: &[i32],
@@ -180,6 +183,26 @@ pub(crate) fn install_pidfile_cleanup_signals(
     use std::sync::atomic::Ordering;
     #[cfg(test)]
     crate::test_support::assert_isolated("install_pidfile_cleanup_signals");
+
+    // Refuse before changing anything if a signal already has a disposition
+    // someone chose: another library's handler (signal-hook's, say) would be
+    // silently replaced, and an ignored signal would start killing the
+    // process. Step 9 reset every disposition to the default, so anything
+    // else was installed since. This call's own handler, from an earlier call,
+    // may be replaced. A query that fails is left to the install loop, which
+    // names the signal.
+    let ours = pidfile_cleanup_handler as extern "C" fn(i32) as usize;
+    for &sig in signals {
+        let mut current: libc::sigaction = unsafe { std::mem::zeroed() };
+        // SAFETY: a null new action only reads the disposition into `current`.
+        let queried = unsafe { libc::sigaction(sig, std::ptr::null(), &mut current) } == 0;
+        if queried && current.sa_sigaction != libc::SIG_DFL && current.sa_sigaction != ours {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::AlreadyExists,
+                format!("signal {sig} already has a handler or is ignored; not replacing it"),
+            ));
+        }
+    }
 
     // Leak a stable copy of the path. Repeated installs leak the prior copy,
     // a small bounded cost for a rarely-repeated setup call. The prior pointer

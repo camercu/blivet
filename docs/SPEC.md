@@ -1192,9 +1192,10 @@ continues; (2) split-phase with `drop_privileges()` →
   install async-signal-safe handlers that `unlink` the pidfile and
   re-raise (SA_RESETHAND) so the default termination action still runs.
   Library-only — the CLI's `exec` resets handlers. No-op without a
-  pidfile; `ValidationError` on a NUL path or an uncatchable/invalid
-  signal. A failed install names the failing signal and rolls back
-  completely (R129).
+  pidfile; `ValidationError` on a NUL path, an uncatchable/invalid
+  signal, or a signal that already has a handler or is ignored (R149).
+  A failed install names the failing signal and rolls back completely
+  (R129).
 - `set_cleanup_on_drop()`: runtime override for cleanup-on-drop.
 - `DaemonContext`: drop releases lock, writes failure to pipe if
   `notify_parent()` was not called, removes pidfile if
@@ -1533,3 +1534,9 @@ verification points.
 - R148. Failure to create the notification pipe — no descriptor free,
   say — returns `SystemError` to the caller before any fork; it does
   not panic.
+- R149. `cleanup_on_signals()` refuses, before changing anything, a
+  signal whose disposition is neither the default nor its own handler:
+  another library's handler (signal-hook's, say) is not silently
+  replaced, and an ignored signal does not start killing the process.
+  The error names the signal. Step 9 resets every disposition, so any
+  other disposition was installed since.

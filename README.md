@@ -324,7 +324,9 @@ If you already run your own signal loop (e.g. for graceful shutdown), you don't
 need the built-in handler: let the loop exit, then call `cleanup()` -- or just
 let `ctx` drop. The [`signal-hook`](https://crates.io/crates/signal-hook) crate
 is one way to drive that loop; `blivet` does not re-export it, so
-`cargo add signal-hook` first:
+`cargo add signal-hook` first. Pick one approach per signal:
+`cleanup_on_signals` refuses a signal that already has a handler, such as one
+`signal_hook` registered, rather than silently replacing it.
 
 ```rust,no_run
 use std::sync::atomic::{AtomicBool, Ordering};

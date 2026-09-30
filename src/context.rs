@@ -210,6 +210,14 @@ impl DaemonContext {
     /// safe to run from signal context. Only the pidfile is removed; standalone
     /// lockfiles are left on disk (the flock releases when the process exits).
     ///
+    /// One approach per signal: this replaces the signal's disposition, so it
+    /// refuses a signal that already has a handler (one registered with
+    /// [`signal_hook`](https://docs.rs/signal-hook), say) or is ignored. For a
+    /// graceful shutdown, run your own signal loop instead and let this context
+    /// drop, or call [`cleanup`](Self::cleanup) — see the
+    /// [README](https://github.com/camercu/blivet#pidfile-cleanup-on-signals).
+    /// A handler this method installed earlier may be replaced.
+    ///
     /// Opt-in, and **library-only**: it has no effect for the `daemonize` CLI,
     /// whose `exec` of the target program resets all custom handlers to their
     /// default disposition. A process that `exec`s must clean up its own
@@ -225,7 +233,9 @@ impl DaemonContext {
     /// # Errors
     ///
     /// Returns [`DaemonizeError::ValidationError`] if the pidfile path contains
-    /// a NUL byte, or if installing a handler fails — most likely `EINVAL` from
+    /// a NUL byte, if one of `signals` already has a handler other than this
+    /// method's or is ignored (checked before anything changes), or if
+    /// installing a handler fails — most likely `EINVAL` from
     /// passing a signal that cannot be caught (`SIGKILL`, `SIGSTOP`) or an
     /// invalid signal number. The error names the failing signal, and a failed
     /// install is all-or-nothing: handlers already installed for signals
@@ -743,6 +753,114 @@ mod tests {
             ctx(&cfg, None, None).cleanup_on_signals(&[libc::SIGKILL]),
             Err(DaemonizeError::ValidationError(_))
         ));
+    }
+
+    // Covers: R149
+    #[test]
+    fn cleanup_on_signals_refuses_a_signal_that_already_has_a_handler() {
+        crate::test_support::run_in_subprocess(
+            "context::tests::cleanup_on_signals_refuses_a_signal_that_already_has_a_handler_subprocess",
+        );
+    }
+
+    /// Another library's handler (signal-hook's, say) on one signal of the
+    /// slice: the call is refused, names that signal, and changes nothing,
+    /// not even the signals earlier in the slice.
+    #[test]
+    #[ignore]
+    #[allow(unsafe_code)]
+    fn cleanup_on_signals_refuses_a_signal_that_already_has_a_handler_subprocess() {
+        use nix::sys::signal::{sigaction, SaFlags, SigAction, SigHandler, SigSet, Signal};
+
+        if !crate::test_support::is_subprocess() {
+            return;
+        }
+        extern "C" fn theirs(_: libc::c_int) {}
+        let handler = SigAction::new(
+            SigHandler::Handler(theirs),
+            SaFlags::empty(),
+            SigSet::empty(),
+        );
+        unsafe { sigaction(Signal::SIGUSR2, &handler) }.unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let mut cfg = DaemonConfig::new();
+        cfg.pidfile(dir.path().join("x.pid"));
+
+        let result = ctx(&cfg, None, None).cleanup_on_signals(&[libc::SIGUSR1, libc::SIGUSR2]);
+
+        let query = SigAction::new(SigHandler::SigDfl, SaFlags::empty(), SigSet::empty());
+        let usr1 = unsafe { sigaction(Signal::SIGUSR1, &query) }.unwrap();
+        let usr2 = unsafe { sigaction(Signal::SIGUSR2, &handler) }.unwrap();
+        assert!(
+            matches!(&result, Err(DaemonizeError::ValidationError(m)) if m.contains(&libc::SIGUSR2.to_string())),
+            "{result:?}"
+        );
+        assert!(
+            matches!(usr1.handler(), SigHandler::SigDfl),
+            "SIGUSR1 was changed"
+        );
+        assert!(
+            matches!(usr2.handler(), SigHandler::Handler(_)),
+            "SIGUSR2 lost its handler"
+        );
+    }
+
+    // Covers: R149
+    #[test]
+    fn cleanup_on_signals_refuses_an_ignored_signal() {
+        crate::test_support::run_in_subprocess(
+            "context::tests::cleanup_on_signals_refuses_an_ignored_signal_subprocess",
+        );
+    }
+
+    /// An ignored signal is a choice too: installing over it would make the
+    /// signal kill the process.
+    #[test]
+    #[ignore]
+    #[allow(unsafe_code)]
+    fn cleanup_on_signals_refuses_an_ignored_signal_subprocess() {
+        use nix::sys::signal::{sigaction, SaFlags, SigAction, SigHandler, SigSet, Signal};
+
+        if !crate::test_support::is_subprocess() {
+            return;
+        }
+        let ignore = SigAction::new(SigHandler::SigIgn, SaFlags::empty(), SigSet::empty());
+        unsafe { sigaction(Signal::SIGHUP, &ignore) }.unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let mut cfg = DaemonConfig::new();
+        cfg.pidfile(dir.path().join("x.pid"));
+
+        let result = ctx(&cfg, None, None).cleanup_on_signals(&[libc::SIGHUP]);
+
+        assert!(
+            matches!(&result, Err(DaemonizeError::ValidationError(_))),
+            "{result:?}"
+        );
+    }
+
+    // Covers: R149
+    #[test]
+    fn cleanup_on_signals_may_replace_its_own_handler() {
+        crate::test_support::run_in_subprocess(
+            "context::tests::cleanup_on_signals_may_replace_its_own_handler_subprocess",
+        );
+    }
+
+    #[test]
+    #[ignore]
+    fn cleanup_on_signals_may_replace_its_own_handler_subprocess() {
+        if !crate::test_support::is_subprocess() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let mut cfg = DaemonConfig::new();
+        cfg.pidfile(dir.path().join("x.pid"));
+        let ctx = ctx(&cfg, None, None);
+
+        ctx.cleanup_on_signals(&[libc::SIGTERM]).unwrap();
+        let again = ctx.cleanup_on_signals(&[libc::SIGTERM]);
+
+        assert!(again.is_ok(), "{again:?}");
     }
 
     // Installs a real SIGTERM handler and raises it, so it must run in its own
