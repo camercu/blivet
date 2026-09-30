@@ -998,7 +998,9 @@ mod tests {
         }
         // umask 0 so the on-disk mode reflects the open()/create mode exactly,
         // not umask masking. std::fs::write creates 0666; R98 mandates 0644.
-        set_umask(0);
+        // Set directly rather than through set_umask: with a set_umask that
+        // did nothing, the inherited 022 would turn 0666 into 0644 too.
+        nix::sys::stat::umask(Mode::empty());
         let dir = tempfile::tempdir().unwrap();
         let pidfile = dir.path().join("mode.pid");
         write_pidfile(&pidfile, None).unwrap();
