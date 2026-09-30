@@ -3,8 +3,9 @@
 // anywhere in history, so the two match the same trailers.
 
 // The exact trailers Claude Code writes, each anchored to the start of a
-// line: prose that mentions them, or a human co-author named Claude, is not
-// attribution.
+// line: prose that mentions them is not attribution. Nor is a co-author named
+// Claude outside anthropic.com. One at anthropic.com is taken for the agent,
+// since its display name varies by model ("Claude Opus 4.1").
 const PATTERN = new RegExp(
   [
     String.raw`^Claude-Session: https?://claude\.(?:ai|com)/`,
@@ -14,8 +15,4 @@ const PATTERN = new RegExp(
   'im',
 );
 
-// Dependabot bodies quote upstream release notes and long links, which break
-// commitlint's length rules; commitlint skips them. The history scan does not.
-const isDependabot = (message) => message.includes('Signed-off-by: dependabot[bot]');
-
-module.exports = { PATTERN, isDependabot };
+module.exports = { PATTERN };
