@@ -741,8 +741,7 @@ mod tests {
         let rd = forker
             .take_pipe_reader()
             .expect("NullForker stores a reader for the test");
-        let mut buf = Vec::new();
-        std::fs::File::from(rd).read_to_end(&mut buf).unwrap();
+        let buf = crate::test_support::read_pipe(rd);
         assert_eq!(
             buf,
             Vec::<u8>::new(),
@@ -765,8 +764,7 @@ mod tests {
         let rd = forker
             .take_pipe_reader()
             .expect("NullForker stores a reader");
-        let mut buf = Vec::new();
-        std::fs::File::from(rd).read_to_end(&mut buf).unwrap();
+        let buf = crate::test_support::read_pipe(rd);
         assert_eq!(
             buf,
             Vec::<u8>::new(),
@@ -791,8 +789,7 @@ mod tests {
         let rd = forker
             .take_pipe_reader()
             .expect("NullForker stores a reader");
-        let mut buf = Vec::new();
-        std::fs::File::from(rd).read_to_end(&mut buf).unwrap();
+        let buf = crate::test_support::read_pipe(rd);
         assert_eq!(
             buf,
             notify::error_bytes(&DaemonizeError::SetsidFailed("test".into()))
@@ -817,8 +814,7 @@ mod tests {
         let rd = forker
             .take_pipe_reader()
             .expect("NullForker stores a reader");
-        let mut buf = Vec::new();
-        std::fs::File::from(rd).read_to_end(&mut buf).unwrap();
+        let buf = crate::test_support::read_pipe(rd);
         assert_eq!(
             buf,
             notify::error_bytes(&DaemonizeError::ForkFailed("second fork".into()))
