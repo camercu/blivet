@@ -166,6 +166,27 @@ pub(crate) enum EofMeans {
     Unnotified,
 }
 
+/// Read the daemon's message from the pipe and decode it.
+///
+/// Returns on the success byte without reading on. A process the daemon forked
+/// before notifying holds a copy of the write end, so the pipe reaches EOF only
+/// when that process exits too: waiting for EOF would hold the launcher until
+/// then. A failure reads to EOF for its message, which the writer sends and
+/// closes in one step.
+pub(crate) fn read_outcome(pipe: &mut impl io::Read, eof: EofMeans) -> Outcome {
+    let mut first = [0u8; 1];
+    let buf = match pipe.read(&mut first) {
+        Ok(0) | Err(_) => Vec::new(),
+        Ok(_) if first == SUCCESS => return Outcome::Success,
+        Ok(_) => {
+            let mut buf = first.to_vec();
+            let _ = pipe.read_to_end(&mut buf);
+            buf
+        }
+    };
+    decode(&buf, eof)
+}
+
 /// Decode a message read from the notification pipe.
 pub(crate) fn decode(buf: &[u8], eof: EofMeans) -> Outcome {
     match (buf.first(), eof) {
@@ -271,6 +292,34 @@ mod tests {
     #[test]
     fn decode_success_byte() {
         assert_eq!(decode(&SUCCESS, EofMeans::Unnotified), Outcome::Success);
+    }
+
+    /// A pipe that has delivered `.0` and whose write end another process still
+    /// holds open, as one forked before `notify_parent` does: reading past the
+    /// delivered bytes would block the launcher.
+    struct StillOpen(std::collections::VecDeque<u8>);
+
+    impl io::Read for StillOpen {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            assert!(
+                !self.0.is_empty(),
+                "read past the message: the launcher would block"
+            );
+            let n = buf.len().min(self.0.len());
+            for slot in &mut buf[..n] {
+                *slot = self.0.pop_front().unwrap();
+            }
+            Ok(n)
+        }
+    }
+
+    #[test]
+    fn read_outcome_stops_at_the_success_byte() {
+        let mut pipe = StillOpen(SUCCESS.into_iter().collect());
+        assert_eq!(
+            read_outcome(&mut pipe, EofMeans::Unnotified),
+            Outcome::Success
+        );
     }
 
     // Covers: R150

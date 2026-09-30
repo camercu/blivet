@@ -226,8 +226,6 @@ pub use context::DaemonContext;
 pub use error::DaemonizeError;
 
 #[cfg(unix)]
-use std::io::Read;
-#[cfg(unix)]
 use std::os::fd::{AsRawFd, OwnedFd};
 
 #[cfg(unix)]
@@ -629,11 +627,7 @@ fn run_post_fork(
 /// Parent-side pipe reader. Reads from the pipe and exits accordingly.
 #[cfg(unix)]
 fn parent_pipe_reader(rd: OwnedFd, eof: notify::EofMeans, forker: &impl Forker) -> ! {
-    let mut file = std::fs::File::from(rd);
-    let mut buf = Vec::new();
-    let _ = file.read_to_end(&mut buf);
-
-    match notify::decode(&buf, eof) {
+    match notify::read_outcome(&mut std::fs::File::from(rd), eof) {
         notify::Outcome::Success => forker.exit(0),
         notify::Outcome::Failure { code, message } => {
             eprintln!("{message}");
