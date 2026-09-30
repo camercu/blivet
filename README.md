@@ -8,12 +8,12 @@
 
 **A correct, full-featured Unix daemon library and CLI for Rust.**
 
-Backgrounding a process is easy; doing it *correctly* is not. A daemon that
-forks, detaches, then fails mid-init looks exactly like success -- the launcher
-has already exited 0. `blivet` closes that gap: it reports readiness or failure
-back over a notification pipe, with `sysexits.h` exit codes, so the launcher
-sees a real result. And it gets the rest right by default -- signal and fd
-hygiene, privilege handling, output redirects -- with no `unsafe` in your code.
+Backgrounding a process is easy. Doing it correctly is not. A daemon that
+forks, detaches, and then fails mid-init looks like success, because the
+launcher has already exited 0. `blivet` makes the launcher wait on a pipe until
+the daemon reports readiness or a failure, with a `sysexits.h` exit code. It
+also handles signals, fds, privileges, and output redirects by default, with no
+`unsafe` in your code.
 
 ```rust,no_run
 use blivet::{daemonize, DaemonConfig, DaemonizeError};
@@ -46,11 +46,12 @@ fn main() -> Result<(), DaemonizeError> {
 ## How it works
 
 `daemonize()` double-forks, calls `setsid` to detach from the controlling
-terminal, and returns a `DaemonContext` in the grandchild -- your daemon. The
-launcher does *not* return; it blocks on a pipe to the grandchild, waiting for
-that daemon to report in. In the daemon you then:
+terminal, and returns a `DaemonContext` in the grandchild, which is your
+daemon. The launcher does not return. It blocks on a pipe until the daemon
+reports in. In the daemon you then:
 
-1. run fallible init -- bind sockets, open files, connect to dependencies;
+1. run fallible init, such as binding sockets, opening files, and connecting to
+   dependencies;
 2. `drop_privileges()` to switch to an unprivileged user (it first chowns the
    pidfile/lockfile/log files to that user, while still root);
 3. call `notify_parent()`, which writes one readiness byte down the pipe.
@@ -130,7 +131,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut ctx = daemonize(&config)?;
 
-    // Still root here -- bind a privileged port, chroot, set rlimits…
+    // Still root here: bind a privileged port, chroot, set rlimits…
     // let listener = TcpListener::bind("0.0.0.0:80")?;
 
     ctx.drop_privileges()?; // chown pidfile/logs to target user, then switch
@@ -207,9 +208,9 @@ the shell with a meaningful status:
 ### Pidfile cleanup on signals
 
 When `cleanup_on_drop` is `true` (the default), the pidfile is removed when
-`DaemonContext` is dropped. But **`Drop` does not run when the process is killed
-by a signal** (`SIGTERM`, `SIGKILL`, …) -- which is how most daemons stop -- so
-the pidfile would be left behind. The built-in fix installs async-signal-safe
+`DaemonContext` is dropped. But **`Drop` does not run when a signal kills the
+process**, and most daemons stop that way (`SIGTERM`, `SIGKILL`, …). The pidfile
+stays behind. The built-in fix installs async-signal-safe
 handlers that remove the pidfile on `SIGINT`/`SIGTERM`, then re-raise so the
 process still terminates normally:
 
@@ -233,8 +234,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 > disposition, so a CLI-launched program must clean up its own pidfile.
 
 If you already run your own signal loop (e.g. for graceful shutdown), you don't
-need the built-in handler: let the loop exit, then call `cleanup()` -- or just
-let `ctx` drop. The [`signal-hook`](https://crates.io/crates/signal-hook) crate
+need the built-in handler. Let the loop exit, then call `cleanup()` or let
+`ctx` drop. The [`signal-hook`](https://crates.io/crates/signal-hook) crate
 is one way to drive that loop; `blivet` does not re-export it, so
 `cargo add signal-hook` first. Pick one approach per signal:
 `cleanup_on_signals` refuses a signal that already has a handler, such as one
@@ -269,7 +270,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 If startup work in the privileged init window fails (a socket bind, a database
 connect), report it to the launcher with a `sysexits.h` code of your choosing
-via `report_error_msg` -- no need to construct a `DaemonizeError` by hand:
+via `report_error_msg`, without building a `DaemonizeError` by hand:
 
 ```rust,ignore
 let listener = match TcpListener::bind("0.0.0.0:80") {
@@ -322,8 +323,8 @@ daemonize -p /var/run/myapp.pid -o /var/log/myapp.log -c /var/lib/myapp \
 
 The launcher blocks until the daemon successfully `exec`s, then exits 0. On
 failure (lockfile conflict, permission denied, exec error) it prints the error
-to stderr and exits with a `sysexits.h` code -- the same codes the library
-returns (see [Errors & exit codes](#errors--exit-codes)). When `-u`/`-g` are
+to stderr and exits with the same `sysexits.h` code the library returns (see
+[Errors & exit codes](#errors--exit-codes)). When `-u`/`-g` are
 given, the CLI transfers ownership of the pidfile, lockfile, and log files to the
 target user/group before dropping privileges, so the daemon can keep writing to
 them.
