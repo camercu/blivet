@@ -1330,7 +1330,7 @@ mod tests {
         if !is_subprocess() {
             return;
         }
-        let (rd, wr) = nix::unistd::pipe().unwrap();
+        let (rd, wr) = crate::test_support::make_pipe();
 
         let mut config = DaemonConfig::new();
         config.close_fds(false);

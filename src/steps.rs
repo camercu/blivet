@@ -1810,11 +1810,11 @@ mod tests {
         // Save stdout/stderr so the test harness can still report results
         // after we close all non-skipped fds (which includes harness-internal fds).
         let restore = SavedFds::new(&[1, 2]);
-        let (rd, wr) = nix::unistd::pipe().unwrap();
+        let (rd, wr) = crate::test_support::make_pipe();
         // A second pipe deliberately left out of the skip list: it must be
         // closed, or the step silently no-oped (a mutation sweep caught the
         // original test asserting only preservation, never closure).
-        let (victim_rd, victim_wr) = nix::unistd::pipe().unwrap();
+        let (victim_rd, victim_wr) = crate::test_support::make_pipe();
         drop(victim_rd);
         let mut skip = vec![rd.as_raw_fd(), wr.as_raw_fd()];
         // Also skip the SavedFds backup copies so they survive for restoration.
