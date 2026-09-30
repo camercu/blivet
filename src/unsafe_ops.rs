@@ -147,7 +147,7 @@ static CLEANUP_PIDFILE: std::sync::atomic::AtomicPtr<libc::c_char> =
 
 /// Async-signal-safe handler that removes the pidfile, then re-raises the
 /// signal so the default action (process termination) still runs.
-extern "C" fn pidfile_cleanup_handler(signum: i32) {
+pub(crate) extern "C" fn pidfile_cleanup_handler(signum: i32) {
     use std::sync::atomic::Ordering;
 
     let ptr = CLEANUP_PIDFILE.load(Ordering::Acquire);

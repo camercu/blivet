@@ -851,6 +851,7 @@ mod tests {
 
     #[test]
     #[ignore]
+    #[allow(unsafe_code)]
     fn cleanup_on_signals_may_replace_its_own_handler_subprocess() {
         if !crate::test_support::is_subprocess() {
             return;
@@ -864,6 +865,17 @@ mod tests {
         let again = ctx.cleanup_on_signals(&[libc::SIGTERM]);
 
         assert!(again.is_ok(), "{again:?}");
+        let mut current: libc::sigaction = unsafe { std::mem::zeroed() };
+        // SAFETY: a null new action only reads the disposition into `current`.
+        assert_eq!(
+            unsafe { libc::sigaction(libc::SIGTERM, std::ptr::null(), &mut current) },
+            0
+        );
+        assert_eq!(
+            current.sa_sigaction,
+            crate::unsafe_ops::pidfile_cleanup_handler as extern "C" fn(i32) as usize,
+            "SIGTERM is no longer the cleanup handler"
+        );
     }
 
     // Installs a real SIGTERM handler and raises it, so it must run in its own
