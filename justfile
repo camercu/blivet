@@ -368,7 +368,12 @@ ci-rtk:
     RTK_CARGO="rtk cargo" just ci
 
 # Run the full CI suite including both container tiers and the node checks
-ci-full: check test package-test docker-test termux-test check-attribution check-release-config
+ci-full: check test package-test docker-test termux-test node-deps check-attribution check-release-config
+
+# Install the node packages check-release-config imports, as CI's jobs do.
+[private]
+node-deps:
+    npm ci
 
 # Tests the attribution pattern, then rejects agent attribution anywhere in
 # history. Needs full history: the scan refuses a shallow clone.
