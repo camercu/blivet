@@ -1,3 +1,59 @@
+## [0.14.0](https://github.com/camercu/blivet/compare/v0.13.0...v0.14.0) (2026-09-30)
+
+### ⚠ BREAKING CHANGES
+
+* **cargo:** the daemonize binary now requires the cli feature. A
+consumer building with --no-default-features gets the library alone
+and no binary; the default build is unchanged.
+
+### Features
+
+* **cargo:** put the CLI's argument parser behind a default-on feature ([9b5f244](https://github.com/camercu/blivet/commit/9b5f24466ac0901e065db7d1c27b0e205850f187))
+* **platform:** declare Android's capabilities, measured on bionic ([1943a9c](https://github.com/camercu/blivet/commit/1943a9c257201b09c86904d933d522591ae218d6))
+
+### Bug Fixes
+
+* **build:** name the target triple when the target is not Unix ([1358fef](https://github.com/camercu/blivet/commit/1358fef07db142f53657e04b2cf9f8628cd00efe))
+* **ci:** count non-Unix diagnostics with colour forced off ([810ee19](https://github.com/camercu/blivet/commit/810ee197818bf25193468fd2dba055b82ca7ce21))
+* **ci:** fail closed when the guard cannot read the test counts ([cf1fdcb](https://github.com/camercu/blivet/commit/cf1fdcb03b264afc7f7266d3b438775c1d0d4b5d))
+* **ci:** guard each test command in the Linux tier on its own ([37f8c0f](https://github.com/camercu/blivet/commit/37f8c0fb9798e95923713103be1a126768fa9d8b))
+* **ci:** keep the run transcript out of the working tree ([cd2ed7e](https://github.com/camercu/blivet/commit/cd2ed7ecac2c6f00facaf6312c5030d23410a48e))
+* **ci:** key the vacuous-run guard on the runner, not on one literal ([c3f55c9](https://github.com/camercu/blivet/commit/c3f55c9304d30bcba49855d32d022ee00167b84d))
+* **ci:** let a command that failed before running tests report its own error ([cee0aa4](https://github.com/camercu/blivet/commit/cee0aa457bfeac939d36a787ec14b9b83e907829))
+* **ci:** let the Android script report a missing test binary ([4feff0c](https://github.com/camercu/blivet/commit/4feff0c068e257ddd8a30385dcb85dc07f719409))
+* **ci:** let the guard diagnose a killed run itself ([0644c0a](https://github.com/camercu/blivet/commit/0644c0a38c5900f91dcb2738c4b43bdae3f32783))
+* **ci:** make the privileged tier assert its own preconditions ([857b308](https://github.com/camercu/blivet/commit/857b308cb8e32ee4242746153c81ed437f46d1df))
+* **ci:** run coverage on the gate profile, through the guard ([961adc1](https://github.com/camercu/blivet/commit/961adc117bc16fba3c58c0bc8793265fac05561c))
+* **ci:** tell an all-failed run apart from a run that did nothing ([2ce0b6a](https://github.com/camercu/blivet/commit/2ce0b6ad631c2d77b7034722c66d86d0006efb0a))
+* **config:** compare paths that do not exist yet by their resolved parent ([6fa9ea1](https://github.com/camercu/blivet/commit/6fa9ea1ceddbf289f1427d40e3602a82a5bb7272))
+* **config:** drop AT_EACCESS on Android, where bionic rejects it ([9a16361](https://github.com/camercu/blivet/commit/9a1636139ab9042be55c29cddbe5c9937fa31714))
+* **config:** name the errno when a writability probe cannot run ([4b629e5](https://github.com/camercu/blivet/commit/4b629e58d43679d9fb5a79b1c6198d747f3e0f54))
+* **config:** reject a parent that exists but is not a directory ([173935d](https://github.com/camercu/blivet/commit/173935d56ada1f3c3fad24d1ed01b719361f7279))
+* **config:** say the filesystem is read-only instead of that the check failed ([c67781d](https://github.com/camercu/blivet/commit/c67781d0969017c863990a210e9772e5c7a39a5b))
+* **context:** remove the pidfile before waking the parent on drop ([39104e4](https://github.com/camercu/blivet/commit/39104e446f1238fcda02b073818f31c25ba05c80))
+* **daemonize:** arm the pidfile abort guard before the write, not after ([e392a50](https://github.com/camercu/blivet/commit/e392a5034a0646d4d027fd789d9774cc402d7e96))
+* **daemonize:** leave a pidfile alone when this process failed to open it ([bd8f206](https://github.com/camercu/blivet/commit/bd8f20678d180a54f0f5c9cd1363e0a8f6f42e17))
+* **daemonize:** remove the pidfile when the sequence aborts after writing it ([576cbc4](https://github.com/camercu/blivet/commit/576cbc4cbd69d55271f383fb74bbc915dd6f25fe))
+* **docs:** bring drop_privileges' platform list under the guard ([7300f69](https://github.com/camercu/blivet/commit/7300f695d9c1f3ab4aa3fa5d711e6086ea66a430))
+* **examples:** gate the daemonize call the way a consumer has to ([d8fd911](https://github.com/camercu/blivet/commit/d8fd911214ca7f81b5d3f079921432dc74392317))
+* **forker:** return an error when the notification pipe cannot be made ([85530e1](https://github.com/camercu/blivet/commit/85530e1322117682c8929fa6238d8b982a50684b))
+* **just:** compare rustc floors by version, not by sort order ([55dceb0](https://github.com/camercu/blivet/commit/55dceb0f27f402483b32f56e4ed728fa989639f1))
+* **just:** hold dev-dependencies to the container tier's rustc too ([c49c446](https://github.com/camercu/blivet/commit/c49c446a843569fff762f6129071b9e64c6aefbf))
+* **mutants:** count a timed-out mutant as caught ([93299da](https://github.com/camercu/blivet/commit/93299da35a6fcc60eeecd27efd59dab7911a6251))
+* **platform:** keep the effective-UID writability check on unlisted targets ([4db06ce](https://github.com/camercu/blivet/commit/4db06ced8816ed415ee0b0d20b368f13abdc14a9))
+* **platform:** stop a non-Unix build after the error that names it ([44638e2](https://github.com/camercu/blivet/commit/44638e214546993ccc5f007f8d724ce14c625832))
+* **redirect:** compare stream files by identity before truncating them ([517b630](https://github.com/camercu/blivet/commit/517b6306f36732ee0920d7b905f0037c13364103))
+* **redirect:** leave the previous logs alone when stderr fails ([9c83228](https://github.com/camercu/blivet/commit/9c83228edfcd6039b1f0684decafbbd86aef9599))
+* **redirect:** move stdout onto fd 1 before opening stderr ([ed1b7a7](https://github.com/camercu/blivet/commit/ed1b7a7ff407d46cab92071da479741e9a82b3d4))
+* **signals:** skip bionic's reserved real-time signals on Android ([d8e9108](https://github.com/camercu/blivet/commit/d8e9108c6117b4accbbc42a52d647cc2e0e82539))
+* **steps:** let a daemon with no free fd get past step 12 ([898123f](https://github.com/camercu/blivet/commit/898123f98fe07004bd330b89a75b577af386d83a))
+* **steps:** make a failed step 12 put every stdio slot back ([de22d7b](https://github.com/camercu/blivet/commit/de22d7b4e5d5ce6ad54789d25514ba6beec19531))
+* **test:** bless the docs only when asked to ([e988a1c](https://github.com/camercu/blivet/commit/e988a1cbdae27f3d4c4f9d83ebb23473eb5ce738))
+* **test:** fail a subprocess re-invocation that matched no test ([910ff88](https://github.com/camercu/blivet/commit/910ff882eaa318f41c34b68b433fcb9053d988eb))
+* **test:** hold numeric user resolution to what the passwd database says ([52d2c43](https://github.com/camercu/blivet/commit/52d2c43d064fc01a5dc73598ad9e6014803e8b4b))
+* **test:** keep the gate off cargo-mutants' 5s kill timeout ([a39ee15](https://github.com/camercu/blivet/commit/a39ee15de8f07b0052e5da5566ce345d363f02d6))
+* **test:** keep the guards that ship to crates.io off unpublished files ([12bb5ad](https://github.com/camercu/blivet/commit/12bb5ad7b93b2d1b35dc4656bfb5ef407eccea7a))
+
 ## [0.13.0](https://github.com/camercu/blivet/compare/v0.12.0...v0.13.0) (2026-07-15)
 
 ### Features
