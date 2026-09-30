@@ -429,6 +429,9 @@ impl DaemonContext {
         let identity =
             ResolvedIdentity::resolve(self.config.user.as_deref(), self.config.group.as_deref())?;
 
+        #[cfg(test)]
+        crate::test_support::assert_isolated("drop_privileges' identity switch");
+
         if let Some(info) = identity.user() {
             crate::unsafe_ops::raw_initgroups(&info.cname()?, info.gid.as_raw())
                 .map_err(|e| DaemonizeError::PermissionDenied(format!("initgroups: {e}")))?;
@@ -721,6 +724,17 @@ mod tests {
 
     #[test]
     fn cleanup_on_signals_uncatchable_signal_rejected() {
+        crate::test_support::run_in_subprocess(
+            "context::tests::cleanup_on_signals_uncatchable_signal_rejected_subprocess",
+        );
+    }
+
+    #[test]
+    #[ignore]
+    fn cleanup_on_signals_uncatchable_signal_rejected_subprocess() {
+        if !crate::test_support::is_subprocess() {
+            return;
+        }
         let dir = tempfile::tempdir().unwrap();
         let mut cfg = DaemonConfig::new();
         cfg.pidfile(dir.path().join("x.pid"));
@@ -1329,6 +1343,18 @@ mod tests {
     #[cfg(blivet_thread_count)]
     #[test]
     fn drop_privileges_group_only_does_not_check_threads() {
+        crate::test_support::run_in_subprocess(
+            "context::tests::drop_privileges_group_only_does_not_check_threads_subprocess",
+        );
+    }
+
+    #[cfg(blivet_thread_count)]
+    #[test]
+    #[ignore]
+    fn drop_privileges_group_only_does_not_check_threads_subprocess() {
+        if !crate::test_support::is_subprocess() {
+            return;
+        }
         use std::sync::atomic::{AtomicBool, Ordering};
         use std::sync::{mpsc, Arc};
 

@@ -828,11 +828,18 @@ mod tests {
     // and daemon match arms: with the arms swapped, this would return Err
     // instead of exiting.
     #[test]
-    #[serial_test::serial]
     fn daemon_post_fork_failure_exits_not_returns() {
-        // Step 4 sets the process umask from the config before chdir fails;
-        // the guard restores the harness's umask even if an assertion panics.
-        let _umask = test_support::UmaskGuard::set(nix::sys::stat::Mode::empty());
+        crate::test_support::run_in_subprocess(
+            "tests::daemon_post_fork_failure_exits_not_returns_subprocess",
+        );
+    }
+
+    #[test]
+    #[ignore]
+    fn daemon_post_fork_failure_exits_not_returns_subprocess() {
+        if !crate::test_support::is_subprocess() {
+            return;
+        }
         // Daemon mode (foreground stays false); chdir to a nonexistent path
         // fails at step 5, before any stdio redirection touches this process.
         let mut config = DaemonConfig::new();

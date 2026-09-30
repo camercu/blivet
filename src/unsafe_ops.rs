@@ -45,6 +45,8 @@
 /// signal number — is skipped silently.
 pub(crate) fn reset_signal_dispositions() -> Result<(), crate::error::DaemonizeError> {
     #[cfg(test)]
+    crate::test_support::assert_isolated("reset_signal_dispositions");
+    #[cfg(test)]
     if crate::steps::failpoints::injected(&crate::steps::failpoints::SIGACTION_FAILS) {
         return Err(crate::error::DaemonizeError::SystemError(
             "sigaction(1): injected failure".into(),
@@ -176,6 +178,8 @@ pub(crate) fn install_pidfile_cleanup_signals(
     signals: &[i32],
 ) -> std::io::Result<()> {
     use std::sync::atomic::Ordering;
+    #[cfg(test)]
+    crate::test_support::assert_isolated("install_pidfile_cleanup_signals");
 
     // Leak a stable copy of the path. Repeated installs leak the prior copy,
     // a small bounded cost for a rarely-repeated setup call. The prior pointer

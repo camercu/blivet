@@ -117,11 +117,15 @@ pub(crate) struct Collision {
 /// [`DaemonConfig::validate`](crate::DaemonConfig::validate)); the cast to
 /// `mode_t` is therefore lossless.
 pub(crate) fn set_umask(mode: u32) {
+    #[cfg(test)]
+    crate::test_support::assert_isolated("set_umask");
     nix::sys::stat::umask(Mode::from_bits_truncate(mode as libc::mode_t));
 }
 
 /// Step 5: Change working directory.
 pub(crate) fn change_dir(path: &Path) -> Result<(), DaemonizeError> {
+    #[cfg(test)]
+    crate::test_support::assert_isolated("change_dir");
     nix::unistd::chdir(path)
         .map_err(|e| DaemonizeError::ChdirFailed(format!("{}: {e}", path.display())))
 }
@@ -330,6 +334,8 @@ pub(crate) fn clear_signal_mask() -> Result<(), DaemonizeError> {
 /// [`DaemonConfig::validate`](crate::DaemonConfig::validate) (R36, R138).
 #[allow(unsafe_code)]
 pub(crate) fn set_env_vars(env: &[(String, String)]) {
+    #[cfg(test)]
+    crate::test_support::assert_isolated("set_env_vars");
     for (key, value) in env {
         // SAFETY: single-threaded per this fn's contract (post-fork child or
         // foreground entry gate), so the `setenv` cannot race.
@@ -720,6 +726,8 @@ pub(crate) fn list_open_fds() -> Option<Vec<i32>> {
 /// Returns [`SystemError`](DaemonizeError::SystemError) if the fallback path's
 /// `getrlimit` fails; the fd-listing path is infallible.
 pub(crate) fn close_inherited_fds(skip_fds: &[i32]) -> Result<(), DaemonizeError> {
+    #[cfg(test)]
+    crate::test_support::assert_isolated("close_inherited_fds");
     if let Some(open_fds) = list_open_fds() {
         for fd in open_fds {
             if fd >= 3 && !skip_fds.contains(&fd) {
@@ -742,13 +750,22 @@ mod tests {
 
     use super::*;
     use crate::test_support::{is_subprocess, run_in_subprocess};
-    use serial_test::serial;
 
     // --- Step 4: umask ---
 
     #[test]
-    #[serial]
     fn set_umask_applies_and_can_be_read_back() {
+        crate::test_support::run_in_subprocess(
+            "steps::tests::set_umask_applies_and_can_be_read_back_subprocess",
+        );
+    }
+
+    #[test]
+    #[ignore]
+    fn set_umask_applies_and_can_be_read_back_subprocess() {
+        if !crate::test_support::is_subprocess() {
+            return;
+        }
         let old = nix::sys::stat::umask(Mode::from_bits_truncate(0o077));
         set_umask(0o022);
         let readback = nix::sys::stat::umask(old); // restore
@@ -759,8 +776,16 @@ mod tests {
     // --- Step 5: chdir ---
 
     #[test]
-    #[serial]
     fn change_dir_to_tempdir() {
+        crate::test_support::run_in_subprocess("steps::tests::change_dir_to_tempdir_subprocess");
+    }
+
+    #[test]
+    #[ignore]
+    fn change_dir_to_tempdir_subprocess() {
+        if !crate::test_support::is_subprocess() {
+            return;
+        }
         let original = std::env::current_dir().unwrap();
         let tmp = tempfile::tempdir().unwrap();
         let result = change_dir(tmp.path());
@@ -771,8 +796,18 @@ mod tests {
     }
 
     #[test]
-    #[serial]
     fn change_dir_nonexistent_fails() {
+        crate::test_support::run_in_subprocess(
+            "steps::tests::change_dir_nonexistent_fails_subprocess",
+        );
+    }
+
+    #[test]
+    #[ignore]
+    fn change_dir_nonexistent_fails_subprocess() {
+        if !crate::test_support::is_subprocess() {
+            return;
+        }
         let result = change_dir(Path::new("/nonexistent_daemonize_test_path"));
         assert!(matches!(result, Err(DaemonizeError::ChdirFailed(_))));
     }
@@ -908,13 +943,21 @@ mod tests {
 
     // Covers: R98
     #[test]
-    #[serial]
     fn write_pidfile_standalone_mode_is_0644() {
+        run_in_subprocess("steps::tests::write_pidfile_standalone_mode_is_0644_subprocess");
+    }
+
+    #[test]
+    #[ignore]
+    fn write_pidfile_standalone_mode_is_0644_subprocess() {
         use std::os::unix::fs::PermissionsExt;
 
+        if !is_subprocess() {
+            return;
+        }
         // umask 0 so the on-disk mode reflects the open()/create mode exactly,
         // not umask masking. std::fs::write creates 0666; R98 mandates 0644.
-        let _umask = crate::test_support::UmaskGuard::set(Mode::empty());
+        set_umask(0);
         let dir = tempfile::tempdir().unwrap();
         let pidfile = dir.path().join("mode.pid");
         write_pidfile(&pidfile, None).unwrap();
@@ -983,11 +1026,21 @@ mod tests {
 
     // --- Step 9: signal disposition reset ---
 
-    #[test]
-    #[serial]
-    #[allow(unsafe_code)]
     // Covers: R99
+    #[test]
     fn reset_signal_dispositions_restores_default() {
+        crate::test_support::run_in_subprocess(
+            "steps::tests::reset_signal_dispositions_restores_default_subprocess",
+        );
+    }
+
+    #[test]
+    #[ignore]
+    #[allow(unsafe_code)]
+    fn reset_signal_dispositions_restores_default_subprocess() {
+        if !crate::test_support::is_subprocess() {
+            return;
+        }
         use nix::sys::signal::{sigaction, SaFlags, SigAction, SigHandler, SigSet, Signal};
 
         // Install SIG_IGN handler for SIGUSR1
@@ -1017,9 +1070,19 @@ mod tests {
 
     // Covers: R127
     #[test]
-    #[serial]
-    #[allow(unsafe_code)]
     fn reset_signal_dispositions_preserves_sigpipe() {
+        crate::test_support::run_in_subprocess(
+            "steps::tests::reset_signal_dispositions_preserves_sigpipe_subprocess",
+        );
+    }
+
+    #[test]
+    #[ignore]
+    #[allow(unsafe_code)]
+    fn reset_signal_dispositions_preserves_sigpipe_subprocess() {
+        if !crate::test_support::is_subprocess() {
+            return;
+        }
         use nix::sys::signal::{sigaction, SaFlags, SigAction, SigHandler, SigSet, Signal};
 
         // Read the harness's current SIGPIPE disposition so it can be
@@ -1056,8 +1119,9 @@ mod tests {
 
     // --- Step 10: clear signal mask ---
 
+    // sigprocmask changes only the calling thread's mask, so this runs in the
+    // shared test process.
     #[test]
-    #[serial]
     fn clear_signal_mask_empties() {
         use nix::sys::signal::{SigSet, SigmaskHow, Signal};
         // Block SIGUSR1
@@ -1075,9 +1139,17 @@ mod tests {
     // --- Step 11: set env vars ---
 
     #[test]
-    #[serial]
-    #[allow(unsafe_code)]
     fn set_env_vars_applies() {
+        crate::test_support::run_in_subprocess("steps::tests::set_env_vars_applies_subprocess");
+    }
+
+    #[test]
+    #[ignore]
+    #[allow(unsafe_code)]
+    fn set_env_vars_applies_subprocess() {
+        if !crate::test_support::is_subprocess() {
+            return;
+        }
         let vars = vec![
             ("DAEMONIZE_TEST_A".into(), "1".into()),
             ("DAEMONIZE_TEST_B".into(), "2".into()),
@@ -1085,25 +1157,28 @@ mod tests {
         set_env_vars(&vars);
         assert_eq!(std::env::var("DAEMONIZE_TEST_A").unwrap(), "1");
         assert_eq!(std::env::var("DAEMONIZE_TEST_B").unwrap(), "2");
-        // SAFETY: #[serial] guarantees no concurrent env access during this test.
-        unsafe {
-            std::env::remove_var("DAEMONIZE_TEST_A");
-            std::env::remove_var("DAEMONIZE_TEST_B");
-        }
     }
 
     #[test]
-    #[serial]
-    #[allow(unsafe_code)]
     fn set_env_vars_last_write_wins() {
+        crate::test_support::run_in_subprocess(
+            "steps::tests::set_env_vars_last_write_wins_subprocess",
+        );
+    }
+
+    #[test]
+    #[ignore]
+    #[allow(unsafe_code)]
+    fn set_env_vars_last_write_wins_subprocess() {
+        if !crate::test_support::is_subprocess() {
+            return;
+        }
         let vars = vec![
             ("DAEMONIZE_TEST_DUP".into(), "first".into()),
             ("DAEMONIZE_TEST_DUP".into(), "second".into()),
         ];
         set_env_vars(&vars);
         assert_eq!(std::env::var("DAEMONIZE_TEST_DUP").unwrap(), "second");
-        // SAFETY: #[serial] guarantees no concurrent env access during this test.
-        unsafe { std::env::remove_var("DAEMONIZE_TEST_DUP") };
     }
 
     // --- Step 12: redirect output (pure plan tests) ---
@@ -1768,13 +1843,8 @@ mod tests {
 
     // --- Step 13: close inherited fds (executor smoke test, subprocess-isolated) ---
     //
-    // close_inherited_fds closes every non-skipped descriptor process-wide. Run
-    // in the shared test process it clobbers fds held by tests executing in
-    // parallel (open lockfiles, ReadDir handles during tempdir cleanup),
-    // producing spurious EBADF failures. #[serial] does not help: it only
-    // orders against other #[serial] tests, not the parallel non-serial ones.
-    // So the body runs in isolation, spawned via
-    // crate::test_support::run_in_subprocess.
+    // close_inherited_fds closes every non-skipped descriptor process-wide, so
+    // the body runs in its own process: see crate::test_support::assert_isolated.
 
     /// Runs everywhere, the hosted Ubuntu runner included, so mutation testing
     /// reaches step 13 in CI. It was once ignored there after an abort blamed

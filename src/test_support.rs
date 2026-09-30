@@ -1,47 +1,25 @@
 //! Shared helpers for tests with process-wide side effects.
 //!
-//! Some tests touch process-global state — redirecting std fds, closing
-//! inherited fds, forking, changing the umask — that corrupts the shared test
-//! harness or clobbers state used by tests running in parallel. Two tools
-//! contain the damage:
-//!
-//! - A test whose effects cannot be undone in-process (fd closing, forking) is
-//!   marked `#[ignore]` and paired with a wrapper that re-invokes the test
-//!   binary for just that one test via [`run_in_subprocess`]. The body guards
-//!   on [`is_subprocess`] so it executes only when spawned this way.
-//! - Reversible global state (the umask) gets an RAII guard ([`UmaskGuard`])
-//!   so a panicking assertion cannot leak the altered state.
+//! A test that changes process-wide state — stdio or other descriptors, the
+//! umask, cwd, environment, signal handling, credentials — would do so under
+//! every test running in parallel in the shared harness. Such a test is marked
+//! `#[ignore]` and paired with a wrapper that re-invokes the test binary for
+//! just that one test via [`run_in_subprocess`]; the body guards on
+//! [`is_subprocess`] so it executes only when spawned this way. The production
+//! functions that change that state call [`assert_isolated`] under test, so a
+//! test that forgets the subprocess fails instead of racing its neighbours.
 
 use std::ffi::OsStr;
 use std::process::{Command, Output};
 
-/// RAII guard: sets the process umask and restores the previous one on drop.
-///
-/// Restoring in a `Drop` (rather than a trailing statement) means a panicking
-/// assertion between set and restore cannot leak the altered umask into tests
-/// running in parallel. Pair with `#[serial]` on the test so concurrent umask
-/// users are excluded too.
-pub(crate) struct UmaskGuard {
-    old: nix::sys::stat::Mode,
-}
-
-impl UmaskGuard {
-    pub(crate) fn set(mode: nix::sys::stat::Mode) -> Self {
-        Self {
-            old: nix::sys::stat::umask(mode),
-        }
-    }
-}
-
-impl Drop for UmaskGuard {
-    fn drop(&mut self) {
-        nix::sys::stat::umask(self.old);
-    }
-}
-
 /// Environment variable set in the spawned subprocess so the `#[ignore]` test
 /// body knows it is running in isolation (see [`is_subprocess`]).
 const SUBPROCESS_ENV: &str = "__BLIVET_SUBPROCESS_TEST";
+
+/// Set in every child [`rerun_in_subprocess`] starts, whatever marker the
+/// caller branches on: each child runs one test, so it alone owns the
+/// process-wide state [`assert_isolated`] guards.
+const ISOLATED_ENV: &str = "__BLIVET_ISOLATED_TEST";
 
 /// Returns `true` when running inside a subprocess spawned by
 /// [`run_in_subprocess`].
@@ -103,6 +81,7 @@ pub(crate) fn rerun_in_subprocess(
         .arg("--include-ignored")
         .arg("--nocapture")
         .env(marker, value)
+        .env(ISOLATED_ENV, "1")
         .output()
         .unwrap();
     // libtest announces the filtered count before it runs anything, so this
@@ -189,10 +168,12 @@ pub(crate) fn read_pipe(rd: std::os::fd::OwnedFd) -> Vec<u8> {
     buf
 }
 
-/// Panics unless this is an isolated subprocess ([`run_in_subprocess`]).
+/// Panics unless this runs in a child of [`rerun_in_subprocess`].
 ///
-/// For code that moves fd 0, 1 or 2. In the shared test process other threads
-/// open descriptors while it runs, and replacing a live stdio slot is not
+/// For code that changes process-wide state: stdio slots, other descriptors,
+/// umask, cwd, environment, signal handling, credentials. The shared test
+/// process runs other tests on other threads meanwhile. For fd 0, 1 and 2 the
+/// failure was concrete: other threads open descriptors while it runs, and replacing a live stdio slot is not
 /// atomic everywhere: NetBSD's `dup2` closes the target, drops the table lock,
 /// and closes it again if another thread was handed that number meanwhile. A
 /// concurrent `Command` spawn got fd 2 for its status pipe, lost it to the
@@ -202,8 +183,8 @@ pub(crate) fn read_pipe(rd: std::os::fd::OwnedFd) -> Vec<u8> {
 /// opens descriptors under it.
 pub(crate) fn assert_isolated(what: &str) {
     assert!(
-        is_subprocess(),
-        "{what} moves fd 0-2 of the shared test process; run the test body \
-         through run_in_subprocess"
+        std::env::var_os(ISOLATED_ENV).is_some(),
+        "{what} changes process-wide state under the shared test process; \
+         run the test body through run_in_subprocess"
     );
 }
