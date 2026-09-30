@@ -273,7 +273,7 @@ let `ctx` drop. The [`signal-hook`](https://crates.io/crates/signal-hook) crate
 is one way to drive that loop; `blivet` does not re-export it, so
 `cargo add signal-hook` first. Pick one approach per signal:
 `cleanup_on_signals` refuses a signal that already has a handler, such as one
-`signal_hook` registered, rather than silently replacing it.
+`signal_hook` registered, or that is ignored, rather than silently replacing it.
 
 ```rust,no_run
 use std::sync::atomic::{AtomicBool, Ordering};
