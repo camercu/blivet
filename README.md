@@ -29,12 +29,6 @@ fn main() -> Result<(), DaemonizeError> {
 }
 ```
 
-This calls `daemonize` unconditionally, which is what you want on a supported
-platform. On any other Unix it resolves to a `#[deprecated]` stub that panics,
-so a crate that must also build there gates the call on `target_os` — the
-[crate front page](https://docs.rs/blivet) and `examples/echo_server.rs` both
-show that form. See [Platform support](#platform-support).
-
 ## Why blivet
 
 - **Correct by default.** Double-fork, `setsid`, reset signal dispositions
@@ -376,7 +370,9 @@ uses the same code as x86_64 Linux, but nothing checks it.
 
 On a best-effort target, `daemonize()` and `drop_privileges()` are
 `#[deprecated]` stubs that panic. Call `daemonize_unchecked()` and
-`drop_privileges_unchecked()` instead. Solaris (`x86_64-pc-solaris`) does not
+`drop_privileges_unchecked()` instead. A crate that also builds there can gate
+the checked call on `target_os`, as the [crate front page](https://docs.rs/blivet)
+and `examples/echo_server.rs` do. Solaris (`x86_64-pc-solaris`) does not
 compile, because `nix` lacks `Flock` there. A non-Unix target fails with one
 `compile_error!` that names it.
 
