@@ -72,11 +72,11 @@
 //! `drop_privileges()`:
 //!
 //! ```text
-//! [single-threaded required]
-//!   daemonize() / daemonize_unchecked() <- forks here
-//!   drop_privileges()                    <- last unsafe step: setenv (USER/HOME/LOGNAME)
-//! [now safe to spawn threads / start tokio / accept connections]
-//!   notify_parent()                      <- thread-safe; writes one byte to the pipe
+//! daemonize()        <- forks
+//! │ single-threaded only
+//! drop_privileges()  <- last setenv
+//! │ threads, async, accept loops OK
+//! notify_parent()    <- writes one byte
 //! ```
 //!
 //! Both guards check for you and panic if violated: [`daemonize`] at the fork,

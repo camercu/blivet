@@ -62,9 +62,16 @@ that daemon to report in. In the daemon you then:
 3. call `notify_parent()`, which writes one readiness byte down the pipe.
 
 ```text
-launcher ── daemonize() ──► fork → setsid → fork ──► grandchild = your daemon
-   ▲                                                     │
-   └───────────── readiness / error  (pipe) ─────────────┘
+launcher
+│ daemonize(): fork, setsid, fork
+├───────────────────┐
+│ waits on pipe     ▼
+│                 daemon
+│                   │ init
+│                   │ drop_privileges()
+│◄──────────────────┘ notify_parent()
+▼
+exits 0, or the error's code
 ```
 
 That byte releases the launcher, which exits 0. If the daemon calls
