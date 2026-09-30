@@ -431,7 +431,12 @@ pub(crate) unsafe fn daemonize_inner(
                 // read and exit. A plain drop would trip the NotifyPipe Drop
                 // safety net and make the parent read its own failure bytes.
                 pipe_wr.close();
-                parent_pipe_reader(pipe_rd, forker);
+                let eof = if config.exec_notifies {
+                    notify::EofMeans::Ready
+                } else {
+                    notify::EofMeans::Unnotified
+                };
+                parent_pipe_reader(pipe_rd, eof, forker);
             }
             ForkResult::Child => {
                 // Child: close read end, continue
@@ -623,12 +628,12 @@ fn run_post_fork(
 
 /// Parent-side pipe reader. Reads from the pipe and exits accordingly.
 #[cfg(unix)]
-fn parent_pipe_reader(rd: OwnedFd, forker: &impl Forker) -> ! {
+fn parent_pipe_reader(rd: OwnedFd, eof: notify::EofMeans, forker: &impl Forker) -> ! {
     let mut file = std::fs::File::from(rd);
     let mut buf = Vec::new();
     let _ = file.read_to_end(&mut buf);
 
-    match notify::decode(&buf) {
+    match notify::decode(&buf, eof) {
         notify::Outcome::Success => forker.exit(0),
         notify::Outcome::Failure { code, message } => {
             eprintln!("{message}");
@@ -704,7 +709,9 @@ mod tests {
         // Drop safety net writes failure bytes, and a parent that drops would
         // read its own bytes and report a failure for a healthy start. With the
         // write end closed silently, the reader sees EOF -> success -> exit(0).
-        let config = DaemonConfig::new();
+        // EOF means success only where an exec is expected to close the pipe.
+        let mut config = DaemonConfig::new();
+        config.exec_notifies(true);
         let mut forker = NullForker::first_parent();
         let result = catch_unwind(std::panic::AssertUnwindSafe(|| {
             run_inner(&config, &mut forker)
@@ -719,6 +726,24 @@ mod tests {
             "parent must read EOF = success from its own silently-closed write \
              end, got: {panic_msg}"
         );
+    }
+
+    // Covers: R150
+    #[test]
+    fn launcher_reads_a_silent_close_as_failure_without_an_exec() {
+        // NullForker runs no daemon, so the parent's reader sees the pipe close
+        // with no message: what a daemon killed before notifying leaves behind.
+        let config = DaemonConfig::new();
+        let mut forker = NullForker::first_parent();
+        let result = catch_unwind(std::panic::AssertUnwindSafe(|| {
+            run_inner(&config, &mut forker)
+        }));
+        let panic_msg = result
+            .expect_err("parent exits after reading the pipe")
+            .downcast_ref::<String>()
+            .cloned()
+            .unwrap();
+        assert!(panic_msg.contains("NullForker::exit(1)"), "{panic_msg}");
     }
 
     // Covers: R137

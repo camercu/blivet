@@ -76,11 +76,8 @@ exits 0, or the error's code
 
 That byte releases the launcher, which exits 0. If the daemon calls
 `report_error()`, the launcher exits with that error's `sysexits.h` code. If the
-daemon returns early or panics, the `DaemonContext` drops without notifying,
-reports a failure, and the launcher exits non-zero. One gap remains. A daemon
-that ends before `ctx` drops, because a signal killed it or it called
-`std::process::exit`, closes the pipe with no message. The launcher reads that
-as success, as it does when the CLI's `exec` closes the pipe.
+daemon ends any other way before notifying, the launcher exits 1. That covers an
+early return, a panic, a kill by a signal, and a call to `std::process::exit`.
 
 Steps 1 and 2 must run **single-threaded**. [Safety](#safety) explains why.
 

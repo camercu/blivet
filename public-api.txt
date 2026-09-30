@@ -45,6 +45,7 @@ pub fn blivet::DaemonConfig::chown_paths(&mut self, chown: bool) -> &mut Self
 pub fn blivet::DaemonConfig::cleanup_on_drop(&mut self, cleanup: bool) -> &mut Self
 pub fn blivet::DaemonConfig::close_fds(&mut self, close_fds: bool) -> &mut Self
 pub fn blivet::DaemonConfig::env(&mut self, key: impl core::convert::Into<alloc::string::String>, value: impl core::convert::Into<alloc::string::String>) -> &mut Self
+pub fn blivet::DaemonConfig::exec_notifies(&mut self, exec_notifies: bool) -> &mut Self
 pub fn blivet::DaemonConfig::foreground(&mut self, foreground: bool) -> &mut Self
 pub fn blivet::DaemonConfig::group(&mut self, name: impl core::convert::Into<alloc::string::String>) -> &mut Self
 pub fn blivet::DaemonConfig::lockfile(&mut self, path: impl core::convert::Into<std::path::PathBuf>) -> &mut Self

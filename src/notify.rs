@@ -8,8 +8,9 @@
 //! - `0x00` — success; the daemon is ready. Any trailing bytes are ignored.
 //! - non-zero `code` + message — failure; the parent prints `message` to
 //!   stderr and exits with `code`.
-//! - pipe closed with no bytes (EOF) — the CLI `exec`'d successfully and
-//!   `O_CLOEXEC` closed the write end; treated as success.
+//! - pipe closed with no bytes (EOF) — success where the daemon was to `exec`
+//!   (a successful `exec` closes the `O_CLOEXEC` write end); otherwise the
+//!   daemon ended without notifying, a failure. See [`EofMeans`].
 //!
 //! Centralizing the byte layout here keeps the three writers (success, error,
 //! drop-without-notify) and the single reader from drifting out of sync.
@@ -118,6 +119,10 @@ const UNNOTIFIED_CODE: u8 = 1;
 /// Message paired with [`UNNOTIFIED_CODE`].
 const UNNOTIFIED_MSG: &[u8] = b"daemon exited without signaling readiness";
 
+/// Message for a pipe that closed with no message where no `exec` was expected.
+const EOF_UNNOTIFIED_MSG: &str =
+    "daemon ended without signaling readiness (killed by a signal, or exited without dropping its DaemonContext)";
+
 /// The single success byte (`0x00`).
 pub(crate) const SUCCESS: [u8; 1] = [0x00];
 
@@ -144,18 +149,32 @@ fn encode(code: u8, msg: &[u8]) -> Vec<u8> {
 /// The decoded result of a message read from the notification pipe.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum Outcome {
-    /// Daemon is ready (success byte) or the pipe hit EOF after a clean exec.
+    /// Daemon is ready: the success byte, or EOF where that means an exec.
     Success,
     /// Daemon failed; report `message` to stderr and exit with `code`.
     Failure { code: i32, message: String },
 }
 
+/// What the pipe closing with no message (EOF) means.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum EofMeans {
+    /// The daemon was to `exec`, and a successful `exec` closes the
+    /// `O_CLOEXEC` write end: the daemon is running.
+    Ready,
+    /// The daemon was not to `exec`, and every way of ending with its
+    /// `DaemonContext` dropped writes a message: it ended without notifying.
+    Unnotified,
+}
+
 /// Decode a message read from the notification pipe.
-pub(crate) fn decode(buf: &[u8]) -> Outcome {
-    match buf.first() {
-        // EOF (exec succeeded, CLOEXEC closed the pipe) or explicit success byte.
-        None | Some(&0x00) => Outcome::Success,
-        Some(&code) => Outcome::Failure {
+pub(crate) fn decode(buf: &[u8], eof: EofMeans) -> Outcome {
+    match (buf.first(), eof) {
+        (None, EofMeans::Ready) | (Some(&0x00), _) => Outcome::Success,
+        (None, EofMeans::Unnotified) => Outcome::Failure {
+            code: UNNOTIFIED_CODE as i32,
+            message: EOF_UNNOTIFIED_MSG.into(),
+        },
+        (Some(&code), _) => Outcome::Failure {
             code: code as i32,
             message: String::from_utf8_lossy(&buf[1..]).into_owned(),
         },
@@ -179,7 +198,10 @@ mod tests {
         let (rd, wr) = make_pipe();
         let err = DaemonizeError::ForkFailed("boom".into());
         NotifyPipe::new(wr).signal_error(&err);
-        assert_eq!(decode(&read_pipe(rd)), decode(&error_bytes(&err)));
+        assert_eq!(
+            decode(&read_pipe(rd), EofMeans::Unnotified),
+            decode(&error_bytes(&err), EofMeans::Unnotified)
+        );
     }
 
     #[test]
@@ -187,7 +209,7 @@ mod tests {
         let (rd, wr) = make_pipe();
         NotifyPipe::new(wr).signal_unnotified();
         assert_eq!(
-            decode(&read_pipe(rd)),
+            decode(&read_pipe(rd), EofMeans::Unnotified),
             Outcome::Failure {
                 code: UNNOTIFIED_CODE as i32,
                 message: "daemon exited without signaling readiness".into(),
@@ -204,7 +226,7 @@ mod tests {
         let (rd, wr) = make_pipe();
         drop(NotifyPipe::new(wr));
         assert_eq!(
-            decode(&read_pipe(rd)),
+            decode(&read_pipe(rd), EofMeans::Unnotified),
             Outcome::Failure {
                 code: UNNOTIFIED_CODE as i32,
                 message: "daemon exited without signaling readiness".into(),
@@ -248,12 +270,25 @@ mod tests {
 
     #[test]
     fn decode_success_byte() {
-        assert_eq!(decode(&SUCCESS), Outcome::Success);
+        assert_eq!(decode(&SUCCESS, EofMeans::Unnotified), Outcome::Success);
     }
 
+    // Covers: R150
     #[test]
-    fn decode_eof_is_success() {
-        assert_eq!(decode(&[]), Outcome::Success);
+    fn decode_eof_after_an_exec_is_success() {
+        assert_eq!(decode(&[], EofMeans::Ready), Outcome::Success);
+    }
+
+    // Covers: R150
+    #[test]
+    fn decode_eof_without_an_exec_is_failure() {
+        assert_eq!(
+            decode(&[], EofMeans::Unnotified),
+            Outcome::Failure {
+                code: UNNOTIFIED_CODE as i32,
+                message: EOF_UNNOTIFIED_MSG.into(),
+            }
+        );
     }
 
     #[test]
@@ -261,7 +296,7 @@ mod tests {
         let err = DaemonizeError::ForkFailed("boom".into());
         let code = err.exit_code();
         assert_eq!(
-            decode(&error_bytes(&err)),
+            decode(&error_bytes(&err), EofMeans::Unnotified),
             Outcome::Failure {
                 code: code as i32,
                 message: "fork failed: boom".into(),
@@ -275,7 +310,7 @@ mod tests {
         // decoded as readiness. exit_code() remaps it, so the encoded message
         // is still a real failure.
         let err = DaemonizeError::application(0, "boom");
-        match decode(&error_bytes(&err)) {
+        match decode(&error_bytes(&err), EofMeans::Unnotified) {
             Outcome::Failure { code, message } => {
                 assert_ne!(code, 0);
                 assert_eq!(message, "application error: boom");
@@ -287,7 +322,7 @@ mod tests {
     #[test]
     fn unnotified_round_trip() {
         assert_eq!(
-            decode(&unnotified_bytes()),
+            decode(&unnotified_bytes(), EofMeans::Unnotified),
             Outcome::Failure {
                 code: UNNOTIFIED_CODE as i32,
                 message: "daemon exited without signaling readiness".into(),

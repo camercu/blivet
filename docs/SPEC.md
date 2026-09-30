@@ -156,6 +156,7 @@ All fields are private; callers use builder methods.
 | `close_fds`  | `bool`                  | `true`               | `.close_fds(bool)`   | `bool`                     | Setter      |
 | `cleanup_on_drop` | `bool`             | `true`               | `.cleanup_on_drop(bool)` | `bool`                 | Setter      |
 | `chown_paths` | `bool`                 | `true`               | `.chown_paths(bool)` | `bool`                     | Setter      |
+| `exec_notifies` | `bool`               | `false`              | `.exec_notifies(bool)` | `bool`                   | Setter      |
 | `env`        | `Vec<(String, String)>` | `vec![]`             | `.env(key, value)`   | `impl Into<String>` (both) | Accumulator |
 
 All builder methods except `.env()` are setters: each call replaces the
@@ -662,20 +663,22 @@ and takes one of three actions:
 - **Error byte (nonzero):** value is the `exit_code()` of the error.
   Remaining bytes are the `Display` message as UTF-8. Parent prints
   the message to stderr and calls `_exit()` with the code.
-- **EOF (no bytes read):** the pipe was closed without any write. This
-  means `exec` succeeded and `O_CLOEXEC` closed the write end. Parent
-  calls `_exit(0)`.
+- **EOF (no bytes read):** the pipe was closed without any write. With
+  `exec_notifies(true)` this means `exec` succeeded and `O_CLOEXEC`
+  closed the write end, and the parent calls `_exit(0)`. Otherwise it
+  means the daemon ended before notifying without dropping its
+  `DaemonContext`, and the parent prints a message and calls
+  `_exit(1)` (R150).
 
-> EOF-means-success is designed for the CLI exec path: `execvp`
-> replaces the process image, and `O_CLOEXEC` on the pipe write end
-> closes it automatically, producing EOF. For library consumers who
-> never exec, `notify_parent()` writes the explicit `0x00` byte. If a
-> library consumer drops `DaemonContext` without calling
-> `notify_parent()`, the `Drop` impl writes a failure byte before
-> closing, ensuring the parent exits non-zero. The only case where
-> EOF produces a false positive is a hard crash (e.g., `SIGKILL`) that
-> prevents `Drop` from running — this is an inherent limitation, and
-> the same as every other daemonization tool.
+> EOF-means-success exists for the CLI exec path: `execvp` replaces the
+> process image, and `O_CLOEXEC` on the pipe write end closes it
+> automatically, producing EOF. The CLI sets `exec_notifies(true)`. A
+> library consumer that never execs signals with `notify_parent()`,
+> which writes the explicit `0x00` byte, and every other way its
+> `DaemonContext` ends writes a failure: dropping it without notifying
+> makes `Drop` write the unnotified failure. EOF is left for an end
+> that skips `Drop`: a fatal signal, `abort`, or `std::process::exit`.
+> The launcher reports those as failures rather than a clean start.
 
 ### /dev/null redirect policy
 
@@ -1097,7 +1100,8 @@ Tests call `daemonize_inner()` directly and cover each code path:
 
 - Pipe creation fails: `SystemError` returned, no fork.
 - Both forks Child: success.
-- First fork Parent: reads EOF from the pipe, exit(0).
+- First fork Parent: reads EOF from the pipe; exit(0) with
+  `exec_notifies(true)`, exit(1) without.
 - First Child, second Parent: closes the pipe unwritten, exit(0).
 - First fork fails: `ForkFailed` returned, pipe unwritten.
 - Setsid fails: `SetsidFailed` on the pipe, exit(71).
@@ -1457,11 +1461,9 @@ verification points.
 - R136. Validation rejects any configured path containing a NUL byte.
 - R137. A panic that unwinds past the signalling seam in the daemon
   process reports a failure to the parent via the notification pipe,
-  never a closed pipe the parent reads as EOF = success. (Abrupt death
-  that runs no destructors — SIGKILL, OOM kill, a consumer binary
-  built with `panic = "abort"` — is out of scope: it closes the pipe
-  unwritten and decodes as EOF, an inherent limitation shared with the
-  exec-success path.)
+  not a closed pipe. (Abrupt death that runs no destructors — SIGKILL,
+  OOM kill, a consumer binary built with `panic = "abort"` — closes the
+  pipe unwritten. R150 decides what the parent reads that as.)
 - R138. Validation rejects an environment key or value containing a
   NUL byte.
 - R139. Platform differences are resolved from one capability table
@@ -1542,3 +1544,9 @@ verification points.
   replaced, and an ignored signal does not start killing the process.
   The error names the signal. Step 9 resets every disposition, so any
   other disposition was installed since.
+- R150. The launcher reads the notification pipe closing with no
+  message as success only when `exec_notifies(true)` is set, which the
+  CLI does: there a successful `exec` closes the pipe. Otherwise it
+  reports a failure and exits 1, so a daemon killed by a signal, or
+  ended by `std::process::exit`, before it notifies is not reported as
+  started.

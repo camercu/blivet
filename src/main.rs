@@ -94,6 +94,8 @@ fn main() -> ExitCode {
 
     // Build config
     let mut config = DaemonConfig::new();
+    // The daemon execs the program, whose success closes the pipe unwritten.
+    config.exec_notifies(true);
     if let Some(ref p) = args.pidfile {
         config.pidfile(p);
     }
