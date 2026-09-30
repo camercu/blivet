@@ -791,11 +791,11 @@ mod tests {
         if !crate::test_support::is_subprocess() {
             return;
         }
-        let old = nix::sys::stat::umask(Mode::from_bits_truncate(0o077));
+        // Start from a different umask, so a set_umask that did nothing fails.
+        nix::sys::stat::umask(Mode::from_bits_truncate(0o077));
         set_umask(0o022);
-        let readback = nix::sys::stat::umask(old); // restore
+        let readback = nix::sys::stat::umask(Mode::from_bits_truncate(0o077));
         assert_eq!(readback, Mode::from_bits_truncate(0o022));
-        nix::sys::stat::umask(old); // double-restore
     }
 
     // --- Step 5: chdir ---
@@ -811,13 +811,11 @@ mod tests {
         if !crate::test_support::is_subprocess() {
             return;
         }
-        let original = std::env::current_dir().unwrap();
         let tmp = tempfile::tempdir().unwrap();
         let result = change_dir(tmp.path());
         assert!(result.is_ok());
         let cwd = std::env::current_dir().unwrap();
         assert_eq!(cwd, std::fs::canonicalize(tmp.path()).unwrap());
-        std::env::set_current_dir(&original).unwrap();
     }
 
     #[test]
@@ -1106,9 +1104,6 @@ mod tests {
             matches!(after_reset.handler(), SigHandler::SigDfl),
             "SIGUSR1 should be SIG_DFL after reset"
         );
-
-        // Restore original
-        let _ = unsafe { sigaction(Signal::SIGUSR1, &old) };
     }
 
     // Covers: R127
@@ -1127,12 +1122,6 @@ mod tests {
             return;
         }
         use nix::sys::signal::{sigaction, SaFlags, SigAction, SigHandler, SigSet, Signal};
-
-        // Read the harness's current SIGPIPE disposition so it can be
-        // restored at the end (install-and-put-back is the only read API).
-        let probe = SigAction::new(SigHandler::SigIgn, SaFlags::empty(), SigSet::empty());
-        let original = unsafe { sigaction(Signal::SIGPIPE, &probe) }.unwrap();
-        let _ = unsafe { sigaction(Signal::SIGPIPE, &original) };
 
         // SIG_IGN (what the Rust runtime installs) must survive the reset:
         // resetting it would turn every write to a closed pipe/socket into
@@ -1156,8 +1145,6 @@ mod tests {
             matches!(after.handler(), SigHandler::SigDfl),
             "an explicit SIG_DFL must also be preserved, not overridden"
         );
-
-        let _ = unsafe { sigaction(Signal::SIGPIPE, &original) };
     }
 
     // --- Step 10: clear signal mask ---
