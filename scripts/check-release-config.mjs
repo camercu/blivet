@@ -98,6 +98,12 @@ if (notes.includes('hidden from notes')) failures.push('release notes show a hid
 const pluginNames = JSON.parse(readFileSync('.releaserc.json', 'utf8')).plugins.map((plugin) =>
   Array.isArray(plugin) ? plugin[0] : plugin,
 );
+// A missing plugin has no position, and indexOf's -1 would sort it first and
+// pass the order check below; report it instead.
+const ordered = ['@semantic-release/changelog', '@semantic-release/exec', '@semantic-release/git'];
+for (const name of ordered.filter((name) => !pluginNames.includes(name))) {
+  failures.push(`${name} is missing from .releaserc.json plugins`);
+}
 const at = (name) => pluginNames.indexOf(name);
 if (pluginConfig('semantic-release-cargo').publish !== false) {
   failures.push('semantic-release-cargo must not publish: it would publish after the tag');
