@@ -35,18 +35,23 @@ pub(crate) struct RealForker;
 #[allow(unsafe_code)]
 impl Forker for RealForker {
     fn create_notification_pipe(&mut self) -> Result<(OwnedFd, OwnedFd), DaemonizeError> {
-        use nix::fcntl::{fcntl, FcntlArg, FdFlag};
+        use nix::fcntl::{fcntl, FcntlArg};
+        use std::os::fd::FromRawFd;
 
         let failed = |e| DaemonizeError::SystemError(format!("notification pipe: {e}"));
         #[allow(clippy::disallowed_methods)] // the one place close-on-exec is set
         let (rd, wr) = nix::unistd::pipe().map_err(failed)?;
-        // Set O_CLOEXEC on both ends. pipe2(O_CLOEXEC) would be atomic, but
-        // macOS lacks pipe2. The two-step approach is safe here because
-        // daemonize() requires single-threaded execution.
-        for end in [&rd, &wr] {
-            fcntl(end.as_fd(), FcntlArg::F_SETFD(FdFlag::FD_CLOEXEC)).map_err(failed)?;
-        }
-        Ok((rd, wr))
+        // Move each end to descriptor 3 or above, close-on-exec (R107, R152).
+        // With stdio closed, `pipe` returns 0 and 1, and step 6 would `dup2`
+        // /dev/null over them. pipe2(O_CLOEXEC) would set the flag atomically,
+        // but macOS lacks it; the separate step is safe because daemonize()
+        // requires single-threaded execution. The originals close on drop.
+        let above_stdio = |end: OwnedFd| -> Result<OwnedFd, DaemonizeError> {
+            let fd = fcntl(end.as_fd(), FcntlArg::F_DUPFD_CLOEXEC(3)).map_err(failed)?;
+            // SAFETY: F_DUPFD_CLOEXEC returned a new descriptor we alone own.
+            Ok(unsafe { OwnedFd::from_raw_fd(fd) })
+        };
+        Ok((above_stdio(rd)?, above_stdio(wr)?))
     }
 
     unsafe fn fork(&mut self) -> Result<ForkResult, DaemonizeError> {
@@ -278,6 +283,46 @@ mod tests {
         assert!(
             matches!(result, Err(DaemonizeError::SystemError(_))),
             "{result:?}"
+        );
+    }
+
+    // Covers: R152
+    #[test]
+    fn notification_pipe_ends_stay_clear_of_stdio() {
+        crate::test_support::run_in_subprocess(
+            "forker::tests::notification_pipe_ends_stay_clear_of_stdio_subprocess",
+        );
+    }
+
+    /// With stdin, stdout, and stderr closed, `pipe` hands out the lowest free
+    /// descriptors, 0 and 1. Step 6 then `dup2`s `/dev/null` over them and the
+    /// launcher loses its pipe.
+    #[test]
+    #[ignore]
+    #[allow(unsafe_code)]
+    fn notification_pipe_ends_stay_clear_of_stdio_subprocess() {
+        use std::os::fd::AsRawFd;
+
+        if !crate::test_support::is_subprocess() {
+            return;
+        }
+        let saved: Vec<i32> = (0..3).map(|fd| unsafe { libc::dup(fd) }).collect();
+        for fd in 0..3 {
+            unsafe { libc::close(fd) };
+        }
+
+        let ends = RealForker.create_notification_pipe();
+
+        for (fd, copy) in saved.into_iter().enumerate() {
+            unsafe { libc::dup2(copy, fd as i32) };
+            unsafe { libc::close(copy) };
+        }
+        let (rd, wr) = ends.expect("RealForker creates a pipe");
+        assert!(
+            rd.as_raw_fd() > 2 && wr.as_raw_fd() > 2,
+            "pipe ends {} and {} overlap stdio",
+            rd.as_raw_fd(),
+            wr.as_raw_fd()
         );
     }
 

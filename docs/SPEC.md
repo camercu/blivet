@@ -1562,3 +1562,6 @@ verification points.
   would remove the pidfile of a daemon that keeps running. A signal
   that terminates by default, SIGUSR1 included, is accepted. The error
   names the signal.
+- R152. Both notification pipe ends sit above descriptor 2, even when
+  the caller closed stdin, stdout, or stderr, so step 6's redirect to
+  `/dev/null` cannot replace one.
