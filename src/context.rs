@@ -28,7 +28,10 @@ use crate::notify::NotifyPipe;
 ///
 /// Dropping this without calling [`notify_parent`](DaemonContext::notify_parent)
 /// writes a failure message to the notification pipe, causing the parent to
-/// exit non-zero. When [`cleanup_on_drop`](crate::DaemonConfig::cleanup_on_drop)
+/// exit non-zero. Ending without dropping it, because a signal killed the
+/// daemon or it called [`std::process::exit`], closes the pipe with no
+/// message, which the parent also reads as a failure unless
+/// [`exec_notifies`](crate::DaemonConfig::exec_notifies) is set. When [`cleanup_on_drop`](crate::DaemonConfig::cleanup_on_drop)
 /// is `true` (the default), dropping also removes the pidfile from disk.
 ///
 /// **Signal caveat:** `Drop` does not run when the process is killed by a
