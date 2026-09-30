@@ -174,14 +174,14 @@ pub(crate) fn read_pipe(rd: std::os::fd::OwnedFd) -> Vec<u8> {
 /// For code that changes process-wide state: stdio slots, other descriptors,
 /// umask, cwd, environment, signal handling, credentials. The shared test
 /// process runs other tests on other threads meanwhile. For fd 0, 1 and 2 the
-/// failure was concrete: other threads open descriptors while it runs, and replacing a live stdio slot is not
-/// atomic everywhere: NetBSD's `dup2` closes the target, drops the table lock,
-/// and closes it again if another thread was handed that number meanwhile. A
-/// concurrent `Command` spawn got fd 2 for its status pipe, lost it to the
-/// `dup2`, then closed "its" pipe: the harness's stderr. The next saved copy
-/// of fd 1 landed on 2, a redirect overwrote it, and the run printed nothing
-/// more, not even its summary. A subprocess runs one test, so nothing else
-/// opens descriptors under it.
+/// failure was concrete: other threads open descriptors while it runs, and
+/// replacing a live stdio slot is not atomic everywhere: NetBSD's `dup2` closes
+/// the target, drops the table lock, and closes it again if another thread was
+/// handed that number meanwhile. A concurrent `Command` spawn got fd 2 for its
+/// status pipe, lost it to the `dup2`, then closed "its" pipe: the harness's
+/// stderr. The next saved copy of fd 1 landed on 2, a redirect overwrote it,
+/// and the run printed nothing more, not even its summary. A subprocess runs
+/// one test, so nothing else opens descriptors under it.
 pub(crate) fn assert_isolated(what: &str) {
     assert!(
         std::env::var_os(ISOLATED_ENV).is_some(),
