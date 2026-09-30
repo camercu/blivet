@@ -38,6 +38,7 @@ impl Forker for RealForker {
         use nix::fcntl::{fcntl, FcntlArg, FdFlag};
 
         let failed = |e| DaemonizeError::SystemError(format!("notification pipe: {e}"));
+        #[allow(clippy::disallowed_methods)] // the one place close-on-exec is set
         let (rd, wr) = nix::unistd::pipe().map_err(failed)?;
         // Set O_CLOEXEC on both ends. pipe2(O_CLOEXEC) would be atomic, but
         // macOS lacks pipe2. The two-step approach is safe here because

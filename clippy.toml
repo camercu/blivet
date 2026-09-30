@@ -1,0 +1,3 @@
+disallowed-methods = [
+    { path = "nix::unistd::pipe", reason = "leaves both ends inheritable; use RealForker's pipe (tests: test_support::make_pipe)" },
+]
