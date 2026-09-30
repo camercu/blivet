@@ -92,12 +92,12 @@ build from 24 crates to 11; `cargo install blivet` is unaffected either way.
 
 ## Library
 
-The minimal example above writes a locked pidfile and signals readiness, so a
-second instance fails fast instead of clobbering it. A fuller setup adds a
-separate lock file, log redirection, and a working directory. Like
-`daemonize(1)`, the defaults are standard daemon behavior -- stdout/stderr to
-`/dev/null`, working directory `/` -- so use absolute paths and redirect any
-output you want to keep:
+The minimal example above writes a locked pidfile, so a second instance fails
+with `LockConflict` (exit 69) instead of overwriting it. Call `lockfile()` to
+lock a separate path, or `no_lockfile()` to write the pidfile unlocked. The
+other defaults match `daemonize(1)`. Stdout and stderr go to `/dev/null`, the
+working directory is `/`, and inherited fds are closed. Use absolute paths, and
+redirect any output you want to keep. A fuller setup:
 
 ```rust,no_run
 use blivet::{daemonize, DaemonConfig};
@@ -172,20 +172,7 @@ on a target where the thread count can't be read (see
 
 ## API reference
 
-Full reference is on [docs.rs](https://docs.rs/blivet); the essentials:
-
-**`DaemonConfig`** -- a builder of infallible `&mut self` setters; validation is
-deferred to `validate()`, which `daemonize()` runs for you. Defaults worth
-knowing: working directory `/`, stdout/stderr `/dev/null`, `close_fds` and
-`cleanup_on_drop` both `true`, and a configured pidfile doubles as the lockfile
--- a second instance fails with `LockConflict` (exit 69) rather than silently
-overwriting the pidfile. Point `lockfile()` at a separate path, or call
-`no_lockfile()` to write the pidfile unlocked.
-
-**`DaemonContext`** -- returned by a successful `daemonize()`; owns the lockfile
-and notification pipe. The methods you reach for most: `notify_parent()`,
-`drop_privileges()`, `cleanup()` / `cleanup_on_term_signals()`, and
-`report_error()` / `report_error_msg()` / `notify_parent_or_report()`.
+[docs.rs](https://docs.rs/blivet) has the full reference.
 
 ### Errors & exit codes
 
