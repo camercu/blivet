@@ -36,7 +36,7 @@ jobs:
           for attempt in 1 2 3; do
             nix-shell nix/manpage.nix --run true && exit 0
             echo "::warning::fetching nix/manpage.nix failed (attempt $attempt)"
-            sleep 30
+            [ "$attempt" -lt 3 ] && sleep 30
           done
           exit 1
       - name: Release
