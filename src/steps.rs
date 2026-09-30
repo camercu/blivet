@@ -510,6 +510,8 @@ impl StdioSlot {
 
     #[allow(clippy::disallowed_methods)] // the stdio mover redirect_output uses
     fn dup2(self, source: impl AsFd) -> Result<(), nix::errno::Errno> {
+        #[cfg(test)]
+        crate::test_support::assert_isolated("StdioSlot::dup2");
         match self {
             Self::Stdout => unistd::dup2_stdout(source),
             Self::Stderr => unistd::dup2_stderr(source),
