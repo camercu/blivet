@@ -942,7 +942,7 @@ mod tests {
             .stdout(dir.path().join("app.log"));
         let mut forker = NullForker::new(vec![], Ok(()));
         let before = fstat(std::io::stdout()).unwrap();
-        steps::failpoints::STREAM_TRUNCATE_FAILS.store(true, std::sync::atomic::Ordering::Relaxed);
+        steps::failpoints::STREAM_TRUNCATE_FAILS.set();
 
         let result = run_inner(&config, &mut forker);
 
@@ -1035,7 +1035,7 @@ mod tests {
         if !is_subprocess() {
             return;
         }
-        steps::failpoints::DEVNULL_OPEN_FAILS.store(true, std::sync::atomic::Ordering::Relaxed);
+        steps::failpoints::DEVNULL_OPEN_FAILS.set();
         let mut config = DaemonConfig::new();
         config.foreground(true).close_fds(false);
         let mut forker = NullForker::new(vec![], Ok(()));
@@ -1062,7 +1062,7 @@ mod tests {
         if !is_subprocess() {
             return;
         }
-        steps::failpoints::PIDFILE_WRITE_FAILS.store(true, std::sync::atomic::Ordering::Relaxed);
+        steps::failpoints::PIDFILE_WRITE_FAILS.set();
         let dir = crate::test_support::tmp_dir();
         let pidfile = dir.join(format!("pidwrite-{}.pid", std::process::id()));
         let _ = std::fs::remove_file(&pidfile);
@@ -1094,7 +1094,7 @@ mod tests {
         if !is_subprocess() {
             return;
         }
-        steps::failpoints::PIDFILE_OPEN_FAILS.store(true, std::sync::atomic::Ordering::Relaxed);
+        steps::failpoints::PIDFILE_OPEN_FAILS.set();
         let dir = crate::test_support::tmp_dir();
         let pidfile = dir.join(format!("pidopen-{}.pid", std::process::id()));
         std::fs::write(&pidfile, "4242\n").unwrap();
@@ -1134,7 +1134,7 @@ mod tests {
         if !is_subprocess() {
             return;
         }
-        steps::failpoints::SIGACTION_FAILS.store(true, std::sync::atomic::Ordering::Relaxed);
+        steps::failpoints::SIGACTION_FAILS.set();
         let dir = crate::test_support::tmp_dir();
         let pidfile = dir.join(format!("sigaction-{}.pid", std::process::id()));
         let _ = std::fs::remove_file(&pidfile);
@@ -1169,7 +1169,7 @@ mod tests {
         if !is_subprocess() {
             return;
         }
-        steps::failpoints::SIGPROCMASK_FAILS.store(true, std::sync::atomic::Ordering::Relaxed);
+        steps::failpoints::SIGPROCMASK_FAILS.set();
         let dir = crate::test_support::tmp_dir();
         let pidfile = dir.join(format!("sigprocmask-{}.pid", std::process::id()));
         let _ = std::fs::remove_file(&pidfile);
@@ -1207,8 +1207,8 @@ mod tests {
         // Force the brute-force fallback (the fd listing normally short-circuits
         // it on Linux/macOS), then fail its getrlimit. get_max_fd errors before
         // any fd is closed, so the subprocess's descriptors survive.
-        steps::failpoints::FD_LISTING_UNAVAILABLE.store(true, std::sync::atomic::Ordering::Relaxed);
-        steps::failpoints::GETRLIMIT_FAILS.store(true, std::sync::atomic::Ordering::Relaxed);
+        steps::failpoints::FD_LISTING_UNAVAILABLE.set();
+        steps::failpoints::GETRLIMIT_FAILS.set();
         let dir = crate::test_support::tmp_dir();
         let pidfile = dir.join(format!("getrlimit-{}.pid", std::process::id()));
         let _ = std::fs::remove_file(&pidfile);

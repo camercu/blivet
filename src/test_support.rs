@@ -125,8 +125,9 @@ pub(crate) fn tmp_dir() -> std::path::PathBuf {
 /// `free` of the descriptors that fill it. Returns the rest; dropping them
 /// frees them too.
 ///
-/// Subprocess tests only: the lowered limit stays for the process.
+/// The lowered limit stays for the process, so this asserts it runs in its own.
 pub(crate) fn fill_fd_table(free: usize) -> Vec<std::os::fd::OwnedFd> {
+    assert_isolated("fill_fd_table");
     use nix::sys::resource::{getrlimit, setrlimit, Resource};
     use std::os::fd::AsFd;
 

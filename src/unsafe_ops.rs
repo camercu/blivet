@@ -47,7 +47,7 @@ pub(crate) fn reset_signal_dispositions() -> Result<(), crate::error::DaemonizeE
     #[cfg(test)]
     crate::test_support::assert_isolated("reset_signal_dispositions");
     #[cfg(test)]
-    if crate::steps::failpoints::injected(&crate::steps::failpoints::SIGACTION_FAILS) {
+    if crate::steps::failpoints::SIGACTION_FAILS.injected() {
         return Err(crate::error::DaemonizeError::SystemError(
             "sigaction(1): injected failure".into(),
         ));

@@ -19,32 +19,54 @@ use crate::util::paths_same;
 /// fail from inside a test process (that would need a missing `/dev/null` or a
 /// seccomp filter). A set flag makes its step take the error return so tests
 /// can pin that the failure *propagates* out of the sequence rather than being
-/// swallowed. Flags are process-global: a test that sets one must run in an
-/// isolated subprocess (`test_support::run_in_subprocess`).
+/// swallowed. Flags are process-global, so setting one asserts the test runs
+/// in its own process (`test_support::run_in_subprocess`).
 #[cfg(test)]
 pub(crate) mod failpoints {
-    use std::sync::atomic::AtomicBool;
+    use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 
-    pub(crate) static DEVNULL_OPEN_FAILS: AtomicBool = AtomicBool::new(false);
-    pub(crate) static SIGACTION_FAILS: AtomicBool = AtomicBool::new(false);
-    pub(crate) static SIGPROCMASK_FAILS: AtomicBool = AtomicBool::new(false);
-    pub(crate) static GETRLIMIT_FAILS: AtomicBool = AtomicBool::new(false);
-    pub(crate) static FD_LISTING_UNAVAILABLE: AtomicBool = AtomicBool::new(false);
+    /// One injectable failure. Only [`set`](Self::set) writes it, and that
+    /// asserts the test runs in its own process.
+    pub(crate) struct Failpoint(AtomicBool);
+
+    impl Failpoint {
+        const fn new() -> Self {
+            Self(AtomicBool::new(false))
+        }
+
+        /// Makes the step fail from now on, in this whole process.
+        pub(crate) fn set(&self) {
+            crate::test_support::assert_isolated("a failpoint");
+            self.0.store(true, Ordering::Relaxed);
+        }
+
+        /// True when set — reads with `Relaxed`: set before the sequence runs
+        /// and never concurrently.
+        pub(crate) fn injected(&self) -> bool {
+            self.0.load(Ordering::Relaxed)
+        }
+    }
+
+    pub(crate) static DEVNULL_OPEN_FAILS: Failpoint = Failpoint::new();
+    pub(crate) static SIGACTION_FAILS: Failpoint = Failpoint::new();
+    pub(crate) static SIGPROCMASK_FAILS: Failpoint = Failpoint::new();
+    pub(crate) static GETRLIMIT_FAILS: Failpoint = Failpoint::new();
+    pub(crate) static FD_LISTING_UNAVAILABLE: Failpoint = Failpoint::new();
 
     /// Fails the pidfile write *after* the file has been created and
     /// truncated, which is the shape of a real `ENOSPC`/`EIO`. The step-9-13
     /// failpoints cannot reach this: by the time they fire, step 8 has already
     /// returned `Ok`.
-    pub(crate) static PIDFILE_WRITE_FAILS: AtomicBool = AtomicBool::new(false);
+    pub(crate) static PIDFILE_WRITE_FAILS: Failpoint = Failpoint::new();
 
     /// Fails the standalone pidfile `open` itself, before this process has
     /// touched the file — an `EACCES`, say, that root would not hit. What is on
     /// disk then is not this process's to remove.
-    pub(crate) static PIDFILE_OPEN_FAILS: AtomicBool = AtomicBool::new(false);
+    pub(crate) static PIDFILE_OPEN_FAILS: Failpoint = Failpoint::new();
 
     /// Fails step 12's truncation of a stream file, the last thing it does:
     /// every stdio slot has moved by then.
-    pub(crate) static STREAM_TRUNCATE_FAILS: AtomicBool = AtomicBool::new(false);
+    pub(crate) static STREAM_TRUNCATE_FAILS: Failpoint = Failpoint::new();
 
     /// Stands in for the fd limit `getrlimit` would report, or 0 to use the
     /// real one.
@@ -54,17 +76,18 @@ pub(crate) mod failpoints {
     /// host with a large limit makes an otherwise instant test take minutes
     /// (measured: ~0.2s at 1M, and a systemd `LimitNOFILE=infinity` clamps to
     /// `i32::MAX`). Bounding it here keeps the test constant-time on any host.
-    pub(crate) static MAX_FD: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
+    static MAX_FD: AtomicI32 = AtomicI32::new(0);
 
-    /// True when `flag` is set — reads with `Relaxed`: flags are set before the
-    /// sequence runs and never concurrently.
-    pub(crate) fn injected(flag: &AtomicBool) -> bool {
-        flag.load(std::sync::atomic::Ordering::Relaxed)
+    /// Sets [`MAX_FD`], in this whole process; asserts the test runs in its
+    /// own process.
+    pub(crate) fn set_max_fd(max_fd: i32) {
+        crate::test_support::assert_isolated("the injected fd limit");
+        MAX_FD.store(max_fd, Ordering::Relaxed);
     }
 
     /// The fd limit [`MAX_FD`] stands in with, if a test set one.
     pub(crate) fn injected_max_fd() -> Option<i32> {
-        let max_fd = MAX_FD.load(std::sync::atomic::Ordering::Relaxed);
+        let max_fd = MAX_FD.load(Ordering::Relaxed);
         (max_fd > 0).then_some(max_fd)
     }
 }
@@ -164,7 +187,7 @@ pub(crate) fn redirect_to_devnull(stdout_stderr: bool) -> Result<(), DaemonizeEr
     #[cfg(test)]
     crate::test_support::assert_isolated("redirect_to_devnull");
     #[cfg(test)]
-    if failpoints::injected(&failpoints::DEVNULL_OPEN_FAILS) {
+    if failpoints::DEVNULL_OPEN_FAILS.injected() {
         return Err(DaemonizeError::SystemError(
             "open /dev/null: injected failure".into(),
         ));
@@ -221,7 +244,7 @@ pub(crate) fn open_pidfile<'a>(
     }
 
     #[cfg(test)]
-    if failpoints::injected(&failpoints::PIDFILE_OPEN_FAILS) {
+    if failpoints::PIDFILE_OPEN_FAILS.injected() {
         return Err(DaemonizeError::PidfileError(format!(
             "open {}: injected failure",
             pidfile_path.display()
@@ -296,7 +319,7 @@ pub(crate) fn write_pidfile(
 #[inline]
 fn inject_pidfile_write_failure() -> Result<(), DaemonizeError> {
     #[cfg(test)]
-    if failpoints::injected(&failpoints::PIDFILE_WRITE_FAILS) {
+    if failpoints::PIDFILE_WRITE_FAILS.injected() {
         return Err(DaemonizeError::PidfileError(
             "write: injected failure".to_string(),
         ));
@@ -311,7 +334,7 @@ fn inject_pidfile_write_failure() -> Result<(), DaemonizeError> {
 pub(crate) fn clear_signal_mask() -> Result<(), DaemonizeError> {
     use nix::sys::signal::{SigSet, SigmaskHow};
     #[cfg(test)]
-    if failpoints::injected(&failpoints::SIGPROCMASK_FAILS) {
+    if failpoints::SIGPROCMASK_FAILS.injected() {
         return Err(DaemonizeError::SystemError(
             "sigprocmask: injected failure".into(),
         ));
@@ -401,7 +424,7 @@ fn truncate(stream: &OpenStream) -> Result<(), DaemonizeError> {
         return Ok(());
     }
     #[cfg(test)]
-    if failpoints::injected(&failpoints::STREAM_TRUNCATE_FAILS) {
+    if failpoints::STREAM_TRUNCATE_FAILS.injected() {
         return Err(DaemonizeError::OutputFileError(
             "truncate: injected failure".into(),
         ));
@@ -663,7 +686,7 @@ pub(crate) fn clamp_max_fd(rlim_cur: libc::rlim_t) -> i32 {
 /// (e.g. blocked by a seccomp filter) so the caller can report it.
 pub(crate) fn get_max_fd() -> Result<i32, DaemonizeError> {
     #[cfg(test)]
-    if failpoints::injected(&failpoints::GETRLIMIT_FAILS) {
+    if failpoints::GETRLIMIT_FAILS.injected() {
         return Err(DaemonizeError::SystemError(
             "getrlimit(RLIMIT_NOFILE): injected failure".into(),
         ));
@@ -699,7 +722,7 @@ pub(crate) fn list_open_fds() -> Option<Vec<i32>> {
     const FD_LIST_DIR: &str = env!("BLIVET_FD_DIR");
 
     #[cfg(test)]
-    if failpoints::injected(&failpoints::FD_LISTING_UNAVAILABLE) {
+    if failpoints::FD_LISTING_UNAVAILABLE.injected() {
         return None;
     }
     let entries = std::fs::read_dir(FD_LIST_DIR).ok()?;
@@ -1481,7 +1504,7 @@ mod tests {
         let log = dir.path().join("app.err");
         std::fs::write(&log, "the previous run\n").unwrap();
         nix::unistd::close(2).unwrap();
-        failpoints::STREAM_TRUNCATE_FAILS.store(true, std::sync::atomic::Ordering::Relaxed);
+        failpoints::STREAM_TRUNCATE_FAILS.set();
 
         let result = redirect_output(None, Some(&log), false, &[], Rollback::PutBack);
 
@@ -1568,7 +1591,7 @@ mod tests {
             id(fstat(std::io::stdout()).unwrap()),
             id(fstat(std::io::stderr()).unwrap()),
         );
-        failpoints::STREAM_TRUNCATE_FAILS.store(true, std::sync::atomic::Ordering::Relaxed);
+        failpoints::STREAM_TRUNCATE_FAILS.set();
 
         let result = redirect_output(Some(&out), Some(&err), false, &[], Rollback::PutBack);
 
@@ -1909,11 +1932,11 @@ mod tests {
         // Process-global, which is why this runs isolated. Where the platform
         // has no fd directory the flag changes nothing and the fallback was
         // already the only branch.
-        failpoints::FD_LISTING_UNAVAILABLE.store(true, std::sync::atomic::Ordering::Relaxed);
+        failpoints::FD_LISTING_UNAVAILABLE.set();
         // Bounded, so the loop is the branch under test rather than the host's
         // fd limit. Comfortably above the handful of descriptors a test process
         // holds, and far below what a raised RLIMIT_NOFILE would make it walk.
-        failpoints::MAX_FD.store(4096, std::sync::atomic::Ordering::Relaxed);
+        failpoints::set_max_fd(4096);
         assert_closes_all_but_skipped();
     }
 
