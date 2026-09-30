@@ -97,6 +97,10 @@ impl core::marker::Unpin for blivet::DaemonContext
 impl core::marker::UnsafeUnpin for blivet::DaemonContext
 impl core::panic::unwind_safe::RefUnwindSafe for blivet::DaemonContext
 impl core::panic::unwind_safe::UnwindSafe for blivet::DaemonContext
+pub trait blivet::WithExitCode<T>
+pub fn blivet::WithExitCode::with_exit_code(self, code: u8) -> core::result::Result<T, blivet::DaemonizeError>
+impl<T, E: core::fmt::Display> blivet::WithExitCode<T> for core::result::Result<T, E>
+pub fn core::result::Result<T, E>::with_exit_code(self, code: u8) -> core::result::Result<T, blivet::DaemonizeError>
 pub fn blivet::daemonize(config: &blivet::DaemonConfig) -> core::result::Result<blivet::DaemonContext, blivet::DaemonizeError>
 pub unsafe fn blivet::daemonize_unchecked(config: &blivet::DaemonConfig) -> core::result::Result<blivet::DaemonContext, blivet::DaemonizeError>
 pub fn blivet::daemonize_with<T>(config: &blivet::DaemonConfig, init: impl core::ops::function::FnOnce() -> core::result::Result<T, blivet::DaemonizeError>) -> core::result::Result<(blivet::DaemonContext, T), blivet::DaemonizeError>

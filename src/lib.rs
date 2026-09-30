@@ -115,7 +115,7 @@
 //! its docs for the full table — but `fn main() -> Result<(), E>` ignores it
 //! and exits **1**. To surface the codes, call `exit_code()` yourself. To
 //! report a failure from your own init code (e.g. a socket bind) with a chosen
-//! code, return [`DaemonizeError::application`] from `init`, or call
+//! code, use [`WithExitCode`] or [`DaemonizeError::application`] in `init`, or call
 //! [`report_error_msg`](DaemonContext::report_error_msg) after the call.
 //!
 //! # Privileged init
@@ -131,15 +131,14 @@
 //!
 //! ```no_run
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! use blivet::{daemonize_with, DaemonConfig, DaemonizeError};
+//! use blivet::{daemonize_with, DaemonConfig, WithExitCode};
 //!
 //! let mut config = DaemonConfig::new();
 //! config.pidfile("/var/run/foo.pid").user("nobody").group("nogroup");
 //!
 //! let (mut ctx, listener) = daemonize_with(&config, || {
 //!     // Still root, holding the lock.
-//!     std::net::TcpListener::bind("0.0.0.0:80")
-//!         .map_err(|e| DaemonizeError::application(71, format!("bind: {e}")))
+//!     std::net::TcpListener::bind("0.0.0.0:80").with_exit_code(71)
 //! })?;
 //!
 //! // Running as "nobody" with the socket still open.
@@ -210,7 +209,7 @@ pub use config::DaemonConfig;
 #[cfg(unix)]
 pub use context::DaemonContext;
 #[cfg(unix)]
-pub use error::DaemonizeError;
+pub use error::{DaemonizeError, WithExitCode};
 
 #[cfg(unix)]
 use std::os::fd::{AsRawFd, OwnedFd};
@@ -377,14 +376,14 @@ pub fn daemonize(config: &DaemonConfig) -> Result<DaemonContext, DaemonizeError>
 ///
 /// ```no_run
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-/// use blivet::{daemonize_with, DaemonConfig, DaemonizeError};
+/// use blivet::{daemonize_with, DaemonConfig, WithExitCode};
 ///
 /// let mut config = DaemonConfig::new();
 /// config.pidfile("/var/run/myapp.pid");
 ///
+/// // An init error reaches the launcher with its exit code: 71 here.
 /// let (mut ctx, listener) = daemonize_with(&config, || {
-///     std::net::TcpListener::bind("0.0.0.0:80")
-///         .map_err(|e| DaemonizeError::application(71, format!("bind: {e}")))
+///     std::net::TcpListener::bind("0.0.0.0:80").with_exit_code(71)
 /// })?;
 /// ctx.notify_parent()?;
 /// # drop(listener);

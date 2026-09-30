@@ -126,7 +126,7 @@ them before `daemonize()` returns. Pass work that needs root (bind port 80,
 one instance runs it, and its value comes back beside the context:
 
 ```rust,no_run
-use blivet::{daemonize_with, DaemonConfig, DaemonizeError};
+use blivet::{daemonize_with, DaemonConfig, WithExitCode};
 use std::net::TcpListener;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -135,8 +135,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let (mut ctx, listener) = daemonize_with(&config, || {
         // Still root, holding the lock.
-        TcpListener::bind("0.0.0.0:80")
-            .map_err(|e| DaemonizeError::application(71, format!("bind: {e}")))
+        TcpListener::bind("0.0.0.0:80").with_exit_code(71) // EX_OSERR on failure
     })?;
 
     // Now running as www-data, with the socket open.
@@ -147,7 +146,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ```
 
 An error from `init` reaches the launcher with its exit code, and the pidfile
-is removed.
+is removed. `with_exit_code(code)` gives any failed `Result` that code.
 
 **Foreground mode.** For systemd, containers, or debugging: skip forking while
 applying all other setup (umask, chdir, signal reset, …). Stdout/stderr stay
@@ -275,8 +274,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ### Reporting your own failures
 
-Inside `daemonize_with()`'s init, return `DaemonizeError::application(code,
-message)`. After the call, when startup work that needs no privileges fails (a
+Inside `daemonize_with()`'s init, use `.with_exit_code(code)` or return
+`DaemonizeError::application(code, message)`. After the call, when startup work that needs no privileges fails (a
 database connect), report it to the launcher with a `sysexits.h` code of your
 choosing via `report_error_msg`, without building a `DaemonizeError` by hand:
 

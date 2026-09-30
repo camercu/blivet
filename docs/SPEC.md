@@ -190,7 +190,7 @@ config.pidfile("/var/run/foo.pid").user("nobody").group("nogroup");
 
 let (mut ctx, listener) = daemonize_with(&config, || {
     // still root, holding the lock (e.g., bind port 80)
-    TcpListener::bind("0.0.0.0:80").map_err(|e| DaemonizeError::application(71, e.to_string()))
+    TcpListener::bind("0.0.0.0:80").with_exit_code(71)
 })?;
 // now running as nobody:nogroup; pidfile/lockfile/logs chowned first
 ctx.notify_parent()?;
@@ -1546,3 +1546,7 @@ verification points.
   or group that does not exist fails before init's side effects. The
   chown (unless disabled) and the switch run after `init`, in that
   order.
+- R156. `WithExitCode::with_exit_code(code)` turns a `Result` whose
+  error is `Display` into one whose error is `DaemonizeError::Application`
+  with that code and the error's text, so `?` works on `io::Error` and
+  friends inside `init`.

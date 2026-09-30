@@ -175,3 +175,56 @@ impl DaemonizeError {
         }
     }
 }
+
+/// Gives a failed `Result` the exit code the launcher reports, for `?` inside a
+/// [`daemonize_with`](crate::daemonize_with) init.
+///
+/// ```no_run
+/// # fn main() -> Result<(), blivet::DaemonizeError> {
+/// use blivet::{daemonize_with, DaemonConfig, WithExitCode};
+///
+/// let config = DaemonConfig::new();
+/// let (mut ctx, listener) = daemonize_with(&config, || {
+///     // 71 is EX_OSERR: the launcher exits 71 and prints the bind error.
+///     std::net::TcpListener::bind("0.0.0.0:80").with_exit_code(71)
+/// })?;
+/// # drop(listener);
+/// ctx.notify_parent()?;
+/// # Ok(())
+/// # }
+/// ```
+pub trait WithExitCode<T> {
+    /// Maps the error to [`DaemonizeError::Application`] with `code` and the
+    /// error's `Display` text. A `code` of 0 reports as 70, as
+    /// [`application`](DaemonizeError::application) does.
+    fn with_exit_code(self, code: u8) -> Result<T, DaemonizeError>;
+}
+
+impl<T, E: std::fmt::Display> WithExitCode<T> for Result<T, E> {
+    fn with_exit_code(self, code: u8) -> Result<T, DaemonizeError> {
+        self.map_err(|e| DaemonizeError::application(code, e.to_string()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Covers: R156
+    #[test]
+    fn with_exit_code_turns_any_error_into_an_application_error() {
+        let failed: Result<(), std::io::Error> =
+            Err(std::io::Error::from(std::io::ErrorKind::AddrInUse));
+
+        let err = failed.with_exit_code(71).unwrap_err();
+
+        assert_eq!(err.exit_code(), 71);
+        assert_eq!(err.to_string(), "application error: address in use");
+    }
+
+    #[test]
+    fn with_exit_code_passes_a_value_through() {
+        let ok: Result<u8, std::io::Error> = Ok(7);
+        assert_eq!(ok.with_exit_code(71).unwrap(), 7);
+    }
+}
