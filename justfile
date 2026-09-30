@@ -377,4 +377,7 @@ check-release-config:
 release:
     npm ci
     just check-release-config
+    # On the checkout semantic-release is about to release, which on a
+    # workflow_run is the latest main, not necessarily the commit CI passed.
+    node scripts/check-agent-attribution.mjs
     npx semantic-release
