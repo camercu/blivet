@@ -437,10 +437,9 @@ fn truncate(stream: &OpenStream) -> Result<(), DaemonizeError> {
 
 /// Step 12: Redirect stdout/stderr to configured files.
 ///
-/// Runs before the caller's split-phase privilege drop (R102), so files are
-/// created with the original (often root) ownership;
-/// [`drop_privileges`](crate::DaemonContext::drop_privileges) chowns them to
-/// the target user afterward.
+/// Runs before the identity switch (R102), so files are created with the
+/// original (often root) ownership; the sequence chowns them to the target
+/// user just before switching.
 ///
 /// Each stream is opened without truncating it and compared by identity with
 /// `owned` — the files the sequence holds, by the name to report them under

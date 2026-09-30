@@ -1,30 +1,23 @@
 //! Post-daemonization context: parent notification, lockfile management,
-//! privilege dropping, and path ownership.
+//! and pidfile cleanup.
 
 use std::ffi::CString;
 use std::fmt;
 use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
 use std::os::unix::ffi::OsStrExt;
-use std::path::PathBuf;
 
 use nix::fcntl::Flock;
 
 use crate::config::DaemonConfig;
 use crate::error::DaemonizeError;
-use crate::identity::ResolvedIdentity;
 use crate::notify::NotifyPipe;
 
 /// Context returned by a successful daemonization.
 ///
-/// Returned by [`daemonize()`](crate::daemonize) while the process still
-/// has its original privileges. This split-phase design lets callers
-/// perform privileged work (bind low ports, open devices) *after*
-/// daemonizing but *before* dropping to an unprivileged user.  See the
-/// [crate-level docs](crate#split-phase-design) for the full rationale.
-///
-/// Holds the lockfile (if configured), the notification pipe write end,
-/// and cloned configuration fields needed for post-daemonization
-/// operations like privilege dropping and path ownership changes.
+/// Returned by [`daemonize`](crate::daemonize) and
+/// [`daemonize_with`](crate::daemonize_with) in the daemon, already running as
+/// the configured user and group. Holds the lockfile (if configured) and the
+/// notification pipe's write end.
 ///
 /// Dropping this without calling [`notify_parent`](DaemonContext::notify_parent)
 /// writes a failure message to the notification pipe, causing the parent to
@@ -44,20 +37,6 @@ use crate::notify::NotifyPipe;
 ///
 /// The lock is released when this value is dropped.
 ///
-/// # Post-daemonization workflow
-///
-/// When privilege dropping is needed, the recommended call order is:
-///
-/// ```no_run
-/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-/// # let config = blivet::DaemonConfig::new();
-/// let mut ctx = blivet::daemonize(&config)?;
-/// // ... privileged work (e.g., bind port 80) ...
-/// ctx.drop_privileges()?;   // chown paths, then setgid + setuid
-/// ctx.notify_parent()?;     // signal readiness to parent
-/// # Ok(())
-/// # }
-/// ```
 #[non_exhaustive]
 pub struct DaemonContext {
     /// The validated config, carried whole. The single source of truth for
@@ -67,10 +46,6 @@ pub struct DaemonContext {
     lockfile: Option<Flock<OwnedFd>>,
     notify_pipe: Option<NotifyPipe>,
     cleaned_up: bool,
-    /// Set once [`drop_privileges`](Self::drop_privileges) completes. Used to
-    /// catch a daemon that configured a user/group but never dropped, so it
-    /// fails loudly rather than running with elevated privileges.
-    privileges_dropped: bool,
 }
 
 impl fmt::Debug for DaemonContext {
@@ -121,16 +96,7 @@ impl DaemonContext {
             lockfile,
             notify_pipe,
             cleaned_up: false,
-            privileges_dropped: false,
         }
-    }
-
-    /// Whether a privilege drop is still owed: a user/group is configured but
-    /// [`drop_privileges`](Self::drop_privileges) has not completed. When true,
-    /// signaling readiness would leave the daemon running with elevated
-    /// privileges, so [`notify_parent`](Self::notify_parent) refuses.
-    fn privileges_pending(&self) -> bool {
-        (self.config.user.is_some() || self.config.group.is_some()) && !self.privileges_dropped
     }
 
     /// Returns a borrowed reference to the lockfile fd, or `None` if no
@@ -267,221 +233,6 @@ impl DaemonContext {
         })
     }
 
-    /// Changes ownership of all configured path-based resources (pidfile,
-    /// lockfile, stdout, stderr) to the target user/group.
-    ///
-    /// Called by [`drop_privileges_unchecked`](Self::drop_privileges_unchecked)
-    /// before switching, while still privileged, unless disabled via
-    /// [`DaemonConfig::chown_paths`](crate::DaemonConfig::chown_paths). No-op
-    /// if neither user nor group is configured. On error, paths already
-    /// processed remain chowned; the operation is idempotent, so retrying
-    /// after fixing the cause is safe.
-    fn chown_paths(&mut self) -> Result<(), DaemonizeError> {
-        if self.config.user.is_none() && self.config.group.is_none() {
-            return Ok(());
-        }
-
-        let identity =
-            ResolvedIdentity::resolve(self.config.user.as_deref(), self.config.group.as_deref())?;
-        let (owner, group) = identity.chown_ids();
-
-        let paths: Vec<&PathBuf> = [
-            self.config.pidfile.as_ref(),
-            self.config.effective_lockfile(),
-            self.config.stdout.as_ref(),
-            self.config.stderr.as_ref(),
-        ]
-        .into_iter()
-        .flatten()
-        .collect();
-
-        for path in paths {
-            if path.exists() {
-                // chown(2), not lchown: follows symlinks to stay consistent
-                // with how these files were opened (also symlink-following), so
-                // a symlinked log path chowns the real target the daemon writes.
-                // Safe only for paths in trusted dirs — see drop_privileges_unchecked.
-                nix::unistd::chown(path, owner, group)
-                    .map_err(|e| DaemonizeError::ChownError(format!("{}: {e}", path.display())))?;
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Drops privileges by switching user and/or group, verifying the process
-    /// is single-threaded first.
-    ///
-    /// Before switching — while still privileged — chowns the configured
-    /// path-based resources (pidfile, lockfile, stdout, stderr) to the target
-    /// user/group, unless disabled via
-    /// [`DaemonConfig::chown_paths`](crate::DaemonConfig::chown_paths).
-    ///
-    /// When a user is configured, the switch sets `USER`/`HOME`/`LOGNAME` via
-    /// `setenv`, which is not thread-safe. So — like [`daemonize`](crate::daemonize)
-    /// guards `fork` — this checked form reads the kernel thread count and
-    /// **panics** unless exactly one thread is running, then performs the
-    /// switch. No `unsafe` needed, and it is the recommended entry point. Use
-    /// [`drop_privileges_unchecked`](Self::drop_privileges_unchecked) to skip
-    /// the check. (A group-only switch performs no `setenv`, so it is not
-    /// checked.)
-    ///
-    /// See [`drop_privileges_unchecked`](Self::drop_privileges_unchecked) for
-    /// the resolution rules and the four user/group combinations.
-    ///
-    /// # Platform support
-    ///
-    /// Available wherever the kernel thread count can be read — the
-    /// capability the crate front page lists platform by platform. On any
-    /// other target this is a `#[deprecated]` stub that panics; call
-    /// [`drop_privileges_unchecked`](Self::drop_privileges_unchecked) there.
-    ///
-    /// # Panics
-    ///
-    /// Panics if a user is configured and the thread count is not exactly 1, or
-    /// cannot be determined.
-    ///
-    /// # Errors
-    ///
-    /// As [`drop_privileges_unchecked`](Self::drop_privileges_unchecked).
-    #[cfg(blivet_thread_count)]
-    pub fn drop_privileges(&mut self) -> Result<(), DaemonizeError> {
-        // Only a user switch calls `setenv` (USER/HOME/LOGNAME), which is not
-        // thread-safe; guard exactly that case.
-        if self.config.user.is_some() {
-            crate::assert_single_threaded("drop_privileges");
-        }
-        // SAFETY: verified single-threaded above whenever a user switch (the
-        // only `setenv` path) is configured.
-        #[allow(unsafe_code)]
-        unsafe {
-            self.drop_privileges_unchecked()
-        }
-    }
-
-    /// Stub for targets without a thread-count source, so there is no checked
-    /// `drop_privileges` to offer.
-    ///
-    /// Marked `#[deprecated]`: using it warns with guidance by default and is a
-    /// hard compile error under `-D warnings` / `#![deny(deprecated)]`. Call
-    /// `unsafe { `[`drop_privileges_unchecked`](Self::drop_privileges_unchecked)`() }`
-    /// directly on this platform, ensuring the process is single-threaded first.
-    ///
-    /// # Panics
-    ///
-    /// Always panics: unsupported on this target.
-    #[cfg(not(blivet_thread_count))]
-    #[cfg_attr(test, mutants::skip)]
-    #[deprecated(
-        note = "drop_privileges cannot verify the thread count on this target. \
-                Call `unsafe { drop_privileges_unchecked() }` and ensure the \
-                process is single-threaded yourself."
-    )]
-    pub fn drop_privileges(&mut self) -> Result<(), DaemonizeError> {
-        panic!(
-            "drop_privileges is unsupported on this target (cannot query the \
-             thread count); call `unsafe {{ drop_privileges_unchecked() }}` and \
-             ensure the process is single-threaded yourself"
-        )
-    }
-
-    /// Drops privileges by switching user and/or group, without checking the
-    /// thread count.
-    ///
-    /// Prefer the safe [`drop_privileges`](Self::drop_privileges), which
-    /// verifies single-threadedness for you on the mainstream Unixes. Reach for
-    /// this `unsafe` variant only where that is unavailable, or when you manage
-    /// the single-threaded contract yourself.
-    ///
-    /// Resolution: if the user/group string parses as a `u32`, it is treated
-    /// as a numeric UID/GID. Otherwise, it is resolved via `getpwnam()` /
-    /// `getgrnam()`.
-    ///
-    /// Four combinations:
-    ///
-    /// - Neither user nor group configured: no-op.
-    /// - User only: `initgroups` + `setgid(primary_gid)` + `setuid(uid)`.
-    /// - User and group: `initgroups` + `setgid(group_gid)` + `setuid(uid)`.
-    /// - Group only: `setgid(group_gid)`.
-    ///
-    /// Before switching, chowns the configured path-based resources (pidfile,
-    /// lockfile, stdout, stderr) to the target user/group — while the process
-    /// is still privileged — unless disabled via
-    /// [`DaemonConfig::chown_paths`](crate::DaemonConfig::chown_paths). A
-    /// chown failure aborts the drop before any `setgid`/`setuid`, so the
-    /// caller can remediate while still privileged.
-    ///
-    /// The chown, like the earlier open of these files, follows symlinks: if a
-    /// configured path is a symlink, its target is chowned while privileged.
-    /// Point the pidfile, lockfile, and log paths only at directories not
-    /// writable by untrusted users, so a planted symlink cannot redirect the
-    /// chown onto an arbitrary file.
-    ///
-    /// After switching to a user, sets `USER`, `HOME`, `LOGNAME` environment
-    /// variables.
-    ///
-    /// # Safety
-    ///
-    /// When a user is configured this calls `setenv` (`USER`/`HOME`/`LOGNAME`),
-    /// which is not thread-safe. No other threads may be running at that point —
-    /// do not spawn threads between [`daemonize`](crate::daemonize) and this
-    /// call.
-    ///
-    /// # Errors
-    ///
-    /// Returns `DaemonizeError::ChownError` if chowning a configured path
-    /// fails; paths already processed remain chowned, and the chown is
-    /// idempotent, so retrying after fixing the cause is safe.
-    /// Returns `DaemonizeError::UserNotFound` if the user cannot be resolved.
-    /// Returns `DaemonizeError::GroupNotFound` if the group cannot be resolved.
-    /// Returns `DaemonizeError::PermissionDenied` if `initgroups`, `setgid`,
-    /// or `setuid` fails.
-    #[allow(unsafe_code)]
-    pub unsafe fn drop_privileges_unchecked(&mut self) -> Result<(), DaemonizeError> {
-        if self.config.user.is_none() && self.config.group.is_none() {
-            self.privileges_dropped = true;
-            return Ok(());
-        }
-
-        if self.config.chown_paths {
-            self.chown_paths()?;
-        }
-
-        let identity =
-            ResolvedIdentity::resolve(self.config.user.as_deref(), self.config.group.as_deref())?;
-
-        #[cfg(test)]
-        crate::test_support::assert_isolated("drop_privileges' identity switch");
-
-        if let Some(info) = identity.user() {
-            crate::unsafe_ops::raw_initgroups(&info.cname()?, info.gid.as_raw())
-                .map_err(|e| DaemonizeError::PermissionDenied(format!("initgroups: {e}")))?;
-        }
-
-        // setgid: explicit group if set, otherwise the user's primary group.
-        if let Some(gid) = identity.effective_gid() {
-            nix::unistd::setgid(gid)
-                .map_err(|e| DaemonizeError::PermissionDenied(format!("setgid: {e}")))?;
-        }
-
-        if let Some(info) = identity.user() {
-            nix::unistd::setuid(info.uid)
-                .map_err(|e| DaemonizeError::PermissionDenied(format!("setuid: {e}")))?;
-
-            // Set USER, HOME, LOGNAME — overwrite any .env() values.
-            // SAFETY: this `unsafe fn`'s contract requires the process to be
-            // single-threaded, so these `setenv` calls cannot race `environ`.
-            unsafe {
-                std::env::set_var("USER", &info.name);
-                std::env::set_var("HOME", &info.dir);
-                std::env::set_var("LOGNAME", &info.name);
-            }
-        }
-
-        self.privileges_dropped = true;
-        Ok(())
-    }
-
     /// Signals the parent that the daemon is ready.
     ///
     /// Writes a success byte (`0x00`) to the notification pipe and closes it.
@@ -490,12 +241,6 @@ impl DaemonContext {
     /// After this call, subsequent calls are no-ops (the pipe is consumed).
     ///
     /// # Errors
-    ///
-    /// Returns [`DaemonizeError::PrivilegesNotDropped`] (exit code 70,
-    /// `EX_SOFTWARE`) if a user/group is configured but
-    /// [`drop_privileges`](Self::drop_privileges) was never called — signaling
-    /// readiness while still privileged is refused so the bug surfaces instead
-    /// of shipping a daemon running as root.
     ///
     /// Returns [`DaemonizeError::NotifyFailed`] (exit code 71, `EX_OSERR`) if
     /// writing to the pipe fails — e.g. the parent was killed before the
@@ -507,11 +252,6 @@ impl DaemonContext {
     /// [`exit_code`](DaemonizeError::exit_code).
     #[must_use = "the parent process blocks until notified; ignoring this Result may leave it waiting"]
     pub fn notify_parent(&mut self) -> Result<(), DaemonizeError> {
-        if self.privileges_pending() {
-            // Refuse to signal readiness while still privileged: the pipe is
-            // left intact so Drop reports the daemon as unnotified.
-            return Err(DaemonizeError::PrivilegesNotDropped);
-        }
         if let Some(pipe) = self.notify_pipe.take() {
             pipe.signal_ready().map_err(DaemonizeError::NotifyFailed)?;
         }
@@ -529,16 +269,7 @@ impl DaemonContext {
     /// Note: a failed readiness write has already consumed the notification
     /// pipe (and usually means the parent is gone), so the failure is surfaced
     /// via the exit status and pidfile cleanup, not a message to the parent.
-    ///
-    /// Like [`notify_parent`](Self::notify_parent), this also refuses to signal
-    /// readiness while still privileged: if a user/group is configured but
-    /// [`drop_privileges`](Self::drop_privileges) was never called, it reports
-    /// [`PrivilegesNotDropped`](DaemonizeError::PrivilegesNotDropped) and
-    /// `_exit`s with code 70 rather than returning.
     pub fn notify_parent_or_report(&mut self) {
-        if self.privileges_pending() {
-            self.report_error(&DaemonizeError::PrivilegesNotDropped);
-        }
         if let Some(pipe) = self.notify_pipe.take() {
             if let Err(e) = pipe.signal_ready() {
                 self.report_error(&DaemonizeError::NotifyFailed(e));
@@ -604,7 +335,7 @@ impl DaemonContext {
     ///
     /// Convenience wrapper over [`report_error`](Self::report_error) for the
     /// common case of surfacing your own startup error (e.g. a socket bind or
-    /// database connect that failed in the privileged init window) without
+    /// database connect that failed during startup) without
     /// having to construct a [`DaemonizeError`] by hand. Equivalent to
     /// `self.report_error(&DaemonizeError::application(code, message))`.
     ///
@@ -672,60 +403,6 @@ mod tests {
         let (rd, wr) = make_pipe();
         let mut ctx = ctx(&DaemonConfig::new(), None, Some(NotifyPipe::new(wr)));
         ctx.notify_parent_or_report(); // success path returns normally
-        assert_eq!(read_pipe(rd), vec![0x00]);
-    }
-
-    // Covers: R125
-    #[test]
-    fn privileges_pending_tracks_config_and_drop_state() {
-        let mut user_cfg = DaemonConfig::new();
-        user_cfg.user("nobody");
-        let mut group_cfg = DaemonConfig::new();
-        group_cfg.group("nogroup");
-
-        // Configured but not yet dropped -> pending; clears once dropped.
-        for cfg in [&user_cfg, &group_cfg] {
-            let mut c = ctx(cfg, None, None);
-            assert!(c.privileges_pending(), "configured user/group, not dropped");
-            c.privileges_dropped = true;
-            assert!(!c.privileges_pending(), "no longer pending once dropped");
-        }
-
-        // Nothing configured -> never pending.
-        assert!(!default_ctx().privileges_pending());
-    }
-
-    // Covers: R125
-    #[test]
-    fn notify_parent_refuses_when_privileges_pending() {
-        // Keep the read end open so the Drop-time signal_unnotified write does
-        // not hit a closed pipe.
-        let (_rd, wr) = make_pipe();
-        let mut config = DaemonConfig::new();
-        config.user("nobody");
-        let mut ctx = ctx(&config, None, Some(NotifyPipe::new(wr)));
-
-        assert!(
-            matches!(
-                ctx.notify_parent(),
-                Err(DaemonizeError::PrivilegesNotDropped)
-            ),
-            "must refuse to signal readiness while still privileged"
-        );
-        // The pipe is left intact: the parent learns of the failure via the
-        // unnotified byte written when this context drops.
-    }
-
-    // Covers: R125
-    #[test]
-    fn notify_parent_succeeds_once_privileges_dropped() {
-        let (rd, wr) = make_pipe();
-        let mut config = DaemonConfig::new();
-        config.user("nobody");
-        let mut ctx = ctx(&config, None, Some(NotifyPipe::new(wr)));
-        ctx.privileges_dropped = true; // simulate a successful drop_privileges()
-
-        ctx.notify_parent().unwrap();
         assert_eq!(read_pipe(rd), vec![0x00]);
     }
 
@@ -1229,73 +906,6 @@ mod tests {
         assert!(ctx.lockfile_fd().is_none());
     }
 
-    // Covers: R62
-    #[cfg(blivet_thread_count)]
-    #[test]
-    fn drop_privileges_noop_without_user_or_group() {
-        let mut ctx = default_ctx();
-        assert!(ctx.drop_privileges().is_ok());
-    }
-
-    // Covers: R65
-    #[test]
-    fn chown_paths_noop_without_user_or_group() {
-        let mut ctx = default_ctx();
-        assert!(ctx.chown_paths().is_ok());
-    }
-
-    /// Ignored for the same reason as [`drop_privileges_group_not_found`]:
-    /// resolving a name that does not exist goes through NSS, which can block
-    /// for as long as its slowest configured source takes, and nothing here
-    /// bounds that. The glibc container tier runs it with `--include-ignored`.
-    #[test]
-    #[ignore = "getpwnam for a missing user can block on a networked NSS source"]
-    fn drop_privileges_user_not_found() {
-        let mut config = DaemonConfig::new();
-        config.user("nonexistent_daemonize_test_user_xyz");
-        let mut ctx = ctx(&config, None, None);
-        // Use the unchecked path: the test harness is multithreaded, so the
-        // checked `drop_privileges` would panic on the thread-count guard
-        // before reaching user resolution. Here we exercise resolution itself.
-        // SAFETY: no setenv is reached — resolution of a missing user fails first.
-        #[allow(unsafe_code)]
-        let result = unsafe { ctx.drop_privileges_unchecked() };
-        assert!(matches!(
-            result,
-            Err(crate::DaemonizeError::UserNotFound(_))
-        ));
-    }
-
-    /// Ignored by default: resolving a group that does not exist goes through
-    /// NSS, which can block for as long as its slowest configured source takes
-    /// to answer, and nothing here can bound that. The glibc container tier
-    /// runs it with `--include-ignored`, where the name sources are known and
-    /// local; the bionic tier runs `cargo test --lib` and so does not.
-    ///
-    /// The nonexistent-name lookups in `identity::tests` are ignored for the
-    /// same reason, so what bionic proves is the resolution that succeeds — a
-    /// built-in table rather than `/etc/passwd` — through the positive tests,
-    /// which are not ignored. The refusal path is exercised where the name
-    /// sources are known to be local.
-    ///
-    /// Skipping on `CI` being set was the previous mechanism, and it decided
-    /// the wrong thing: the environments that set it are the hosted runners,
-    /// while the VM and device tiers — which do not forward the variable —
-    /// would have run it with no timeout to rescue them.
-    #[cfg(blivet_thread_count)]
-    #[test]
-    #[ignore = "getgrnam for a missing group can block on a networked NSS source"]
-    fn drop_privileges_group_not_found() {
-        let mut config = DaemonConfig::new();
-        config.group("nonexistent_daemonize_test_group_xyz");
-        let mut ctx = ctx(&config, None, None);
-        let result = ctx.drop_privileges();
-        assert!(matches!(
-            result,
-            Err(crate::DaemonizeError::GroupNotFound(_))
-        ));
-    }
-
     // Covers: R120
     #[test]
     fn context_stores_config_fields() {
@@ -1316,247 +926,10 @@ mod tests {
 
     /// Config carrying a pidfile, with `cleanup_on_drop` disabled so tests
     /// control cleanup explicitly.
-    fn pidfile_config(pidfile: impl Into<PathBuf>) -> DaemonConfig {
+    fn pidfile_config(pidfile: impl Into<std::path::PathBuf>) -> DaemonConfig {
         let mut config = DaemonConfig::new();
         config.pidfile(pidfile).cleanup_on_drop(false);
         config
-    }
-
-    /// A gid the current user cannot chown files to: not the effective gid
-    /// and not in the supplementary groups. Non-root chown to such a gid
-    /// fails EPERM, letting tests observe that `drop_privileges` attempted
-    /// the chown — and fail before `setgid`, so the test process's group
-    /// state is never actually changed.
-    // Every caller is a test gated on the same capability; without this an
-    // unlisted Unix compiles the helper with nothing calling it, which `-D warnings`
-    // rejects.
-    #[cfg(blivet_thread_count)]
-    fn foreign_gid() -> u32 {
-        // libc, not nix::unistd::getgroups: nix gates it out on apple targets.
-        #[allow(unsafe_code)]
-        let gids: Vec<u32> = unsafe {
-            let n = libc::getgroups(0, std::ptr::null_mut());
-            assert!(n >= 0, "getgroups failed");
-            let mut buf = vec![0 as libc::gid_t; n as usize];
-            let n = libc::getgroups(n, buf.as_mut_ptr());
-            assert!(n >= 0, "getgroups failed");
-            buf[..n as usize].to_vec()
-        };
-        let egid = nix::unistd::getegid().as_raw();
-        (1..).find(|g| !gids.contains(g) && *g != egid).unwrap()
-    }
-
-    /// Drops the effective UID to `nobody` when the test runs as root.
-    ///
-    /// The tests that call this assert an unprivileged failure — a chown or a
-    /// setgid refused with EPERM. Root would succeed instead, so rather than
-    /// return and count a pass the root tier never tested, the body sheds root
-    /// in its own process and tests the same path there. Process-global, so
-    /// only ever called in a `run_in_subprocess` child.
-    #[cfg(blivet_thread_count)]
-    fn shed_root() {
-        /// The conventional unprivileged UID; `seteuid` does not need it to
-        /// exist in passwd.
-        const NOBODY: u32 = 65534;
-        if nix::unistd::geteuid().is_root() {
-            nix::unistd::seteuid(nix::unistd::Uid::from_raw(NOBODY))
-                .expect("root can drop its effective UID");
-        }
-    }
-
-    #[cfg(blivet_thread_count)]
-    #[test]
-    fn drop_privileges_chowns_configured_paths() {
-        crate::test_support::run_in_subprocess(
-            "context::tests::drop_privileges_chowns_configured_paths_unprivileged",
-        );
-    }
-
-    #[cfg(blivet_thread_count)]
-    #[test]
-    #[ignore = "runs in a subprocess that sheds root; see shed_root"]
-    fn drop_privileges_chowns_configured_paths_unprivileged() {
-        if !crate::test_support::is_subprocess() {
-            return;
-        }
-        shed_root();
-        let dir = tempfile::tempdir().unwrap();
-        let pidfile = dir.path().join("x.pid");
-        std::fs::write(&pidfile, "123\n").unwrap();
-        let mut config = pidfile_config(&pidfile);
-        config.group(foreign_gid().to_string());
-        let mut ctx = ctx(&config, None, None);
-
-        let result = ctx.drop_privileges();
-        assert!(
-            matches!(result, Err(DaemonizeError::ChownError(_))),
-            "drop_privileges must chown configured paths before switching, got {result:?}"
-        );
-        // A chown failure aborts before setgid/setuid: the caller is still
-        // privileged, so readiness must not be signalable.
-        assert!(
-            ctx.privileges_pending(),
-            "chown failure must leave privileges undropped"
-        );
-    }
-
-    #[cfg(blivet_thread_count)]
-    #[test]
-    fn drop_privileges_skips_chown_when_disabled() {
-        crate::test_support::run_in_subprocess(
-            "context::tests::drop_privileges_skips_chown_when_disabled_unprivileged",
-        );
-    }
-
-    #[cfg(blivet_thread_count)]
-    #[test]
-    #[ignore = "runs in a subprocess that sheds root; see shed_root"]
-    fn drop_privileges_skips_chown_when_disabled_unprivileged() {
-        if !crate::test_support::is_subprocess() {
-            return;
-        }
-        shed_root();
-        let dir = tempfile::tempdir().unwrap();
-        let pidfile = dir.path().join("x.pid");
-        std::fs::write(&pidfile, "123\n").unwrap();
-        let mut config = pidfile_config(&pidfile);
-        config.group(foreign_gid().to_string()).chown_paths(false);
-        let mut ctx = ctx(&config, None, None);
-
-        // With chown disabled the drop proceeds straight to setgid, so the
-        // (still-inevitable, unprivileged) failure is EPERM there — proving
-        // no chown was attempted on the pidfile.
-        let result = ctx.drop_privileges();
-        assert!(
-            matches!(result, Err(DaemonizeError::PermissionDenied(ref m)) if m.contains("setgid")),
-            "chown_paths(false) must skip the chown, got {result:?}"
-        );
-    }
-
-    #[test]
-    fn chown_paths_skips_nonexistent_files() {
-        let mut config = pidfile_config("/nonexistent_daemonize_test_xyz/test.pid");
-        config.user("root");
-        let mut ctx = ctx(&config, None, None);
-        assert!(ctx.chown_paths().is_ok());
-    }
-
-    #[test]
-    fn chown_paths_idempotent() {
-        let mut ctx = default_ctx();
-        assert!(ctx.chown_paths().is_ok());
-        assert!(ctx.chown_paths().is_ok());
-    }
-
-    #[cfg(blivet_thread_count)]
-    #[test]
-    fn drop_privileges_idempotent_noop() {
-        let mut ctx = default_ctx();
-        assert!(ctx.drop_privileges().is_ok());
-        assert!(ctx.drop_privileges().is_ok());
-    }
-
-    // Covers: R126
-    //
-    // `drop_privileges` reads the thread count and panics (before any setuid)
-    // when a user switch is configured and more than one thread is running, so
-    // its `setenv` of USER/HOME/LOGNAME never races. Spawning a parked thread
-    // makes the count > 1 deterministically; the panic fires on the check, so
-    // no root is needed.
-    #[cfg(blivet_thread_count)]
-    #[test]
-    fn drop_privileges_panics_when_not_single_threaded() {
-        use std::sync::atomic::{AtomicBool, Ordering};
-        use std::sync::{mpsc, Arc};
-
-        let stop = Arc::new(AtomicBool::new(false));
-        let (ready_tx, ready_rx) = mpsc::channel();
-        let worker = {
-            let stop = Arc::clone(&stop);
-            std::thread::spawn(move || {
-                ready_tx.send(()).unwrap();
-                while !stop.load(Ordering::Acquire) {
-                    std::thread::park();
-                }
-            })
-        };
-        ready_rx.recv().unwrap(); // worker running -> thread count is now >= 2
-
-        let mut config = DaemonConfig::new();
-        config.user("nobody"); // user switch -> setenv path -> guarded
-        let mut ctx = ctx(&config, None, None);
-        let result =
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| ctx.drop_privileges()));
-
-        stop.store(true, Ordering::Release);
-        worker.thread().unpark();
-        worker.join().unwrap();
-
-        let payload = result.expect_err("drop_privileges must panic with >1 thread");
-        let msg = payload
-            .downcast_ref::<String>()
-            .map(String::as_str)
-            .or_else(|| payload.downcast_ref::<&str>().copied())
-            .unwrap_or("<non-string panic payload>");
-        assert!(
-            msg.contains("threads running (expected 1)"),
-            "panic should name the thread-count problem, got: {msg:?}"
-        );
-    }
-
-    // Covers: R126
-    //
-    // The guard fires only for a *user* switch (the `setenv` path). A
-    // group-only switch performs no `setenv`, so it must NOT check the thread
-    // count — this locks that contract so widening the guard to also cover
-    // group-only would fail here. A numeric gid avoids any NSS lookup; the
-    // inner `setgid` fails without root, but the point is that it does not
-    // panic on the thread-count guard despite >1 thread running.
-    #[cfg(blivet_thread_count)]
-    #[test]
-    fn drop_privileges_group_only_does_not_check_threads() {
-        crate::test_support::run_in_subprocess(
-            "context::tests::drop_privileges_group_only_does_not_check_threads_subprocess",
-        );
-    }
-
-    #[cfg(blivet_thread_count)]
-    #[test]
-    #[ignore]
-    fn drop_privileges_group_only_does_not_check_threads_subprocess() {
-        if !crate::test_support::is_subprocess() {
-            return;
-        }
-        use std::sync::atomic::{AtomicBool, Ordering};
-        use std::sync::{mpsc, Arc};
-
-        let stop = Arc::new(AtomicBool::new(false));
-        let (ready_tx, ready_rx) = mpsc::channel();
-        let worker = {
-            let stop = Arc::clone(&stop);
-            std::thread::spawn(move || {
-                ready_tx.send(()).unwrap();
-                while !stop.load(Ordering::Acquire) {
-                    std::thread::park();
-                }
-            })
-        };
-        ready_rx.recv().unwrap(); // worker running -> thread count is now >= 2
-
-        let mut config = DaemonConfig::new();
-        config.group("99999"); // numeric gid -> no NSS lookup; group-only -> no setenv
-        let mut ctx = ctx(&config, None, None);
-        let result =
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| ctx.drop_privileges()));
-
-        stop.store(true, Ordering::Release);
-        worker.thread().unpark();
-        worker.join().unwrap();
-
-        assert!(
-            result.is_ok(),
-            "group-only drop_privileges must not panic on the thread-count guard"
-        );
     }
 
     #[test]

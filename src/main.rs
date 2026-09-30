@@ -198,7 +198,8 @@ fn main() -> ExitCode {
         }
     }
 
-    // Daemonize
+    // Daemonize, switching to the configured user and group before it returns
+    // (and chowning the pidfile, lockfile, and logs to them first).
     // SAFETY: single-threaded here (no threads spawned before this point); use
     // the unchecked form so the CLI stays portable across all Unix targets.
     #[allow(unsafe_code)]
@@ -209,17 +210,6 @@ fn main() -> ExitCode {
             return ExitCode::from(e.exit_code());
         }
     };
-
-    // Drop privileges (chowns configured paths first) if user or group is set
-    if args.user.is_some() || args.group.is_some() {
-        // SAFETY: single-threaded here (no threads spawned before exec); use
-        // the unchecked form so the CLI stays portable across all Unix targets.
-        #[allow(unsafe_code)]
-        let drop_result = unsafe { ctx.drop_privileges_unchecked() };
-        if let Err(e) = drop_result {
-            ctx.report_error(&e);
-        }
-    }
 
     // Clear CLOEXEC on lockfile fd so the lock survives exec
     if let Some(lockfile_fd) = ctx.lockfile_fd() {

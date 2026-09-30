@@ -201,7 +201,10 @@ impl DaemonConfig {
     /// Sets the user to run the daemon as. Default: none (no user switch).
     ///
     /// Accepts a username string or a numeric UID (as a string, e.g. `"1000"`).
-    /// Resolution happens at runtime in [`DaemonContext::drop_privileges`](crate::DaemonContext::drop_privileges).
+    /// The daemonize call resolves it before any init runs and switches to it
+    /// before returning: `initgroups`, `setgid`, `setuid`, then `USER`,
+    /// `HOME`, and `LOGNAME`. Work that needs the original privileges goes in
+    /// [`daemonize_with`](crate::daemonize_with)'s `init`.
     pub fn user(&mut self, name: impl Into<String>) -> &mut Self {
         self.user = Some(name.into());
         self
@@ -210,7 +213,8 @@ impl DaemonConfig {
     /// Sets the group to run the daemon as. Default: none (use user's primary group).
     ///
     /// Accepts a group name string or a numeric GID (as a string, e.g. `"1000"`).
-    /// Resolution happens at runtime in [`DaemonContext::drop_privileges`](crate::DaemonContext::drop_privileges).
+    /// Like [`user`](DaemonConfig::user), resolved before init and switched to
+    /// before the daemonize call returns. Without a user, only `setgid` runs.
     pub fn group(&mut self, name: impl Into<String>) -> &mut Self {
         self.group = Some(name.into());
         self
@@ -258,9 +262,9 @@ impl DaemonConfig {
         self
     }
 
-    /// Sets whether [`drop_privileges`](crate::DaemonContext::drop_privileges)
-    /// chowns the configured path-based resources (pidfile, lockfile, stdout,
-    /// stderr) to the target user/group before switching. Default: `true`.
+    /// Sets whether the daemonize call chowns the configured path-based
+    /// resources (pidfile, lockfile, stdout, stderr) to the target user/group
+    /// before switching to it. Default: `true`.
     ///
     /// Disable to keep those files owned by the original (privileged) user —
     /// e.g. so a compromised daemon cannot rewrite its own pidfile or truncate
@@ -1120,7 +1124,6 @@ mod tests {
             DaemonizeError::ChownError("detail".into()),
             DaemonizeError::ExecFailed("detail".into()),
             DaemonizeError::NotifyFailed(Error::from(ErrorKind::BrokenPipe)),
-            DaemonizeError::PrivilegesNotDropped,
             DaemonizeError::application(71, "detail"),
         ];
 
@@ -1144,7 +1147,6 @@ mod tests {
                 | DaemonizeError::ChownError(_)
                 | DaemonizeError::ExecFailed(_)
                 | DaemonizeError::NotifyFailed(_)
-                | DaemonizeError::PrivilegesNotDropped
                 | DaemonizeError::Application { .. } => {}
             }
         }

@@ -189,3 +189,38 @@ pub(crate) fn assert_isolated(what: &str) {
          run the test body through run_in_subprocess"
     );
 }
+
+/// A gid the current user cannot chown files to: not the effective gid and
+/// not a supplementary group. An unprivileged chown to it fails `EPERM`, so a
+/// test sees that the chown was attempted, and it fails before any `setgid`
+/// changes the test process's groups.
+pub(crate) fn foreign_gid() -> u32 {
+    // libc, not nix::unistd::getgroups: nix gates it out on apple targets.
+    #[allow(unsafe_code)]
+    let gids: Vec<u32> = unsafe {
+        let n = libc::getgroups(0, std::ptr::null_mut());
+        assert!(n >= 0, "getgroups failed");
+        let mut buf = vec![0 as libc::gid_t; n as usize];
+        let n = libc::getgroups(n, buf.as_mut_ptr());
+        assert!(n >= 0, "getgroups failed");
+        buf[..n as usize].to_vec()
+    };
+    let egid = nix::unistd::getegid().as_raw();
+    (1..).find(|g| !gids.contains(g) && *g != egid).unwrap()
+}
+
+/// Drops the effective UID to `nobody` when the test runs as root.
+///
+/// The tests that call this assert an unprivileged failure, a chown or a
+/// `setgid` refused with `EPERM`. Root would succeed instead, so rather than
+/// count a pass the root tier never tested, the body sheds root in its own
+/// process. Process-global, so it asserts it runs in one.
+pub(crate) fn shed_root() {
+    assert_isolated("shed_root");
+    /// The conventional unprivileged UID; `seteuid` does not need it in passwd.
+    const NOBODY: u32 = 65534;
+    if nix::unistd::geteuid().is_root() {
+        nix::unistd::seteuid(nix::unistd::Uid::from_raw(NOBODY))
+            .expect("root can drop its effective UID");
+    }
+}

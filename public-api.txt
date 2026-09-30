@@ -15,7 +15,6 @@ pub blivet::DaemonizeError::NotifyFailed(core::io::error::Error)
 pub blivet::DaemonizeError::OutputFileError(alloc::string::String)
 pub blivet::DaemonizeError::PermissionDenied(alloc::string::String)
 pub blivet::DaemonizeError::PidfileError(alloc::string::String)
-pub blivet::DaemonizeError::PrivilegesNotDropped
 pub blivet::DaemonizeError::ProgramNotFound(alloc::string::String)
 pub blivet::DaemonizeError::SetsidFailed(alloc::string::String)
 pub blivet::DaemonizeError::SystemError(alloc::string::String)
@@ -81,8 +80,6 @@ impl blivet::DaemonContext
 pub fn blivet::DaemonContext::cleanup(&mut self)
 pub fn blivet::DaemonContext::cleanup_on_signals(&self, signals: &[i32]) -> core::result::Result<(), blivet::DaemonizeError>
 pub fn blivet::DaemonContext::cleanup_on_term_signals(&self) -> core::result::Result<(), blivet::DaemonizeError>
-pub fn blivet::DaemonContext::drop_privileges(&mut self) -> core::result::Result<(), blivet::DaemonizeError>
-pub unsafe fn blivet::DaemonContext::drop_privileges_unchecked(&mut self) -> core::result::Result<(), blivet::DaemonizeError>
 pub fn blivet::DaemonContext::lockfile_fd(&self) -> core::option::Option<std::os::fd::owned::BorrowedFd<'_>>
 pub fn blivet::DaemonContext::notify_parent(&mut self) -> core::result::Result<(), blivet::DaemonizeError>
 pub fn blivet::DaemonContext::notify_parent_or_report(&mut self)

@@ -1,14 +1,15 @@
-//! Resolving user/group specs (a name **or** a numeric id) into concrete OS
-//! identities.
+//! The identity the daemon runs as: resolving the configured user and group
+//! specs (a name **or** a numeric id), handing the daemon's files to that
+//! identity, and switching to it.
 //!
 //! A spec is the raw `String` a caller configures via
 //! [`DaemonConfig::user`](crate::DaemonConfig::user) /
-//! [`group`](crate::DaemonConfig::group). Both the chown and switch phases of
-//! `drop_privileges` need it resolved, so the parsing and `getpwnam`/`getgrnam`
-//! lookups live here once rather than at each call site.
+//! [`group`](crate::DaemonConfig::group). The daemonize sequence resolves it
+//! before the caller's init runs, so a missing user fails before init's side
+//! effects, then chowns and switches after init (ADR 0004).
 
 use std::ffi::CString;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use nix::unistd::{Gid, Group, Uid, User};
 
@@ -81,6 +82,74 @@ impl ResolvedIdentity {
     pub(crate) fn chown_ids(&self) -> (Option<Uid>, Option<Gid>) {
         (self.user.as_ref().map(|u| u.uid), self.effective_gid())
     }
+
+    /// Chown each of `paths` that exists to this identity, while the process
+    /// is still privileged.
+    ///
+    /// Follows symlinks, like the opens that created these files, so a
+    /// symlinked log path chowns the file the daemon writes. That is safe only
+    /// for paths in directories untrusted users cannot write, since a planted
+    /// symlink would redirect the chown.
+    ///
+    /// # Errors
+    ///
+    /// Returns `DaemonizeError::ChownError` naming the first path that fails.
+    /// Paths already chowned stay chowned; the operation is idempotent.
+    pub(crate) fn chown_paths<'p>(
+        &self,
+        paths: impl IntoIterator<Item = &'p Path>,
+    ) -> Result<(), DaemonizeError> {
+        let (owner, group) = self.chown_ids();
+        for path in paths {
+            if path.exists() {
+                nix::unistd::chown(path, owner, group)
+                    .map_err(|e| DaemonizeError::ChownError(format!("{}: {e}", path.display())))?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Switch the process to this identity.
+    ///
+    /// - User: `initgroups`, `setgid` to the explicit group or else the user's
+    ///   primary group, `setuid`, then `USER`, `HOME`, `LOGNAME` (overriding
+    ///   any configured `.env()` values).
+    /// - Group only: `setgid`.
+    ///
+    /// # Safety
+    ///
+    /// With a user, this calls `setenv`, which is not thread-safe: no other
+    /// thread may be running.
+    ///
+    /// # Errors
+    ///
+    /// Returns `DaemonizeError::PermissionDenied` if `initgroups`, `setgid`,
+    /// or `setuid` fails, and `UserNotFound` for a name with a NUL byte.
+    #[allow(unsafe_code)]
+    pub(crate) unsafe fn switch_to(&self) -> Result<(), DaemonizeError> {
+        #[cfg(test)]
+        crate::test_support::assert_isolated("the identity switch");
+        if let Some(info) = self.user() {
+            crate::unsafe_ops::raw_initgroups(&info.cname()?, info.gid.as_raw())
+                .map_err(|e| DaemonizeError::PermissionDenied(format!("initgroups: {e}")))?;
+        }
+        if let Some(gid) = self.effective_gid() {
+            nix::unistd::setgid(gid)
+                .map_err(|e| DaemonizeError::PermissionDenied(format!("setgid: {e}")))?;
+        }
+        if let Some(info) = self.user() {
+            nix::unistd::setuid(info.uid)
+                .map_err(|e| DaemonizeError::PermissionDenied(format!("setuid: {e}")))?;
+            // SAFETY: this function's contract requires a single thread, so
+            // these `setenv` calls cannot race `environ`.
+            unsafe {
+                std::env::set_var("USER", &info.name);
+                std::env::set_var("HOME", &info.dir);
+                std::env::set_var("LOGNAME", &info.name);
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Resolve a user spec (name or numeric UID string).
@@ -118,6 +187,13 @@ fn resolve_group_gid(spec: &str) -> Result<Gid, DaemonizeError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn chown_paths_skips_paths_that_do_not_exist() {
+        let identity = ResolvedIdentity::resolve(Some("0"), None).unwrap();
+        let missing = Path::new("/nonexistent_daemonize_test_xyz/test.pid");
+        assert!(identity.chown_paths([missing]).is_ok());
+    }
 
     // Covers: R63
     #[test]

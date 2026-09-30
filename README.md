@@ -35,11 +35,13 @@ fn main() -> Result<(), DaemonizeError> {
   (real-time signals too, on Linux and Android), a cleared signal mask, closed
   fds, and `/dev/null` on stdio. `SIGPIPE` stays ignored, so a write to a
   closed pipe returns an error instead of killing the daemon.
-- **No `unsafe` in your code.** `daemonize()` and `drop_privileges()` check
+- **No `unsafe` in your code.** `daemonize()` and `daemonize_with()` check
   that the process is single-threaded before the steps that need it. Inside
   the crate, `#![deny(unsafe_code)]` makes each `unsafe` block opt in.
-- **Split-phase privileges.** `daemonize()` returns while still privileged, so
-  you can bind port 80 or `chroot` before `drop_privileges()`.
+- **Privileged init, once.** `daemonize_with()` runs your init after the
+  pidfile lock and while still root, so you can bind port 80 or `chroot`, and a
+  second instance fails before its init runs. Then it drops to the configured
+  user.
 - **Library and CLI.** A builder with infallible setters and deferred
   validation, or the `daemonize` binary, which wraps any program.
 
@@ -48,13 +50,11 @@ fn main() -> Result<(), DaemonizeError> {
 `daemonize()` double-forks, calls `setsid` to detach from the controlling
 terminal, and returns a `DaemonContext` in the grandchild, which is your
 daemon. The launcher does not return. It blocks on a pipe until the daemon
-reports in. In the daemon you then:
-
-1. run fallible init, such as binding sockets, opening files, and connecting to
-   dependencies;
-2. `drop_privileges()` to switch to an unprivileged user (it first chowns the
-   pidfile/lockfile/log files to that user, while still root);
-3. call `notify_parent()`, which writes one readiness byte down the pipe.
+reports in. Inside the call, in the daemon, blivet takes the pidfile lock, runs
+your privileged init if you passed one to `daemonize_with()`, then chowns the
+pidfile, lockfile, and logs to the configured user and switches to it. Your
+daemon then calls `notify_parent()`, which writes one readiness byte down the
+pipe.
 
 ```text
 launcher
@@ -62,8 +62,8 @@ launcher
 ├───────────────────┐
 │ waits on pipe     ▼
 │                 daemon
-│                   │ init
-│                   │ drop_privileges()
+│                   │ lock, init
+│                   │ switch user
 │◄──────────────────┘ notify_parent()
 ▼
 exits 0, or the error's code
@@ -74,7 +74,8 @@ That byte releases the launcher, which exits 0. If the daemon calls
 daemon ends any other way before notifying, the launcher exits 1. That covers an
 early return, a panic, a kill by a signal, and a call to `std::process::exit`.
 
-Steps 1 and 2 must run **single-threaded**. [Safety](#safety) explains why.
+The daemonize call must run **single-threaded**. [Safety](#safety) explains
+why.
 
 ## Install
 
@@ -119,27 +120,34 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-**Split-phase privilege dropping.** Do privileged work (bind port 80, `chroot`,
-set rlimits) between `daemonize()` and `drop_privileges()`:
+**Privileged init.** With `user()` or `group()` set, the daemon switches to
+them before `daemonize()` returns. Pass work that needs root (bind port 80,
+`chroot`, set rlimits) to `daemonize_with()`. It runs after the lock, so only
+one instance runs it, and its value comes back beside the context:
 
 ```rust,no_run
-use blivet::{daemonize, DaemonConfig};
+use blivet::{daemonize_with, DaemonConfig, DaemonizeError};
+use std::net::TcpListener;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut config = DaemonConfig::new();
     config.pidfile("/var/run/myapp.pid").user("www-data").group("www-data");
 
-    let mut ctx = daemonize(&config)?;
+    let (mut ctx, listener) = daemonize_with(&config, || {
+        // Still root, holding the lock.
+        TcpListener::bind("0.0.0.0:80")
+            .map_err(|e| DaemonizeError::application(71, format!("bind: {e}")))
+    })?;
 
-    // Still root here: bind a privileged port, chroot, set rlimits…
-    // let listener = TcpListener::bind("0.0.0.0:80")?;
-
-    ctx.drop_privileges()?; // chown pidfile/logs to target user, then switch
+    // Now running as www-data, with the socket open.
     ctx.notify_parent()?;
-    // now running as www-data…
+    # drop(listener);
     Ok(())
 }
 ```
+
+An error from `init` reaches the launcher with its exit code, and the pidfile
+is removed.
 
 **Foreground mode.** For systemd, containers, or debugging: skip forking while
 applying all other setup (umask, chdir, signal reset, …). Stdout/stderr stay
@@ -156,17 +164,17 @@ config.foreground(true).close_fds(false); // keep supervisor-passed fds
 ## Safety
 
 Forking a multithreaded process is unsound. Mutexes that other threads hold stay
-locked forever in the child, so the child deadlocks. `drop_privileges()` has the
-same hazard, because it calls `setenv` for `USER`, `HOME`, and `LOGNAME` when it
-switches users. Spawn threads, an async runtime, or an accept loop only after
-`drop_privileges()` returns, or after `daemonize()` returns if you don't switch
-users.
+locked forever in the child, so the child deadlocks. Switching user has the same
+hazard, because it calls `setenv` for `USER`, `HOME`, and `LOGNAME`. Both happen
+inside the daemonize call, so spawn threads, an async runtime, or an accept loop
+only after it returns. An `init` may use threads only if it joins them before
+it returns.
 
-The checked entry points enforce this. `daemonize()` reads the kernel thread
-count and panics unless exactly one thread is running. `drop_privileges()`
-does the same before it calls `setenv`, which it does only for a user switch. A
-group-only switch calls no `setenv`, so nothing checks it. The `unsafe` forms
-`daemonize_unchecked()` and `drop_privileges_unchecked()` skip the check, for
+The checked entry points enforce this. `daemonize()` and `daemonize_with()`
+read the kernel thread count and panic unless exactly one thread is running.
+With a user switch, `daemonize_with()` checks again after `init`. A group-only
+switch calls no `setenv`, so that second check is skipped. The `unsafe` forms
+`daemonize_unchecked()` and `daemonize_with_unchecked()` skip the checks, for
 callers who manage the contract themselves. They are also the only entry points
 on a target where the thread count can't be read (see
 [Platform support](#platform-support)).
@@ -200,7 +208,6 @@ the shell with a meaningful status:
 | `PermissionDenied` | 77          | Not root, or setuid/setgid failed        |
 | `ExecFailed`       | 71          | CLI: `exec` failed (other than `ENOENT`/`EACCES`) |
 | `NotifyFailed`     | 71          | Can't write readiness byte to launcher   |
-| `PrivilegesNotDropped` | 70      | user/group set but `drop_privileges()` never called |
 | `Application`      | caller's    | App-level failure you report yourself    |
 
 ## Recipes
@@ -268,15 +275,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ### Reporting your own failures
 
-If startup work in the privileged init window fails (a socket bind, a database
-connect), report it to the launcher with a `sysexits.h` code of your choosing
-via `report_error_msg`, without building a `DaemonizeError` by hand:
+Inside `daemonize_with()`'s init, return `DaemonizeError::application(code,
+message)`. After the call, when startup work that needs no privileges fails (a
+database connect), report it to the launcher with a `sysexits.h` code of your
+choosing via `report_error_msg`, without building a `DaemonizeError` by hand:
 
 ```rust,ignore
-let listener = match TcpListener::bind("0.0.0.0:80") {
-    Ok(l) => l,
-    // 71 == EX_OSERR; the launcher prints the message and exits with this code.
-    Err(e) => ctx.report_error_msg(71, format!("bind failed: {e}")),
+let db = match Database::connect(&url) {
+    Ok(db) => db,
+    // 69 == EX_UNAVAILABLE; the launcher prints the message and exits with it.
+    Err(e) => ctx.report_error_msg(69, format!("database connect failed: {e}")),
 };
 ```
 
@@ -356,9 +364,9 @@ them.
 CI builds no other architecture of a Supported OS. aarch64 Linux, for example,
 uses the same code as x86_64 Linux, but nothing checks it.
 
-On a best-effort target, `daemonize()` and `drop_privileges()` are
+On a best-effort target, `daemonize()` and `daemonize_with()` are
 `#[deprecated]` stubs that panic. Call `daemonize_unchecked()` and
-`drop_privileges_unchecked()` instead. A crate that also builds there can gate
+`daemonize_with_unchecked()` instead. A crate that also builds there can gate
 the checked call on `target_os`, as the [crate front page](https://docs.rs/blivet)
 and `examples/echo_server.rs` do. Solaris (`x86_64-pc-solaris`) does not
 compile, because `nix` lacks `Flock` there. A non-Unix target fails with one

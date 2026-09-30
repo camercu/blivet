@@ -7,9 +7,9 @@
 //! This crate provides a library and CLI tool for daemonizing processes on Unix
 //! systems. It performs a double-fork, resets signal dispositions and
 //! mask, and uses a notification pipe so the parent can wait for daemon
-//! readiness. Privilege dropping is split-phase: `daemonize()` returns a
-//! context while still privileged, and the caller explicitly calls
-//! `drop_privileges()` when ready.
+//! readiness. When a user or group is configured, the daemon switches to it
+//! before `daemonize()` returns; work that needs the original privileges runs
+//! inside the call, through [`daemonize_with`].
 //!
 //! [blivet]: https://en.wikipedia.org/wiki/Impossible_trident
 //!
@@ -64,31 +64,23 @@
 //! # Threads and async runtimes
 //!
 //! Daemonizing forks, and forking a multithreaded process is unsound:
-//! mutexes held by other threads stay locked forever in the child. A second
-//! thread-unsafe step follows:
-//! [`drop_privileges`](DaemonContext::drop_privileges) calls `setenv`
-//! (`USER`/`HOME`/`LOGNAME`) when switching users. The single-threaded window
-//! therefore runs from the fork through the last `setenv` — i.e. through
-//! `drop_privileges()`:
+//! mutexes held by other threads stay locked forever in the child. Switching
+//! user is also thread-unsafe, because it calls `setenv`
+//! (`USER`/`HOME`/`LOGNAME`). Both happen inside the daemonize call, so the
+//! call is the single-threaded window:
 //!
 //! ```text
-//! daemonize()        <- forks
-//! │ single-threaded only
-//! drop_privileges()  <- last setenv
+//! daemonize_with(|| init)  <- fork, init, switch
 //! │ threads, async, accept loops OK
-//! notify_parent()    <- writes one byte
+//! notify_parent()          <- writes one byte
 //! ```
 //!
-//! Both guards check for you and panic if violated: [`daemonize`] at the fork,
-//! [`drop_privileges`](DaemonContext::drop_privileges) at its `setenv` (when a
-//! user is configured). [`daemonize_unchecked`] and
-//! [`drop_privileges_unchecked`](DaemonContext::drop_privileges_unchecked) are
-//! the `unsafe` opt-outs.
-//!
-//! Spawn threads, start an async runtime, or begin a thread-per-connection
-//! accept loop **after** `drop_privileges()` returns — or after [`daemonize`]
-//! returns if you don't switch users.
-//! [`notify_parent`](DaemonContext::notify_parent) itself is thread-safe.
+//! [`daemonize`] and [`daemonize_with`] check for you and panic if violated:
+//! at the call, and after `init` when a user switch follows. An `init` may
+//! start threads only if it joins them before it returns.
+//! [`daemonize_unchecked`] and [`daemonize_with_unchecked`] are the `unsafe`
+//! opt-outs. [`notify_parent`](DaemonContext::notify_parent) itself is
+//! thread-safe.
 //!
 //! # Output and the working directory
 //!
@@ -123,41 +115,36 @@
 //! its docs for the full table — but `fn main() -> Result<(), E>` ignores it
 //! and exits **1**. To surface the codes, call `exit_code()` yourself. To
 //! report a failure from your own init code (e.g. a socket bind) with a chosen
-//! code, use [`report_error_msg`](DaemonContext::report_error_msg) or the
-//! [`DaemonizeError::Application`] variant.
+//! code, return [`DaemonizeError::application`] from `init`, or call
+//! [`report_error_msg`](DaemonContext::report_error_msg) after the call.
 //!
-//! # Split-phase design
+//! # Privileged init
 //!
-//! Many daemons need root during startup — bind a privileged port, write a
-//! pidfile to `/var/run`, open root-owned logs — but should run unprivileged
-//! afterward. Rather than fold privilege dropping into the daemonize call,
-//! `daemonize()` returns a [`DaemonContext`] still running as root; you do the
-//! privileged work, then call
-//! [`drop_privileges()`](DaemonContext::drop_privileges) (which first chowns
-//! the pidfile/lockfile/logs to the target user — opt out with
-//! [`chown_paths`](DaemonConfig::chown_paths)), then
-//! [`notify_parent()`](DaemonContext::notify_parent). Full ordering control:
+//! Many daemons need root during startup, to bind a privileged port or open
+//! root-owned files, but should run unprivileged afterward. Configure the
+//! [`user`](DaemonConfig::user) and [`group`](DaemonConfig::group) and do that
+//! work in [`daemonize_with`]'s `init`. It runs in the daemon after the
+//! pidfile lock, so a second instance fails before its `init` runs. Then
+//! blivet chowns the pidfile, lockfile, and logs to the target user (opt out
+//! with [`chown_paths`](DaemonConfig::chown_paths)) and switches to it before
+//! returning. See ADR 0004 for why `init` runs inside the call.
 //!
 //! ```no_run
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! use blivet::{DaemonConfig, daemonize};
+//! use blivet::{daemonize_with, DaemonConfig, DaemonizeError};
 //!
 //! let mut config = DaemonConfig::new();
 //! config.pidfile("/var/run/foo.pid").user("nobody").group("nogroup");
 //!
-//! let mut ctx = daemonize(&config)?;
+//! let (mut ctx, listener) = daemonize_with(&config, || {
+//!     // Still root, holding the lock.
+//!     std::net::TcpListener::bind("0.0.0.0:80")
+//!         .map_err(|e| DaemonizeError::application(71, format!("bind: {e}")))
+//! })?;
 //!
-//! // 1. Privileged work while still root:
-//! //    bind sockets, chroot, set resource limits, etc.
-//! let _listener = std::net::TcpListener::bind("0.0.0.0:80")?;
-//!
-//! // 2. Drop to unprivileged user (chowns pidfile/logs first, while still root)
-//! ctx.drop_privileges()?;
-//!
-//! // 3. Tell the parent we're ready
+//! // Running as "nobody" with the socket still open.
 //! ctx.notify_parent()?;
-//!
-//! // Daemon continues as "nobody" with the socket still open
+//! # drop(listener);
 //! # Ok(())
 //! # }
 //! ```
@@ -234,7 +221,11 @@ use nix::unistd::ForkResult;
 #[cfg(unix)]
 use forker::{Forker, RealForker};
 #[cfg(unix)]
+use identity::ResolvedIdentity;
+#[cfg(unix)]
 use notify::NotifyPipe;
+#[cfg(unix)]
+use std::path::PathBuf;
 
 /// Daemonize the current process without verifying the thread count.
 ///
@@ -303,7 +294,7 @@ pub unsafe fn daemonize_with_unchecked<T>(
 /// Returns the panic message if `count` is not exactly one thread, else `None`.
 ///
 /// The checked entry points require *exactly* one thread (R45): forking — or
-/// calling `setenv` during `drop_privileges` — in a multi-threaded process is
+/// calling `setenv` during the user switch — in a multi-threaded process is
 /// unsound. Any count other than 1 is a violation — including an anomalous `0`,
 /// which a healthy process can never report and so signals an unreliable
 /// thread-count query. Failing closed keeps the safety guard from
@@ -324,11 +315,8 @@ pub(crate) fn single_threaded_violation(caller: &str, count: usize) -> Option<St
 /// Reads the current thread count and panics unless it is exactly 1, naming
 /// `caller` in the message.
 ///
-/// The imperative shell around [`single_threaded_violation`], shared by the
-/// checked entry points that must run single-threaded: [`daemonize`] (before
-/// the fork) and
-/// [`DaemonContext::drop_privileges`](crate::DaemonContext::drop_privileges)
-/// (before its `setenv`).
+/// The imperative shell around [`single_threaded_violation`], used by the
+/// checked entry points, [`daemonize`] and [`daemonize_with`], before the fork.
 #[cfg(unix)]
 #[cfg(blivet_thread_count)]
 pub(crate) fn assert_single_threaded(caller: &str) {
@@ -370,6 +358,8 @@ pub(crate) fn assert_single_threaded(caller: &str) {
 pub fn daemonize(config: &DaemonConfig) -> Result<DaemonContext, DaemonizeError> {
     assert_single_threaded("daemonize");
     #[allow(unsafe_code)]
+    // SAFETY: verified single-threaded above, and there is no init to start a
+    // thread before the user switch.
     unsafe {
         daemonize_unchecked(config)
     }
@@ -421,8 +411,38 @@ pub fn daemonize_with<T>(
 ) -> Result<(DaemonContext, T), DaemonizeError> {
     assert_single_threaded("daemonize_with");
     #[allow(unsafe_code)]
+    // SAFETY: verified single-threaded above, and `checked_init` verifies it
+    // again after init, before the user switch's `setenv`.
     unsafe {
-        daemonize_with_unchecked(config, init)
+        daemonize_with_unchecked(config, checked_init(config, init))
+    }
+}
+
+/// `init`, then the thread check a user switch's `setenv` needs (R126).
+///
+/// A group-only switch calls no `setenv`, so it is not checked.
+#[cfg(unix)]
+#[cfg(blivet_thread_count)]
+fn checked_init<T>(
+    config: &DaemonConfig,
+    init: impl FnOnce() -> Result<T, DaemonizeError>,
+) -> impl FnOnce() -> Result<T, DaemonizeError> {
+    let switches_user = config.user.is_some();
+    move || {
+        let value = init()?;
+        if switches_user {
+            let count = thread_count::count().unwrap_or_else(|_| {
+                panic!("daemonize_with: cannot determine thread count after init")
+            });
+            if count != 1 {
+                panic!(
+                    "daemonize_with: init left {count} threads running (expected 1). \
+                     Join them before init returns: switching user calls setenv, \
+                     which is not thread-safe."
+                );
+            }
+        }
+        Ok(value)
     }
 }
 
@@ -595,7 +615,8 @@ pub(crate) unsafe fn daemonize_inner_with<T>(
     // original caller, so funnel any error through one place: notify the
     // parent and exit. `pipe_wr` stays available so the error path can still
     // signal it.
-    match run_post_fork(config, &mut pipe_wr, init) {
+    // SAFETY: this function's own contract requires a single thread.
+    match unsafe { run_post_fork(config, &mut pipe_wr, init) } {
         Ok(done) => Ok(done),
         Err(e) if foreground => Err(e),
         Err(e) => {
@@ -651,8 +672,13 @@ impl Drop for PidfileOnAbort<'_> {
 /// the notification pipe, leaving the single error-to-parent seam in
 /// [`daemonize_inner`]. On success the notification pipe write end is moved into
 /// the returned [`DaemonContext`]; `pipe_wr` is left `None`.
+///
+/// # Safety
+///
+/// No other thread may be running: step 17 calls `setenv` when switching user.
 #[cfg(unix)]
-fn run_post_fork<T>(
+#[allow(unsafe_code)]
+unsafe fn run_post_fork<T>(
     config: &DaemonConfig,
     pipe_wr: &mut Option<NotifyPipe>,
     init: impl FnOnce() -> Result<T, DaemonizeError>,
@@ -738,13 +764,45 @@ fn run_post_fork<T>(
         steps::close_inherited_fds(&skip_fds)?;
     }
 
-    // Step 14: The caller's privileged init (R153). After the lock, so only
+    // Step 14: Resolve the target identity before init, so a user or group
+    // that does not exist fails before init's side effects run (R155).
+    let identity = if config.user.is_some() || config.group.is_some() {
+        Some(ResolvedIdentity::resolve(
+            config.user.as_deref(),
+            config.group.as_deref(),
+        )?)
+    } else {
+        None
+    };
+
+    // Step 15: The caller's privileged init (R153). After the lock, so only
     // the instance holding it runs; after the fd sweep, so what it opens
     // stays open. An error is the sequence's, and the abort guard removes the
     // pidfile (R154).
     let value = init()?;
 
-    // Step 15: Return DaemonContext (clones the config-derived fields it needs).
+    // Steps 16-17: Hand the daemon's files to the target identity while still
+    // privileged, then switch to it (R155).
+    if let Some(identity) = identity {
+        if config.chown_paths {
+            identity.chown_paths(
+                [
+                    config.pidfile.as_ref(),
+                    config.effective_lockfile(),
+                    config.stdout.as_ref(),
+                    config.stderr.as_ref(),
+                ]
+                .into_iter()
+                .flatten()
+                .map(PathBuf::as_path),
+            )?;
+        }
+        // SAFETY: this function's contract requires a single thread, and the
+        // checked entry points verify it again after init (R126).
+        unsafe { identity.switch_to() }?;
+    }
+
+    // Step 18: Return DaemonContext (clones the config-derived fields it needs).
     // The context owns the pidfile from here, so the abort guard stands down.
     pidfile_on_abort.disarm();
     Ok((DaemonContext::new(config, lockfile, pipe_wr.take()), value))
@@ -786,10 +844,9 @@ mod tests {
             single_threaded_violation("daemonize", 0).is_some(),
             "an anomalous 0 must fail closed, not green-light a fork"
         );
-        let msg =
-            single_threaded_violation("drop_privileges", 2).expect("2 threads is a violation");
+        let msg = single_threaded_violation("daemonize_with", 2).expect("2 threads is a violation");
         assert!(
-            msg.contains("drop_privileges: 2 threads running (expected 1)"),
+            msg.contains("daemonize_with: 2 threads running (expected 1)"),
             "message should name the caller, count, and expectation, got: {msg}"
         );
     }
@@ -908,6 +965,143 @@ mod tests {
         let err = result.expect_err("init's error is the sequence's error");
         assert_eq!(err.exit_code(), 75);
         assert!(!pidfile.exists(), "a failed init left the pidfile behind");
+    }
+
+    // Covers: R64, R65b, R155
+    #[test]
+    fn identity_chown_runs_after_init_and_before_the_switch() {
+        run_in_subprocess("tests::identity_chown_runs_after_init_and_before_the_switch_subprocess");
+    }
+
+    #[test]
+    #[ignore]
+    fn identity_chown_runs_after_init_and_before_the_switch_subprocess() {
+        if !is_subprocess() {
+            return;
+        }
+        crate::test_support::shed_root();
+        let dir = tempfile::tempdir().unwrap();
+        let pidfile = dir.path().join("app.pid");
+        let mut config = DaemonConfig::new();
+        config
+            .foreground(true)
+            .close_fds(false)
+            .pidfile(&pidfile)
+            .group(crate::test_support::foreign_gid().to_string());
+        let mut ran = false;
+
+        let result = run_inner_with(&config, &mut NullForker::new(vec![], Ok(())), || {
+            ran = true;
+            Ok(())
+        });
+
+        assert!(ran, "init did not run before the chown");
+        assert!(
+            matches!(&result, Err(DaemonizeError::ChownError(m)) if m.contains("app.pid")),
+            "the pidfile is chowned before the switch: {result:?}"
+        );
+    }
+
+    // Covers: R65a, R125
+    #[test]
+    fn chown_paths_false_goes_straight_to_the_switch() {
+        run_in_subprocess("tests::chown_paths_false_goes_straight_to_the_switch_subprocess");
+    }
+
+    #[test]
+    #[ignore]
+    fn chown_paths_false_goes_straight_to_the_switch_subprocess() {
+        if !is_subprocess() {
+            return;
+        }
+        crate::test_support::shed_root();
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = DaemonConfig::new();
+        config
+            .foreground(true)
+            .close_fds(false)
+            .pidfile(dir.path().join("app.pid"))
+            .group(crate::test_support::foreign_gid().to_string())
+            .chown_paths(false);
+
+        let result = run_inner_with(&config, &mut NullForker::new(vec![], Ok(())), || Ok(()));
+
+        assert!(
+            matches!(&result, Err(DaemonizeError::PermissionDenied(m)) if m.contains("setgid")),
+            "with chown_paths(false) the unprivileged failure is setgid's: {result:?}"
+        );
+    }
+
+    /// Ignored for the reason the `identity::tests` lookups of missing names
+    /// are: NSS can block on a networked source. The glibc container tier runs
+    /// it with `--include-ignored`.
+    // Covers: R155
+    #[test]
+    #[ignore = "getpwnam for a missing user can block on a networked NSS source"]
+    fn unknown_user_fails_before_init_runs() {
+        run_in_subprocess("tests::unknown_user_fails_before_init_runs_subprocess");
+    }
+
+    #[test]
+    #[ignore]
+    fn unknown_user_fails_before_init_runs_subprocess() {
+        if !is_subprocess() {
+            return;
+        }
+        let mut config = DaemonConfig::new();
+        config
+            .foreground(true)
+            .close_fds(false)
+            .user("nonexistent_daemonize_test_user_xyz");
+        let mut ran = false;
+
+        let result = run_inner_with(&config, &mut NullForker::new(vec![], Ok(())), || {
+            ran = true;
+            Ok(())
+        });
+
+        assert!(
+            matches!(result, Err(DaemonizeError::UserNotFound(_))),
+            "{result:?}"
+        );
+        assert!(!ran, "init ran for a user that does not exist");
+    }
+
+    // Covers: R126
+    //
+    // The test harness runs more than one thread, so a check that runs fails.
+    #[cfg(blivet_thread_count)]
+    #[test]
+    fn checked_init_verifies_one_thread_after_init_for_a_user_switch() {
+        let mut config = DaemonConfig::new();
+        config.user("nobody");
+        let init = checked_init(&config, || Ok(()));
+
+        let payload = catch_unwind(std::panic::AssertUnwindSafe(init))
+            .expect_err("a user switch checks the thread count after init");
+        let msg = payload
+            .downcast_ref::<String>()
+            .cloned()
+            .unwrap_or_default();
+        assert!(msg.contains("init left"), "{msg}");
+    }
+
+    // Covers: R126
+    #[cfg(blivet_thread_count)]
+    #[test]
+    fn checked_init_skips_the_check_without_a_user_switch() {
+        for group in [None, Some("99999")] {
+            let mut config = DaemonConfig::new();
+            if let Some(group) = group {
+                config.group(group);
+            }
+            let init = checked_init(&config, || Ok(7));
+            assert_eq!(
+                init().unwrap(),
+                7,
+                "group {group:?}: no setenv, so no check"
+            );
+        }
     }
 
     // Covers: R154
@@ -1648,8 +1842,6 @@ mod tests {
         config
             .pidfile(&pidfile)
             .stdout(&stdout)
-            .user("nobody")
-            .group("nogroup")
             .foreground(true)
             .close_fds(false);
 
@@ -1665,7 +1857,7 @@ mod tests {
             debug.contains("out.log"),
             "context should contain stdout path"
         );
-        assert!(debug.contains("nobody"), "context should contain user");
-        assert!(debug.contains("nogroup"), "context should contain group");
+        // User and group: context::tests::context_stores_config_fields. A
+        // sequence with them set would switch identity, which needs root.
     }
 }

@@ -67,7 +67,6 @@ fn readme_exit_codes_match_error_impl() {
         ),
         ("ExecFailed", DaemonizeError::ExecFailed("x".into())),
         ("NotifyFailed", DaemonizeError::NotifyFailed(dummy_io())),
-        ("PrivilegesNotDropped", DaemonizeError::PrivilegesNotDropped),
         ("Application", DaemonizeError::application(42, "x")),
     ];
     for (_, err) in &samples {
@@ -125,7 +124,6 @@ fn variant_is_covered(err: &DaemonizeError) {
         | DaemonizeError::PermissionDenied(_)
         | DaemonizeError::ExecFailed(_)
         | DaemonizeError::NotifyFailed(_)
-        | DaemonizeError::PrivilegesNotDropped
         | DaemonizeError::Application { .. } => {}
     }
 }

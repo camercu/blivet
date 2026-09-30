@@ -49,7 +49,7 @@ struct Platform {
     name: &'static str,
     /// Where the live thread count comes from, or `None` where it cannot be
     /// read at all. Being readable gates the safe `daemonize` and
-    /// `drop_privileges` entry points, which must prove the process is
+    /// `daemonize_with` entry points, which must prove the process is
     /// single-threaded before forking or calling `setenv`.
     ///
     /// One field rather than a readable flag beside a source flag, because
@@ -103,7 +103,7 @@ struct Platform {
 ///
 /// A target absent from this table still compiles: it takes the conservative
 /// fallback of every capability, and the `#[deprecated]` stubs for `daemonize`
-/// and `drop_privileges` say so at compile time in its consumers' builds.
+/// and `daemonize_with` say so at compile time in its consumers' builds.
 const PLATFORMS: &[Platform] = &[
     Platform {
         target_os: "linux",
@@ -295,8 +295,7 @@ fn write_platform_support_doc() {
     }
     doc.push_str(
         "\nOn any other target they are `#[deprecated]` stubs that panic. Use\n\
-         [`daemonize_unchecked`] and\n\
-         [`drop_privileges_unchecked`](DaemonContext::drop_privileges_unchecked)\n\
+         [`daemonize_unchecked`] and [`daemonize_with_unchecked`]\n\
          there, having established single-threadedness yourself.\n",
     );
     std::fs::write(&out, doc).unwrap_or_else(|e| panic!("write {}: {e}", out.display()));

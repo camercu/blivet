@@ -11,14 +11,13 @@
 //! - the `fork` call ([`Forker::fork`](crate::forker::Forker::fork) wrapping
 //!   `nix::unistd::fork`) in `forker.rs`, invoked from `daemonize_inner` in
 //!   `lib.rs`
-//! - `std::env::set_var` (USER/HOME/LOGNAME) in `drop_privileges_unchecked`
-//!   (`context.rs`) and the post-fork env step `set_env_vars` (`steps.rs`)
+//! - `std::env::set_var` (USER/HOME/LOGNAME) in `ResolvedIdentity::switch_to`
+//!   (`identity.rs`) and the post-fork env step `set_env_vars` (`steps.rs`)
 //! - `nix::sys::signal::sigaction` in test code
 //!
 //! The CLI binary (`main.rs`) is a separate crate root that cannot reach this
 //! module, so it carries its own documented `unsafe` blocks: the
-//! `daemonize_unchecked` / `drop_privileges_unchecked` calls (single-threaded
-//! contract) and the pre-exec `libc::signal(SIGPIPE, SIG_DFL)` reset (R128).
+//! `daemonize_unchecked` call (single-threaded contract) and the pre-exec `libc::signal(SIGPIPE, SIG_DFL)` reset (R128).
 
 #![allow(unsafe_code)]
 
@@ -430,8 +429,8 @@ pub(crate) fn thread_count() -> std::io::Result<usize> {
     // sizing call above and this fetch, the kernel truncates to the buffer
     // capacity and reports the stale (smaller) count, so this can under-count.
     // That is the unsafe direction for the single-thread guard, but it only
-    // occurs if the caller races thread creation against `daemonize`/
-    // `drop_privileges` — which already violates their documented "no threads"
+    // occurs if the caller races thread creation against `daemonize` or a
+    // `daemonize_with` init — which already violates their documented "no threads"
     // contract. Closing it fully would need a bounded sizing/fetch retry loop;
     // OpenBSD is a tier-3 target without CI coverage of that path, so it is
     // documented rather than hardened here.

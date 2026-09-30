@@ -3,10 +3,10 @@
 Rust library and CLI tool for daemonizing processes. Mirrors Debian's
 daemonize(1) with improvements: double-fork is mandatory (not delegated
 to `daemon(3)`), signal dispositions and mask are reset, and a
-notification pipe lets the parent wait for daemon readiness. Privilege
-dropping is split-phase: `daemonize()` returns a context while still
-privileged, and the caller explicitly calls `drop_privileges()` when
-ready.
+notification pipe lets the parent wait for daemon readiness. The daemon
+switches to the configured user and group before `daemonize()` returns;
+work that needs the original privileges runs inside the call, through
+`daemonize_with()`'s `init` (ADR 0004).
 
 The name comes from the [blivet](https://en.wikipedia.org/wiki/Impossible_trident),
 the "impossible fork" optical illusion (a.k.a. the devil's tuning fork).
@@ -57,7 +57,7 @@ Support is tiered by what CI proves:
 
 CI builds no other architecture of a Supported OS.
 
-On a best-effort target `daemonize()` and `drop_privileges()` are
+On a best-effort target `daemonize()` and `daemonize_with()` are
 `#[deprecated]` stubs that panic if called; the `unsafe` unchecked
 forms are the supported path there. A non-Unix target is a
 `compile_error!` naming the target.
@@ -117,11 +117,12 @@ rather than behind a fake-safe wrapper.
   an `unsafe fn` that invokes it as `unsafe { forker.fork() }`, forwarding the
   single-threaded contract to its callers — `daemonize_unchecked`, or the
   checked `daemonize` after its guard.
-- `lib.rs`: `daemonize_unchecked()` is a public `unsafe fn` (caller contract),
-  and the safe `daemonize()` calls it via `unsafe { … }` after the guard.
-- `context.rs`: `DaemonContext::drop_privileges_unchecked()` is a public
-  `unsafe fn` that calls `setenv` (`USER`/`HOME`/`LOGNAME`); the safe
-  `drop_privileges()` calls it via `unsafe { … }` after the guard.
+- `lib.rs`: `daemonize_unchecked()` and `daemonize_with_unchecked()` are
+  public `unsafe fn`s (caller contract), and the safe `daemonize()` and
+  `daemonize_with()` call them via `unsafe { … }` after the guard.
+- `identity.rs`: `ResolvedIdentity::switch_to()` is a crate-private
+  `unsafe fn` that calls `setenv` (`USER`/`HOME`/`LOGNAME`); the
+  post-fork sequence calls it under `daemonize_inner`'s contract.
 - `steps.rs`: `set_env_vars` calls `setenv` in the post-fork sequence — sound
   because the child is single-threaded by `fork` (or, in foreground mode, the
   entry point required single-threadedness).
@@ -181,21 +182,27 @@ ctx.notify_parent()?;
 // daemon process continues here
 ```
 
-**Split-phase privilege dropping** (when user/group switching is needed):
+**Privileged init** (work that needs the original privileges):
 
 ```rust
 let mut config = DaemonConfig::new();
 config.pidfile("/var/run/foo.pid").user("nobody").group("nogroup");
 
-let mut ctx = daemonize(&config)?;
-// privileged work here (e.g., bind port 80)
-ctx.drop_privileges()?;                 // chown pidfile/lockfile/logs, then setgid + setuid
+let (mut ctx, listener) = daemonize_with(&config, || {
+    // still root, holding the lock (e.g., bind port 80)
+    TcpListener::bind("0.0.0.0:80").map_err(|e| DaemonizeError::application(71, e.to_string()))
+})?;
+// now running as nobody:nogroup; pidfile/lockfile/logs chowned first
 ctx.notify_parent()?;
 ```
 
 ### DaemonContext
 
-`daemonize()` returns `Result<DaemonContext, DaemonizeError>`.
+`daemonize()` returns `Result<DaemonContext, DaemonizeError>`;
+`daemonize_with()` returns `Result<(DaemonContext, T), DaemonizeError>`,
+where `T` is `init`'s value. The context exists only after the identity
+switch, so there is no way to signal readiness while still privileged
+(R125).
 `DaemonContext` is `#[non_exhaustive]` with all private fields. It has a
 manual `Debug` impl (see below). Do not derive `Clone` or `PartialEq`.
 
@@ -210,7 +217,6 @@ pidfile, lockfile, stdout, stderr, user, group, `cleanup_on_drop`, and
 | `lockfile`           | `Option<Flock>`     | Owned lock (`nix::fcntl`); drop releases.          |
 | `notify_pipe`        | `Option<NotifyPipe>`| Write end of notification pipe; see below.         |
 | `cleaned_up`         | `bool`              | Internal flag; prevents double cleanup.            |
-| `privileges_dropped` | `bool`              | Set once `drop_privileges()` completes; gates `notify_parent()` (see R125). |
 
 **Debug output:** the manual `impl` does not print `config` verbatim.
 It renders `lockfile` as `held`/`none` and `notify_pipe` as
@@ -237,55 +243,6 @@ an internal `cleaned_up` flag. Note that `Drop` does not run when the
 process is killed by a signal — callers must install a signal handler
 to ensure `cleanup()` runs (either explicitly or by dropping
 `DaemonContext` at main-loop exit).
-
-**Privilege method:**
-
-`drop_privileges(&mut self) -> Result<(), DaemonizeError>` first chowns
-the configured paths (unless disabled, see below), then performs
-user/group switching.
-
-The chown phase changes ownership of pidfile, lockfile, stdout, and
-stderr files to the resolved target user/group, while still privileged.
-Skips files that are not configured. No-op if neither user nor group is
-configured. Disabled by `config.chown_paths(false)` — for hardening
-(keep files owned by the original privileged user) or custom ownership.
-On error, paths already processed remain chowned; the chown is
-idempotent, so retrying after fixing the cause is safe. A chown failure
-aborts the drop before any `setgid`/`setuid`, so the caller is still
-privileged and can remediate. The chown follows symlinks (`chown(2)`,
-not `lchown`), matching how these files are opened, so configured paths
-must live in directories not writable by untrusted users — otherwise a
-planted symlink could redirect the privileged chown onto an arbitrary
-file.
-
-The switch phase resolves each spec. A string that does not parse as a
-`u32` is a name, resolved via `getpwnam()`/`getgrnam()`. A string that
-does parse is an id, and the two sides then differ, because what the
-crate needs from each differs:
-
-- A numeric **user** is still looked up, via `getpwuid()`. Switching to
-  a user means `initgroups()` and `setgid()` with that user's primary
-  group, and setting `HOME` — none of which the number carries. An id
-  with no passwd entry cannot supply them and is a `UserNotFound`
-  error.
-- A numeric **group** is used as the GID directly, with no `getgrgid()`
-  lookup. `setgid()` needs nothing but the number, and a GID with no
-  group entry is ordinary on Unix, so refusing one would reject a
-  legitimate configuration.
-
-Four combinations:
-
-- Neither user nor group: no-op.
-- User only: resolve user via `getpwnam()`, `initgroups(username,
-  primary_gid)`, `setgid(primary_gid)`, `setuid(uid)`.
-- Both user and group: resolve user via `getpwnam()`, resolve group
-  via `getgrnam()`, `initgroups(username, user_primary_gid)`,
-  `setgid(group_gid)`, `setuid(uid)`.
-- Group only: resolve group via `getgrnam()`, `setgid(group_gid)`.
-
-After user switching, sets `USER`, `HOME`, `LOGNAME` environment
-variables. These unconditionally overwrite any `.env()` values from
-the daemonization sequence.
 
 **Notification methods:**
 
@@ -345,8 +302,7 @@ are lowercase with no trailing punctuation.
 | `ChownError`       | chown of pidfile/lockfile/output file failed             |
 | `ExecFailed`       | CLI-only: exec of target program failed (other than `ENOENT`/`EACCES`) |
 | `NotifyFailed`     | Writing the readiness byte to the notification pipe failed |
-| `PrivilegesNotDropped` | User/group configured but `drop_privileges()` never called before `notify_parent()` |
-| `Application`      | Caller-reported failure during the privileged init window (via `application()`/`report_error`) |
+| `Application`      | Caller-reported startup failure (returned from `init`, or via `application()`/`report_error`) |
 
 `ProgramNotFound` and `ExecFailed` are produced only by the CLI, never
 by the library. They are in the shared enum so the CLI can use the
@@ -546,8 +502,9 @@ configured. It does not call `getpwnam()` or `getgrnam()`.
 
 > User/group lookups can trigger NSS/LDAP/NIS network calls with
 > unpredictable latency and failure modes. Resolution is a runtime
-> concern handled by `drop_privileges()`. Consumers who want early
-> validation should call `getpwnam()`/`getgrnam()` themselves.
+> concern: the post-fork sequence resolves them before `init` runs
+> (step 14). Consumers who want earlier validation should call
+> `getpwnam()`/`getgrnam()` themselves.
 
 ### Environment entry validation
 
@@ -622,16 +579,18 @@ chdir, stdin redirect, and env changes may already have happened).
     enumerated open fds (or iterate 3..`rlim_cur` where enumeration
     is unavailable), skipping lockfile fd and notification pipe fd.
     See fd closing.
-14. **Return `DaemonContext`** owning lockfile `Option<Flock>`,
-    `pipe_wr` as `Option<OwnedFd>`, and cloned path/user/group
-    fields from config.
-
-> User/group switching (formerly step 12) is no longer performed by
-> `daemonize()`. It is the caller's responsibility to call
-> `ctx.drop_privileges()` after daemonization. This split-phase
-> design gives the caller a privileged window between `daemonize()`
-> and `drop_privileges()` for operations like binding privileged
-> ports. See `DaemonContext::drop_privileges()` above.
+14. **Resolve the target identity** if a user or group is configured,
+    so a missing one fails before `init` runs (R155).
+15. **Run `init`** (`daemonize_with()` only; `daemonize()` runs none).
+    It runs after the lock and the fd sweep, so only the instance
+    holding the lock runs it and what it opens stays open (R153). Its
+    error is the sequence's (R154).
+16. **Chown** the pidfile, lockfile, stdout, and stderr to the target
+    identity, unless `chown_paths(false)`. See path ownership.
+17. **Switch identity.** See user/group switching.
+18. **Return `DaemonContext`** owning lockfile `Option<Flock>`,
+    `pipe_wr` as `Option<OwnedFd>`, and the cloned config, beside
+    `init`'s value.
 
 ### Post-fork error policy
 
@@ -701,10 +660,8 @@ notification pipe.
 ### Output file redirect
 
 Step 12 opens configured stdout/stderr files and redirects the
-corresponding fds. Since user switching is now the caller's
-responsibility (via `drop_privileges()`), files are created as the
-current user (typically root); `drop_privileges()` chowns them to the
-target user before switching.
+corresponding fds. Files are created as the current user (typically
+root); step 16 chowns them to the target user before step 17 switches.
 
 In foreground mode a failed step 12 undoes what it did (R147). Each
 stdio slot is saved before it moves and put back if anything after
@@ -751,9 +708,8 @@ The append flag applies uniformly to both stdout and stderr.
 
 > Opening all three fds as `/dev/null` in step 6, then reopening
 > configured files in step 12, ensures output is captured from the
-> start. Since user switching is now the caller's responsibility,
-> output files are created as the current user; `drop_privileges()`
-> chowns them to the target user before switching.
+> start. Output files are created as the current user; step 16 chowns
+> them to the target user before the switch.
 
 ### Pidfile mechanics
 
@@ -796,59 +752,72 @@ SIGPIPE disposition untouched. The CLI restores `SIG_DFL` immediately
 before `exec` so target programs still start with the conventional
 disposition (an ignored SIGPIPE would otherwise survive `exec(2)`).
 
-### User/group switching (DaemonContext::drop_privileges)
+### User/group switching (steps 14 and 17)
 
-User/group switching is performed by `DaemonContext::drop_privileges()`,
-not during the daemonization sequence. The caller controls when
-privilege dropping occurs.
+The daemonization sequence switches identity itself, after `init`
+(ADR 0004). Step 14 resolves the specs before `init` runs; step 17
+switches.
 
-**Numeric ID resolution:** if the user or group string parses as a
-`u32`, it is treated as a numeric UID/GID. Otherwise, resolve via
-`getpwnam()` / `getgrnam()`. This matches standard Unix tool behavior
-(`chown`, `su`, etc.).
+**Resolution.** A string that does not parse as a `u32` is a name,
+resolved via `getpwnam()`/`getgrnam()`. A string that does parse is an
+id, and the two sides then differ, because what the crate needs from
+each differs:
+
+- A numeric **user** is still looked up, via `getpwuid()`. Switching to
+  a user means `initgroups()` and `setgid()` with that user's primary
+  group, and setting `HOME`, none of which the number carries. An id
+  with no passwd entry cannot supply them and is a `UserNotFound`
+  error.
+- A numeric **group** is used as the GID directly, with no `getgrgid()`
+  lookup. `setgid()` needs nothing but the number, and a GID with no
+  group entry is ordinary on Unix, so refusing one would reject a
+  legitimate configuration.
 
 **Four combinations:**
 
-- Neither user nor group configured: no-op.
-- User only: `getpwnam()` → `initgroups(username, primary_gid)` →
+- Neither user nor group configured: no switch.
+- User only: `initgroups(username, primary_gid)` →
   `setgid(primary_gid)` → `setuid(uid)`.
-- User and group: `getpwnam()` → `getgrnam()` →
-  `initgroups(username, user_primary_gid)` → `setgid(group_gid)` →
-  `setuid(uid)`.
-- Group only: `getgrnam()` → `setgid(group_gid)`.
+- User and group: `initgroups(username, user_primary_gid)` →
+  `setgid(group_gid)` → `setuid(uid)`.
+- Group only: `setgid(group_gid)`.
 
-After switching, set `USER`, `HOME`, `LOGNAME` environment variables —
-these unconditionally overwrite any `.env()` values from step 11.
+After switching to a user, set `USER`, `HOME`, `LOGNAME` environment
+variables. These unconditionally overwrite any `.env()` values from
+step 11.
 
 **Thread-count guard.** The `USER`/`HOME`/`LOGNAME` writes use `setenv`,
-which is not thread-safe. So — mirroring `daemonize`/`daemonize_unchecked`
-— the safe `drop_privileges()` reads the kernel thread count and panics
-unless exactly 1 thread is running, but **only when a user switch is
-configured** (the sole `setenv` path; a group-only switch performs no
-`setenv` and is not guarded). The unchecked `unsafe fn
-drop_privileges_unchecked()` performs the switch without the check, for
-callers that uphold the single-threaded contract themselves or run on a
-target without a thread-count source — where the checked `drop_privileges()`
-is a `#[deprecated]` stub (see [Unsafe boundary](#unsafe-boundary)).
+which is not thread-safe. The checked `daemonize()` and
+`daemonize_with()` check the thread count at entry, and
+`daemonize_with()` checks again after `init` returns, **only when a
+user switch is configured** (the sole `setenv` path; a group-only
+switch performs no `setenv`). An `init` may start threads only if it
+joins them before it returns. The unchecked forms skip both checks.
 
-`getpwnam()` failure returns `UserNotFound`. `getgrnam()` failure
-returns `GroupNotFound`. `initgroups`/`setgid`/`setuid` failure returns
-`PermissionDenied`.
+User resolution failure returns `UserNotFound`, group resolution
+failure `GroupNotFound`, and `initgroups`/`setgid`/`setuid` failure
+`PermissionDenied`. Each is a post-fork error (see post-fork error
+policy); the pidfile the sequence wrote is removed.
 
 > `initgroups()` (not bare `setgroups()`) is needed because
 > `getpwnam()` only returns the primary GID; `initgroups()` consults
 > the group database for supplementary groups.
 
-### Path ownership (drop_privileges chown phase)
+### Path ownership (step 16)
 
-Before switching user/group, `drop_privileges()` changes ownership of
-all configured path-based resources (pidfile, lockfile, stdout, stderr)
-to the resolved target user/group, while still privileged. Resolves
-user/group using the same string-parsing strategy as the switch phase.
-Disabled by `config.chown_paths(false)`.
+Before switching, the sequence changes ownership of the configured
+path-based resources (pidfile, lockfile, stdout, stderr) that exist to
+the resolved target user and group, while still privileged. Disabled by
+`config.chown_paths(false)`, for hardening (keep files owned by the
+original privileged user) or custom ownership.
 
-`chown()` failure returns `ChownError` and aborts the drop before any
-`setgid`/`setuid`.
+`chown()` failure returns `ChownError` naming the path and aborts the
+sequence before any `setgid`/`setuid`. Paths already processed stay
+chowned; the chown is idempotent. It follows symlinks (`chown(2)`, not
+`lchown`), matching how these files are opened, so configured paths
+must live in directories not writable by untrusted users: a planted
+symlink would otherwise redirect the privileged chown onto an arbitrary
+file.
 
 ### Mode and umask interaction
 
@@ -976,12 +945,12 @@ This is a CLI-only convenience; the library requires explicit
 
 ### Program execution
 
-The CLI calls `unsafe { daemonize_unchecked(&config) }`, then:
+The CLI calls `unsafe { daemonize_unchecked(&config) }`, which also
+chowns the configured paths and switches to the configured user and
+group, then:
 
-1. If user or group is configured: calls `ctx.drop_privileges()`
-   (which chowns the configured paths first).
-2. Clears `CLOEXEC` on the lockfile fd (so the lock survives exec).
-3. Execs via `execvp`. argv[0] is the (possibly canonicalized) program
+1. Clears `CLOEXEC` on the lockfile fd (so the lock survives exec).
+2. Execs via `execvp`. argv[0] is the (possibly canonicalized) program
    path; subsequent elements are trailing arguments in order.
 
 The CLI does **not** call `notify_parent()`. Instead, it relies on the
@@ -1032,7 +1001,6 @@ exit_code()` returns these values.
 | `ChownError`             | 73        | `EX_CANTCREAT`        |
 | `ExecFailed`             | 71        | `EX_OSERR`            |
 | `NotifyFailed`           | 71        | `EX_OSERR`            |
-| `PrivilegesNotDropped`   | 70        | `EX_SOFTWARE`         |
 | `Application`            | caller's `code`; 0 remapped to 70 | (caller's choice) |
 
 Pre-daemonization errors: CLI prints message to stderr, exits per
@@ -1152,7 +1120,7 @@ Spawn CLI binary, inspect /proc and files. Require Linux, /proc:
   independent group.
 - **Output file ownership (root-only, skip in CI):** with `-u`,
   assert stdout/stderr files are owned by the target user (chowned
-  by `drop_privileges()`).
+  in step 16).
 - **Foreground mode:** with `-f`, assert daemon runs in same
   process group; no fork occurs.
 - **Error exit codes:** one test per exit code table row.
@@ -1171,7 +1139,7 @@ Spawn CLI binary, inspect /proc and files. Require Linux, /proc:
 
 Module-level doc in `lib.rs` with two usage examples: (1) simple
 builder → `daemonize()` → `notify_parent()` → daemon
-continues; (2) split-phase with `drop_privileges()` →
+continues; (2) `daemonize_with()` with privileged `init` →
 `notify_parent()`. Use `?` (not `unwrap` or `try!`); hidden
 `fn main()` wrapper.
 
@@ -1185,9 +1153,10 @@ continues; (2) split-phase with `drop_privileges()` →
   error, not a panic.
 - `validate()`: `# Errors`.
 - `lockfile_fd()`: CLOEXEC clearing use case, lifetime semantics.
-- `drop_privileges()`: numeric ID resolution, four user/group
-  combinations, env var side effects, the chown phase and its
-  `chown_paths(false)` opt-out. Document recommended call order.
+- `daemonize_with()`: when `init` runs (after the lock and the fd
+  sweep, before the switch), its error path, and the post-init thread
+  check. `DaemonConfig::user()`/`group()`: resolution, the switch, and
+  env var side effects.
 - `DaemonConfig::chown_paths()`: default `true`; disable to keep files
   owned by the original privileged user or manage ownership yourself.
 - `notify_parent()`: parent exit behavior, Drop semantics.
@@ -1231,7 +1200,6 @@ categories = ["os::unix-apis"]
 - POSIX capability manipulation
 - Linux namespace handling
 - Chroot support
-- Privileged action callbacks (use split-phase `drop_privileges()` instead)
 - Any form of `exec` within the library (exec is CLI-only)
 - Serde support for `DaemonConfig`
 - `.clear_env()` builder method
@@ -1257,7 +1225,7 @@ verification points.
   In foreground mode, stdout/stderr are inherited when not configured.
 - R9. Configured stdout/stderr files contain expected output.
 - R10. Configured output files are owned by the target user when `-u`
-  is used (chowned by `drop_privileges()`).
+  is used (chowned in step 16).
 - R11. Files are truncated when append is off.
 - R12. Files are appended when append is on.
 - R13. Append flag applies uniformly to both stdout and stderr.
@@ -1311,12 +1279,12 @@ verification points.
 - R56. Bare program names (no `/`) are resolved via PATH at exec time.
 - R57. First fork failure returns `Err` directly, not via pipe.
 - R58. Second fork failure is reported via notification pipe.
-- R59. `drop_privileges()` with user only: sets UID, GID, and
+- R59. The identity switch with user only: sets UID, GID, and
   supplementary groups via user's primary GID.
-- R60. `drop_privileges()` with user and group: sets UID via user,
+- R60. The identity switch with user and group: sets UID via user,
   GID via independent group, supplementary groups via user.
-- R61. `drop_privileges()` with group only: sets GID, no setuid.
-- R62. `drop_privileges()` with neither: no-op.
+- R61. The identity switch with group only: sets GID, no setuid.
+- R62. With neither user nor group, the sequence switches nothing.
 - R63. A numeric string user (e.g. "1000") is resolved through
   `getpwuid()` and the crate reports what the passwd database says, so
   an id the database does not know is a `UserNotFound` error: switching
@@ -1325,20 +1293,20 @@ verification points.
   business, not the crate's — bionic synthesises entries for Android's
   AID ranges, where an id unassigned on Linux resolves. See R142 for
   groups, which differ.
-- R64. `drop_privileges()` chowns pidfile, lockfile, stdout, stderr to
-  target user/group before switching.
+- R64. Step 16 chowns pidfile, lockfile, stdout, stderr to the target
+  user/group before switching.
 - R65. The chown phase is a no-op when neither user nor group is set.
 - R65a. `config.chown_paths(false)` disables the chown phase; the
   switch still happens.
-- R65b. A chown failure aborts `drop_privileges()` before any
-  `setgid`/`setuid` (caller stays privileged).
+- R65b. A chown failure aborts the sequence before any
+  `setgid`/`setuid`.
 - R66. Foreground mode: daemon runs in current process (no fork).
 - R67. Foreground mode: `notify_parent()` is a no-op.
 - R68. Foreground mode: all non-fork steps still execute.
 - R69. `close_fds` false: inherited fds are not closed.
 - R70. Group switching sets GID independently from user's primary GID.
-- R71. CLI calls `drop_privileges()` (which chowns configured paths
-  first) when user or group is configured.
+- R71. The CLI's daemonize call chowns configured paths and switches
+  identity when user or group is configured.
 - R72. `cleanup()` removes pidfile from disk.
 - R73. `cleanup()` is idempotent (second call is no-op).
 - R74. `cleanup()` ignores errors (best-effort).
@@ -1382,10 +1350,10 @@ verification points.
 - R99. Signal reset: 1..SIGRTMAX, skip SIGKILL/SIGSTOP/SIGPIPE,
   EINVAL → skip.
 - R100. Signal reset uses `libc::sigaction()` directly.
-- R101. `drop_privileges()` user switch order: `getpwnam` →
-  `initgroups` → `setgid` → `setuid`.
-- R102. Output files opened in daemonization step 12 (before caller's
-  privilege drop).
+- R101. User switch order: `getpwnam` → `initgroups` → `setgid` →
+  `setuid`.
+- R102. Output files opened in daemonization step 12 (before the
+  identity switch).
 - R103. Fd closing: brute-force 3..rlim_cur, not `/proc/self/fd`.
 - R104. Fd closing skips lockfile fd and notification pipe fd.
 - R105. `getrlimit` failure (fd-close fallback) reports `SystemError`.
@@ -1416,19 +1384,19 @@ verification points.
 - R121. Foreground mode skips steps 1–3 (pipe, forks, setsid) and
   leaves stdout/stderr inherited in step 6.
 - R122. `close_fds` false skips step 13 (fd closing).
-- R123. The `drop_privileges()` chown phase resolves user/group using
-  the same string-parsing strategy as the switch phase.
-- R124. CLI calls `drop_privileges()` (chowning configured paths first)
-  when user or group is configured, between `daemonize()` and exec.
-- R125. When a user/group is configured but `drop_privileges()` was
-  never called, `notify_parent()` returns `PrivilegesNotDropped`
-  (exit 70) instead of signaling readiness — so a daemon can never
-  report itself healthy while still holding elevated privileges.
-- R126. `drop_privileges()` panics when a user switch is configured and
-  the thread count is not exactly 1 (the user-switch path calls `setenv`,
-  which is not thread-safe). The unchecked `unsafe fn
-  drop_privileges_unchecked()` skips the check; on targets without a
-  thread-count source the checked form is a `#[deprecated]` stub.
+- R123. The chown and the switch use one resolution of the user/group
+  specs, made in step 14.
+- R124. The CLI switches identity inside its daemonize call, before
+  exec.
+- R125. A daemon can never signal readiness while still holding
+  elevated privileges: the `DaemonContext` exists only after the
+  identity switch succeeds, and a switch failure ends the sequence.
+- R126. The checked `daemonize_with()` panics when a user switch is
+  configured and `init` leaves the thread count other than 1 (the
+  user-switch path calls `setenv`, which is not thread-safe). A
+  group-only switch is not checked. The unchecked forms skip the
+  check; on targets without a thread-count source the checked forms
+  are `#[deprecated]` stubs.
 - R127. The caller's SIGPIPE disposition is preserved across
   daemonization: the signal reset never touches SIGPIPE (see signal
   reset), so the Rust runtime's `SIG_IGN` — and with it `EPIPE`-on-write
@@ -1574,3 +1542,7 @@ verification points.
 - R154. An error from `init` is the sequence's error: returned in
   foreground mode, sent to the launcher with its exit code in daemon
   mode. The pidfile the sequence wrote is removed either way.
+- R155. The target identity is resolved before `init` runs, so a user
+  or group that does not exist fails before init's side effects. The
+  chown (unless disabled) and the switch run after `init`, in that
+  order.
