@@ -80,8 +80,7 @@ calls `report_error()` before notifying, the launcher exits non-zero with the
 matching `sysexits.h` code -- so it sees a real result, not a process that
 detached and then crashed.
 
-Steps 1-2 must run **single-threaded**: spawn threads, async runtimes, or accept
-loops only *after* `drop_privileges()` returns. See [Safety](#safety) for why.
+Steps 1 and 2 must run **single-threaded**. [Safety](#safety) explains why.
 
 ## Install
 
@@ -160,37 +159,23 @@ config.foreground(true).close_fds(false); // keep supervisor-passed fds
 > runnable daemonized TCP echo server with signal-based shutdown and pidfile
 > cleanup.
 
-### Entry points
-
-- **`daemonize(&config)`** -- the safe, recommended entry point. It verifies the
-  process is single-threaded, then daemonizes. Available wherever the kernel's
-  thread count can be read — see [Platform support](#platform-support).
-  On any other target it is a `#[deprecated]` stub that panics; use the
-  unchecked form below.
-- **`unsafe { daemonize_unchecked(&config) }`** -- the escape hatch, on all Unix
-  platforms. It skips the thread-count check, so *you* must guarantee the
-  process is single-threaded.
-
-`DaemonContext::drop_privileges()` mirrors this split: it is safe and checked
-(panicking if a user switch is configured while multithreaded), with
-`unsafe { drop_privileges_unchecked() }` as the opt-out. See [Safety](#safety).
-
 ## Safety
 
-Forking a multithreaded process is unsound: mutexes held by other threads stay
-locked forever in the child, deadlocking it. A second thread-unsafe step
-follows -- `drop_privileges()` calls `setenv` (`USER`/`HOME`/`LOGNAME`) when
-switching users -- so the single-threaded window runs from the fork through
-`drop_privileges()` (see [How it works](#how-it-works)). Spawn
-threads, an async runtime, or an accept loop only *after* `drop_privileges()`
-returns -- or after `daemonize()` returns if you don't switch users.
+Forking a multithreaded process is unsound. Mutexes that other threads hold stay
+locked forever in the child, so the child deadlocks. `drop_privileges()` has the
+same hazard, because it calls `setenv` for `USER`, `HOME`, and `LOGNAME` when it
+switches users. Spawn threads, an async runtime, or an accept loop only after
+`drop_privileges()` returns, or after `daemonize()` returns if you don't switch
+users.
 
-Both checked entry points read the kernel thread count and panic if violated:
-`daemonize()` at the fork, and `drop_privileges()` at its `setenv` (only when a
-user switch is configured -- the sole `setenv` path; a group-only switch is not
-guarded). `daemonize_unchecked()` and `drop_privileges_unchecked()` are the
-`unsafe` opt-outs for callers who manage the contract themselves, or who run on
-a target without a thread-count source.
+The checked entry points enforce this. `daemonize()` reads the kernel thread
+count and panics unless exactly one thread is running. `drop_privileges()`
+does the same before it calls `setenv`, which it does only for a user switch. A
+group-only switch calls no `setenv`, so nothing checks it. The `unsafe` forms
+`daemonize_unchecked()` and `drop_privileges_unchecked()` skip the check, for
+callers who manage the contract themselves. They are also the only entry points
+on a target where the thread count can't be read (see
+[Platform support](#platform-support)).
 
 ## API reference
 
