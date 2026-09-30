@@ -269,6 +269,33 @@ pub unsafe fn daemonize_unchecked(config: &DaemonConfig) -> Result<DaemonContext
     unsafe { daemonize_inner(config, &mut RealForker) }
 }
 
+/// [`daemonize_unchecked`], running privileged `init` inside the sequence.
+///
+/// `init` runs in the daemon process after the lock is taken and inherited
+/// descriptors are closed, while the process still has the privileges it
+/// started with. Its value comes back beside the [`DaemonContext`]. See
+/// [`daemonize_with`], the checked form.
+///
+/// # Safety
+///
+/// As [`daemonize_unchecked`], and `init` must not leave a thread running.
+///
+/// # Errors
+///
+/// As [`daemonize_unchecked`]. An error from `init` is the sequence's error:
+/// returned in foreground mode, sent to the launcher with its exit code in
+/// daemon mode. Either way the pidfile the sequence wrote is removed.
+#[cfg(unix)]
+#[allow(unsafe_code)]
+pub unsafe fn daemonize_with_unchecked<T>(
+    config: &DaemonConfig,
+    init: impl FnOnce() -> Result<T, DaemonizeError>,
+) -> Result<(DaemonContext, T), DaemonizeError> {
+    config.validate()?;
+    // SAFETY: this `unsafe fn`'s own contract requires single-threadedness.
+    unsafe { daemonize_inner_with(config, &mut RealForker, init) }
+}
+
 // The `cfg`s below gate on `blivet_thread_count`, the capability alias
 // `build.rs` sets for targets where the live thread count can be read. The
 // count itself lives in the `thread_count` module.
@@ -348,6 +375,82 @@ pub fn daemonize(config: &DaemonConfig) -> Result<DaemonContext, DaemonizeError>
     }
 }
 
+/// Daemonize, running privileged `init` in the daemon before it returns.
+///
+/// Use it for work that needs the privileges the process started with, or
+/// that must happen only once per running daemon: binding a port below 1024,
+/// opening root-only files, `chroot`. `init` runs in the daemon process after
+/// the pidfile lock is taken, so a second instance fails with
+/// [`LockConflict`](DaemonizeError::LockConflict) before its `init` runs. It
+/// runs after inherited descriptors are closed, so what it opens stays open.
+/// Whatever it returns comes back beside the [`DaemonContext`]:
+///
+/// ```no_run
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// use blivet::{daemonize_with, DaemonConfig, DaemonizeError};
+///
+/// let mut config = DaemonConfig::new();
+/// config.pidfile("/var/run/myapp.pid");
+///
+/// let (mut ctx, listener) = daemonize_with(&config, || {
+///     std::net::TcpListener::bind("0.0.0.0:80")
+///         .map_err(|e| DaemonizeError::application(71, format!("bind: {e}")))
+/// })?;
+/// ctx.notify_parent()?;
+/// # drop(listener);
+/// # Ok(())
+/// # }
+/// ```
+///
+/// # Platform support
+///
+/// As [`daemonize`].
+///
+/// # Errors
+///
+/// As [`daemonize_with_unchecked`].
+///
+/// # Panics
+///
+/// As [`daemonize`].
+#[cfg(unix)]
+#[cfg(blivet_thread_count)]
+pub fn daemonize_with<T>(
+    config: &DaemonConfig,
+    init: impl FnOnce() -> Result<T, DaemonizeError>,
+) -> Result<(DaemonContext, T), DaemonizeError> {
+    assert_single_threaded("daemonize_with");
+    #[allow(unsafe_code)]
+    unsafe {
+        daemonize_with_unchecked(config, init)
+    }
+}
+
+/// Stub for targets where the thread count cannot be queried. See the
+/// [`daemonize`] stub.
+///
+/// # Panics
+///
+/// Always panics: the operation is unsupported on this target.
+#[cfg(unix)]
+#[cfg(not(blivet_thread_count))]
+#[cfg_attr(test, mutants::skip)]
+#[deprecated(
+    note = "daemonize_with cannot verify the thread count on this target. \
+            Call `unsafe { daemonize_with_unchecked(&config, init) }` and ensure the \
+            process is single-threaded yourself."
+)]
+pub fn daemonize_with<T>(
+    _config: &DaemonConfig,
+    _init: impl FnOnce() -> Result<T, DaemonizeError>,
+) -> Result<(DaemonContext, T), DaemonizeError> {
+    panic!(
+        "daemonize_with is unsupported on this target (cannot query the thread \
+         count); call `unsafe {{ daemonize_with_unchecked(&config, init) }}` and \
+         ensure the process is single-threaded yourself"
+    )
+}
+
 /// Stub for targets where the thread count cannot be queried, so there is no
 /// safe wrapper to offer.
 ///
@@ -392,6 +495,22 @@ pub(crate) unsafe fn daemonize_inner(
     config: &DaemonConfig,
     forker: &mut impl Forker,
 ) -> Result<DaemonContext, DaemonizeError> {
+    // SAFETY: forwarded; this function has the same contract.
+    unsafe { daemonize_inner_with(config, forker, || Ok(())) }.map(|(ctx, ())| ctx)
+}
+
+/// [`daemonize_inner`], running `init` in the final process after step 13.
+///
+/// # Safety
+///
+/// As [`daemonize_inner`]. `init` runs inside the single-threaded window.
+#[cfg(unix)]
+#[allow(unsafe_code)]
+pub(crate) unsafe fn daemonize_inner_with<T>(
+    config: &DaemonConfig,
+    forker: &mut impl Forker,
+    init: impl FnOnce() -> Result<T, DaemonizeError>,
+) -> Result<(DaemonContext, T), DaemonizeError> {
     let foreground = config.foreground;
 
     // Steps 1–3: Fork sequence (skipped in foreground mode). `None` here
@@ -476,8 +595,8 @@ pub(crate) unsafe fn daemonize_inner(
     // original caller, so funnel any error through one place: notify the
     // parent and exit. `pipe_wr` stays available so the error path can still
     // signal it.
-    match run_post_fork(config, &mut pipe_wr) {
-        Ok(ctx) => Ok(ctx),
+    match run_post_fork(config, &mut pipe_wr, init) {
+        Ok(done) => Ok(done),
         Err(e) if foreground => Err(e),
         Err(e) => {
             if let Some(pipe) = pipe_wr.take() {
@@ -533,10 +652,11 @@ impl Drop for PidfileOnAbort<'_> {
 /// [`daemonize_inner`]. On success the notification pipe write end is moved into
 /// the returned [`DaemonContext`]; `pipe_wr` is left `None`.
 #[cfg(unix)]
-fn run_post_fork(
+fn run_post_fork<T>(
     config: &DaemonConfig,
     pipe_wr: &mut Option<NotifyPipe>,
-) -> Result<DaemonContext, DaemonizeError> {
+    init: impl FnOnce() -> Result<T, DaemonizeError>,
+) -> Result<(DaemonContext, T), DaemonizeError> {
     // Step 4: Set umask
     steps::set_umask(config.umask);
 
@@ -618,10 +738,16 @@ fn run_post_fork(
         steps::close_inherited_fds(&skip_fds)?;
     }
 
-    // Step 14: Return DaemonContext (clones the config-derived fields it needs).
+    // Step 14: The caller's privileged init (R153). After the lock, so only
+    // the instance holding it runs; after the fd sweep, so what it opens
+    // stays open. An error is the sequence's, and the abort guard removes the
+    // pidfile (R154).
+    let value = init()?;
+
+    // Step 15: Return DaemonContext (clones the config-derived fields it needs).
     // The context owns the pidfile from here, so the abort guard stands down.
     pidfile_on_abort.disarm();
-    Ok(DaemonContext::new(config, lockfile, pipe_wr.take()))
+    Ok((DaemonContext::new(config, lockfile, pipe_wr.take()), value))
 }
 
 /// Parent-side pipe reader. Reads from the pipe and exits accordingly.
@@ -680,6 +806,138 @@ mod tests {
     ) -> Result<DaemonContext, DaemonizeError> {
         // SAFETY: NullForker does not fork.
         unsafe { daemonize_inner(config, forker) }
+    }
+
+    /// As [`run_inner`], with privileged `init`.
+    #[allow(unsafe_code)]
+    fn run_inner_with<T>(
+        config: &DaemonConfig,
+        forker: &mut NullForker,
+        init: impl FnOnce() -> Result<T, DaemonizeError>,
+    ) -> Result<(DaemonContext, T), DaemonizeError> {
+        // SAFETY: NullForker does not fork.
+        unsafe { daemonize_inner_with(config, forker, init) }
+    }
+
+    // Covers: R153
+    #[test]
+    fn init_runs_only_in_the_instance_holding_the_lock() {
+        run_in_subprocess("tests::init_runs_only_in_the_instance_holding_the_lock_subprocess");
+    }
+
+    #[test]
+    #[ignore]
+    fn init_runs_only_in_the_instance_holding_the_lock_subprocess() {
+        if !is_subprocess() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let pidfile = dir.path().join("app.pid");
+        let _held = steps::open_and_lock(&pidfile).expect("the running instance's lock");
+        let mut config = DaemonConfig::new();
+        config.foreground(true).close_fds(false).pidfile(&pidfile);
+        let mut ran = false;
+
+        let result = run_inner_with(&config, &mut NullForker::new(vec![], Ok(())), || {
+            ran = true;
+            Ok(())
+        });
+
+        assert!(
+            matches!(result, Err(DaemonizeError::LockConflict { .. })),
+            "{result:?}"
+        );
+        assert!(!ran, "init ran in the instance that lost the lock");
+    }
+
+    // Covers: R153
+    #[test]
+    fn init_opens_after_the_fd_sweep_and_hands_back_its_value() {
+        run_in_subprocess(
+            "tests::init_opens_after_the_fd_sweep_and_hands_back_its_value_subprocess",
+        );
+    }
+
+    #[test]
+    #[ignore]
+    fn init_opens_after_the_fd_sweep_and_hands_back_its_value_subprocess() {
+        use std::io::{Read, Seek, Write};
+        if !is_subprocess() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = DaemonConfig::new();
+        config.foreground(true).close_fds(true);
+
+        let (_ctx, mut file) =
+            run_inner_with(&config, &mut NullForker::new(vec![], Ok(())), || {
+                Ok(tempfile::tempfile_in(dir.path()).unwrap())
+            })
+            .expect("the sequence succeeds");
+
+        file.write_all(b"alive")
+            .expect("init's file survived the fd sweep");
+        file.rewind().unwrap();
+        let mut back = String::new();
+        file.read_to_string(&mut back).unwrap();
+        assert_eq!(back, "alive");
+    }
+
+    // Covers: R154
+    #[test]
+    fn init_error_returns_its_code_and_removes_the_pidfile() {
+        run_in_subprocess("tests::init_error_returns_its_code_and_removes_the_pidfile_subprocess");
+    }
+
+    #[test]
+    #[ignore]
+    fn init_error_returns_its_code_and_removes_the_pidfile_subprocess() {
+        if !is_subprocess() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let pidfile = dir.path().join("app.pid");
+        let mut config = DaemonConfig::new();
+        config.foreground(true).close_fds(false).pidfile(&pidfile);
+
+        let result: Result<(DaemonContext, ()), _> =
+            run_inner_with(&config, &mut NullForker::new(vec![], Ok(())), || {
+                Err(DaemonizeError::application(75, "database unreachable"))
+            });
+
+        let err = result.expect_err("init's error is the sequence's error");
+        assert_eq!(err.exit_code(), 75);
+        assert!(!pidfile.exists(), "a failed init left the pidfile behind");
+    }
+
+    // Covers: R154
+    #[test]
+    fn daemon_init_error_reaches_the_launcher() {
+        run_in_subprocess("tests::daemon_init_error_reaches_the_launcher_subprocess");
+    }
+
+    #[test]
+    #[ignore]
+    fn daemon_init_error_reaches_the_launcher_subprocess() {
+        if !is_subprocess() {
+            return;
+        }
+        let mut config = DaemonConfig::new();
+        config.close_fds(false);
+        let mut forker = NullForker::both_child();
+
+        let result = catch_unwind(std::panic::AssertUnwindSafe(|| {
+            run_inner_with(&config, &mut forker, || -> Result<(), _> {
+                Err(DaemonizeError::application(75, "database unreachable"))
+            })
+        }));
+
+        let panic_msg = result
+            .expect_err("a daemon-mode init error exits, not returns")
+            .downcast_ref::<String>()
+            .cloned()
+            .unwrap();
+        assert!(panic_msg.contains("NullForker::exit(75)"), "{panic_msg}");
     }
 
     #[test]

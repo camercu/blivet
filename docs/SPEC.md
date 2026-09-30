@@ -1567,3 +1567,10 @@ verification points.
   descriptor 2, even when the caller closed stdin, stdout, or stderr, so
   a later `dup2` onto a stdio slot (step 6 or step 12) cannot close one
   and drop the pipe or the lock.
+- R153. `daemonize_with` runs its `init` closure in the final process
+  after step 13, so init runs only in the instance holding the lock,
+  and whatever it opens survives the fd sweep. Its value comes back
+  beside the `DaemonContext`.
+- R154. An error from `init` is the sequence's error: returned in
+  foreground mode, sent to the launcher with its exit code in daemon
+  mode. The pidfile the sequence wrote is removed either way.
