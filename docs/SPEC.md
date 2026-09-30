@@ -1112,8 +1112,12 @@ Tempdirs; fast, deterministic, real filesystem.
 
 Individual post-fork operations tested without forking. Call the
 operation's `pub(crate)` function, verify via corresponding syscall
-query. Tests mutating process-global state (umask, signal mask, cwd,
-env) use `#[serial]`.
+query. A test that changes process-wide state (stdio or other
+descriptors, umask, cwd, env, signal dispositions and handlers,
+credentials) runs in its own process via `run_in_subprocess`: the
+shared harness runs other tests on other threads meanwhile. The
+functions that change that state assert it under test. The signal mask
+is per-thread, so its test stays in the shared process.
 
 - **Umask:** set, read back, assert, restore.
 - **Signal mask:** block signal, clear, read back, assert empty.
