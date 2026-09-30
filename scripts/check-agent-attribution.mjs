@@ -6,12 +6,16 @@
 // A commit that matches but is not attribution can be accepted without
 // rewriting history: add its full SHA and a reason to
 // agent-attribution-allowlist.txt.
+//
+// No exemption for dependabot, unlike commitlint's ignores: a message is
+// never exempted by text it contains, since an amended or squashed dependabot
+// commit keeps its sign-off and can gain a trailer.
 
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 
-const { PATTERN, isDependabot } = createRequire(import.meta.url)('./agent-attribution.cjs');
+const { PATTERN } = createRequire(import.meta.url)('./agent-attribution.cjs');
 
 const git = (...args) =>
   execFileSync('git', args, { encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 });
@@ -36,7 +40,7 @@ const offenders = git('log', '--format=%H %s%x00%B%x1e', 'HEAD')
   .filter(Boolean)
   .map((entry) => entry.split('\x00'))
   .filter(([title, body]) => !allowed.has(title.split(' ')[0]))
-  .filter(([, body]) => !isDependabot(body) && PATTERN.test(body))
+  .filter(([, body]) => PATTERN.test(body))
   .map(([title]) => title);
 
 if (offenders.length > 0) {

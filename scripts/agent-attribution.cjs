@@ -1,7 +1,6 @@
-// What counts as agent attribution, and which commits are exempt. Shared by
-// commitlint.config.js, which rejects it at commit time, and
-// check-agent-attribution.mjs, which rejects it anywhere in history, so the
-// two cannot disagree.
+// What counts as agent attribution. Shared by commitlint.config.js, which
+// rejects it at commit time, and check-agent-attribution.mjs, which rejects it
+// anywhere in history, so the two match the same trailers.
 
 // The exact trailers Claude Code writes, each anchored to the start of a
 // line: prose that mentions them, or a human co-author named Claude, is not
@@ -15,8 +14,8 @@ const PATTERN = new RegExp(
   'im',
 );
 
-// Dependabot writes its own bodies, quoting upstream release notes that may
-// contain anything; it cannot add these trailers itself.
+// Dependabot bodies quote upstream release notes and long links, which break
+// commitlint's length rules; commitlint skips them. The history scan does not.
 const isDependabot = (message) => message.includes('Signed-off-by: dependabot[bot]');
 
 module.exports = { PATTERN, isDependabot };
