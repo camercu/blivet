@@ -153,13 +153,14 @@ pub(crate) fn change_dir(path: &Path) -> Result<(), DaemonizeError> {
         .map_err(|e| DaemonizeError::ChdirFailed(format!("{}: {e}", path.display())))
 }
 
-/// Opens `path`, never on fd 0, 1 or 2.
+/// Opens `path`, never on fd 0, 1 or 2. Every file the sequence opens goes
+/// through here (R152); clippy.toml bans a bare `nix::fcntl::open`.
 ///
-/// With a stdio slot closed, `open` returns that slot itself. The `dup2` onto
-/// it that follows would then be a no-op, and dropping the descriptor would
-/// close the redirect it had just made. `try_clone` duplicates with a floor of
-/// 3, so the source of a redirect is never one of its targets and dropping it
-/// is always safe.
+/// With a stdio slot closed, `open` returns that slot itself. A later `dup2`
+/// onto that slot, step 6's or step 12's, would then close the file: a lock
+/// would be dropped, or a redirect source would be its own target. `try_clone`
+/// duplicates with a floor of 3.
+#[allow(clippy::disallowed_methods)] // the one place a bare open is allowed
 fn open_above_stdio<P: ?Sized + nix::NixPath>(
     path: &P,
     flags: OFlag,
@@ -207,7 +208,7 @@ pub(crate) fn redirect_to_devnull(stdout_stderr: bool) -> Result<(), DaemonizeEr
 
 /// Step 7: Open and exclusively lock a lockfile.
 pub(crate) fn open_and_lock(path: &Path) -> Result<Flock<OwnedFd>, DaemonizeError> {
-    let fd = open(
+    let fd = open_above_stdio(
         path,
         OFlag::O_WRONLY | OFlag::O_CREAT | OFlag::O_CLOEXEC,
         Mode::from_bits_truncate(0o644),
@@ -252,7 +253,7 @@ pub(crate) fn open_pidfile<'a>(
     }
     // Open explicitly with mode 0644 (R98); std::fs::write would create the
     // file 0666 & ~umask, violating the mandated pidfile permissions.
-    let fd = open(
+    let fd = open_above_stdio(
         pidfile_path,
         OFlag::O_WRONLY | OFlag::O_CREAT | OFlag::O_TRUNC | OFlag::O_CLOEXEC,
         Mode::from_bits_truncate(0o644),
@@ -845,6 +846,7 @@ mod tests {
 
     #[test]
     #[ignore]
+    #[allow(clippy::disallowed_methods)] // a test probe; no stdio slot is in play
     fn redirect_to_devnull_succeeds_subprocess() {
         use nix::sys::stat::fstat;
 
@@ -879,6 +881,7 @@ mod tests {
 
     #[test]
     #[ignore]
+    #[allow(clippy::disallowed_methods)] // a test probe; no stdio slot is in play
     fn redirect_to_devnull_into_a_closed_stdin_slot_subprocess() {
         use nix::sys::stat::fstat;
 
@@ -907,6 +910,7 @@ mod tests {
 
     #[test]
     #[ignore]
+    #[allow(clippy::disallowed_methods)] // a test probe; no stdio slot is in play
     fn redirect_to_devnull_foreground_preserves_stdout_stderr_subprocess() {
         if !is_subprocess() {
             return;
@@ -942,6 +946,46 @@ mod tests {
         let flock = open_and_lock(&path).unwrap();
         assert!(path.exists());
         assert!(flock.as_raw_fd() >= 0);
+    }
+
+    // Covers: R152
+    #[test]
+    fn lockfile_and_pidfile_stay_clear_of_stdio() {
+        crate::test_support::run_in_subprocess(
+            "steps::tests::lockfile_and_pidfile_stay_clear_of_stdio_subprocess",
+        );
+    }
+
+    /// In foreground mode step 6 leaves a closed stdout closed, so `open`
+    /// would hand the lockfile fd 1, and step 12's redirect of stdout would
+    /// close it and drop the lock.
+    #[test]
+    #[ignore]
+    #[allow(unsafe_code)]
+    fn lockfile_and_pidfile_stay_clear_of_stdio_subprocess() {
+        if !crate::test_support::is_subprocess() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let lock_path = dir.path().join("x.lock");
+        let pid_path = dir.path().join("x.pid");
+        let saved: Vec<i32> = (1..3).map(|fd| unsafe { libc::dup(fd) }).collect();
+        for fd in 1..3 {
+            unsafe { libc::close(fd) };
+        }
+
+        let lock = open_and_lock(&lock_path).map(|f| f.as_raw_fd());
+        let pid = open_pidfile(&pid_path, None).map(|p| match p {
+            Pidfile::Opened { fd, .. } => fd.as_raw_fd(),
+            Pidfile::Locked(_) => unreachable!("no lockfile given"),
+        });
+
+        for (fd, copy) in (1..3).zip(saved) {
+            unsafe { libc::dup2(copy, fd) };
+            unsafe { libc::close(copy) };
+        }
+        let (lock, pid) = (lock.unwrap(), pid.unwrap());
+        assert!(lock > 2 && pid > 2, "lockfile fd {lock}, pidfile fd {pid}");
     }
 
     #[test]

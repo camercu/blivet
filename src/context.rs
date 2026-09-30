@@ -1163,6 +1163,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods)] // a test probe; no stdio slot is in play
     fn lockfile_fd_returns_some_with_lockfile() {
         use nix::fcntl::{open, Flock, FlockArg, OFlag};
         use nix::sys::stat::Mode;
@@ -1184,6 +1185,7 @@ mod tests {
     // Covers: R54 — dropping the context releases the held flock, so the
     // lockfile can be re-acquired afterward.
     #[test]
+    #[allow(clippy::disallowed_methods)] // a test probe; no stdio slot is in play
     fn drop_releases_lockfile() {
         use nix::fcntl::{open, Flock, FlockArg, OFlag};
         use nix::sys::stat::Mode;

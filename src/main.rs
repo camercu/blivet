@@ -518,6 +518,7 @@ mod tests {
 
     // Covers: R110
     #[test]
+    #[allow(clippy::disallowed_methods)] // a test probe; no stdio slot is in play
     fn clear_cloexec_removes_flag() {
         use nix::fcntl::{fcntl, open, FcntlArg, FdFlag, OFlag};
         use nix::sys::stat::Mode;
