@@ -221,9 +221,12 @@ mutants-diff base="origin/main":
     set -euo pipefail
     diff=$(mktemp)
     trap 'rm -f "$diff"' EXIT
-    git diff "$(git merge-base {{base}} HEAD)" > "$diff"
+    # Rust sources only: cargo-mutants mutates nothing else, and its diff parser
+    # takes a removed line that starts with "-- " for a file header and panics.
+    # Markdown has such lines; Rust source has none outside a string literal.
+    git diff "$(git merge-base {{base}} HEAD)" -- '*.rs' > "$diff"
     # `git diff` leaves out files git does not track yet; add each as new.
-    git ls-files -z --others --exclude-standard | while IFS= read -r -d '' f; do
+    git ls-files -z --others --exclude-standard -- '*.rs' | while IFS= read -r -d '' f; do
         git diff --no-index -- /dev/null "$f" >> "$diff" || true
     done
     {{just_executable()}} --justfile {{justfile()}} cargo-mutants --in-diff "$diff"
