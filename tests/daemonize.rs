@@ -55,3 +55,45 @@ fn daemonize_panics_when_not_single_threaded() {
         "panic should name the thread-count problem, got: {msg:?}"
     );
 }
+
+// Covers: R45
+#[test]
+fn daemonize_with_panics_when_not_single_threaded_before_init_runs() {
+    let stop = Arc::new(AtomicBool::new(false));
+    let (ready_tx, ready_rx) = mpsc::channel();
+    let worker = {
+        let stop = Arc::clone(&stop);
+        thread::spawn(move || {
+            ready_tx.send(()).unwrap();
+            while !stop.load(Ordering::Acquire) {
+                thread::park();
+            }
+        })
+    };
+    ready_rx.recv().unwrap();
+
+    let config = DaemonConfig::new();
+    let mut ran = false;
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        blivet::daemonize_with(&config, || {
+            ran = true;
+            Ok(())
+        })
+    }));
+
+    stop.store(true, Ordering::Release);
+    worker.thread().unpark();
+    worker.join().unwrap();
+
+    let payload = result.expect_err("daemonize_with must panic with >1 thread");
+    let msg = payload
+        .downcast_ref::<String>()
+        .map(String::as_str)
+        .or_else(|| payload.downcast_ref::<&str>().copied())
+        .unwrap_or("<non-string panic payload>");
+    assert!(
+        msg.contains("daemonize_with: ") && msg.contains("threads running (expected 1)"),
+        "panic should name daemonize_with and the thread count, got: {msg:?}"
+    );
+    assert!(!ran, "init ran before the thread check");
+}
