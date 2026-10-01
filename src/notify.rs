@@ -193,14 +193,16 @@ pub(crate) fn read_outcome(pipe: &mut impl io::Read) -> Outcome {
     };
     header[0] = first;
     if first == 0 {
-        // Sent in the same write as the first byte; EOF here is a bare 0x00,
-        // which only an older writer sends, and reads as readiness.
+        // Sent in the same write as the first byte, so it is already here.
         match read_byte(pipe) {
-            None => return Outcome::Success,
+            None => return decode(&header[..1]),
             Some(second) => header[1] = second,
         }
         if header == SUCCESS {
             return Outcome::Success;
+        }
+        if header != EXEC_PENDING {
+            return decode(&header);
         }
     }
     let mut buf = if first == 0 {
@@ -227,18 +229,31 @@ fn read_byte(pipe: &mut impl io::Read) -> Option<u8> {
 
 /// Decode a whole message read from the notification pipe.
 pub(crate) fn decode(buf: &[u8]) -> Outcome {
-    let rest = buf.strip_prefix(&EXEC_PENDING[..]);
-    match (rest, buf.first()) {
-        // The exec marker, then EOF: the exec closed the pipe.
-        (Some([]), _) => Outcome::Success,
-        // The exec marker, then the exec's error.
-        (Some(error), _) => decode(error),
-        (None, None) => Outcome::Failure {
+    if buf == SUCCESS {
+        return Outcome::Success;
+    }
+    if let Some(rest) = buf.strip_prefix(&EXEC_PENDING[..]) {
+        // The exec marker, then EOF (the exec closed the pipe) or its error.
+        return if rest.is_empty() {
+            Outcome::Success
+        } else {
+            decode(rest)
+        };
+    }
+    match buf.first() {
+        None => Outcome::Failure {
             code: UNNOTIFIED_CODE as i32,
             message: EOF_UNNOTIFIED_MSG.into(),
         },
-        (None, Some(&0x00)) => Outcome::Success,
-        (None, Some(&code)) => Outcome::Failure {
+        // Only SUCCESS and EXEC_PENDING start with 0x00 (R159).
+        Some(&0x00) => Outcome::Failure {
+            code: UNNOTIFIED_CODE as i32,
+            message: format!(
+                "daemon sent the launcher a malformed message: {:02x?}",
+                &buf[..buf.len().min(8)]
+            ),
+        },
+        Some(&code) => Outcome::Failure {
             code: code as i32,
             message: String::from_utf8_lossy(&buf[1..]).into_owned(),
         },
@@ -403,6 +418,20 @@ mod tests {
     fn read_outcome_stops_at_the_success_byte() {
         let mut pipe = StillOpen(SUCCESS.into_iter().collect());
         assert_eq!(read_outcome(&mut pipe), Outcome::Success);
+    }
+
+    // Covers: R159
+    #[test]
+    fn a_malformed_header_is_a_failure_that_says_so() {
+        for bytes in [&[0x00][..], &[0x00, 0x07][..], &[0x00, 0x07, b'x'][..]] {
+            match read_outcome(&mut &bytes[..]) {
+                Outcome::Failure { code, message } => {
+                    assert_eq!(code, UNNOTIFIED_CODE as i32, "{bytes:?}");
+                    assert!(message.contains("malformed"), "{bytes:?}: {message}");
+                }
+                Outcome::Success => panic!("{bytes:?} read as readiness"),
+            }
+        }
     }
 
     // Covers: R150

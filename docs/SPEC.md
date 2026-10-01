@@ -1562,3 +1562,6 @@ verification points.
 - R158. The launcher retries a pipe read that a signal interrupts
   (`EINTR`), so a signal it receives while waiting cannot turn a
   healthy start into a failure, or an exec still pending into success.
+- R159. The launcher accepts only the two-byte readiness and exec
+  messages; a `0x00` header followed by anything else, or by nothing, is
+  a failure (exit 1) whose message says the header was malformed.
