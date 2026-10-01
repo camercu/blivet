@@ -126,7 +126,7 @@ rather than behind a fake-safe wrapper.
 - `identity.rs`: `ResolvedIdentity::switch_to()` is a crate-private
   `unsafe fn` that calls `setenv` (`USER`/`HOME`/`LOGNAME`); the
   post-fork sequence calls it under `daemonize_inner`'s contract.
-- `steps.rs`: `set_env_vars` calls `setenv` in the post-fork sequence — sound
+- `steps/process.rs`: `set_env_vars` calls `setenv` in the post-fork sequence — sound
   because the child is single-threaded by `fork` (or, in foreground mode, the
   entry point required single-threadedness).
 
@@ -1336,7 +1336,7 @@ verification points.
 - R89. Raw FFI lives in modules that allow `unsafe` at module level:
   `signals.rs`, `thread_count.rs`, and `sys.rs`. Elsewhere `unsafe`
   appears only where a single-threaded contract is owned: `fork()` in
-  `forker.rs`, `setenv` in `identity.rs` and `steps.rs`, the sequence in
+  `forker.rs`, `setenv` in `identity.rs` and `steps/process.rs`, the sequence in
   `sequence.rs`, and the entry points in `lib.rs`.
 - R90. `daemonize()` delegates to `daemonize_inner()` with
   `&mut impl Forker`.

@@ -46,7 +46,7 @@ impl Forker for RealForker {
         // the separate step is safe because daemonize() requires
         // single-threaded execution.
         let prepare = |end: OwnedFd| -> Result<OwnedFd, DaemonizeError> {
-            let end = crate::util::above_stdio(end)
+            let end = crate::steps::above_stdio(end)
                 .map_err(|e| DaemonizeError::SystemError(format!("notification pipe: {e}")))?;
             fcntl(end.as_fd(), FcntlArg::F_SETFD(FdFlag::FD_CLOEXEC)).map_err(failed)?;
             Ok(end)

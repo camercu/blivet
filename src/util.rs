@@ -1,24 +1,7 @@
 //! Shared utility functions used across multiple modules.
 
 use std::ffi::OsStr;
-use std::os::fd::{AsRawFd, OwnedFd};
 use std::path::{Path, PathBuf};
-
-/// `fd`, moved above descriptor 2 if it sits on a stdio slot (R152).
-///
-/// With a stdio slot closed, `open` and `pipe` hand out that slot. A later
-/// `dup2` onto it, step 6's or step 12's, would then close the descriptor:
-/// a lock dropped, a pipe end lost, a redirect source its own target.
-/// `try_clone` duplicates close-on-exec with a floor of 3, and the original
-/// closes on drop. A descriptor already above 2 is returned as is, so a table
-/// with only the descriptors it needs free still succeeds.
-pub(crate) fn above_stdio(fd: OwnedFd) -> std::io::Result<OwnedFd> {
-    if fd.as_raw_fd() > 2 {
-        Ok(fd)
-    } else {
-        fd.try_clone()
-    }
-}
 
 /// True when both paths name one file, whether or not it exists yet.
 ///

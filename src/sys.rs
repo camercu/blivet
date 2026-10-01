@@ -6,7 +6,7 @@
 //! `signals.rs`, the per-OS thread counts in `thread_count.rs`. `unsafe` whose
 //! soundness depends on a single-threaded caller stays at the call site that
 //! owns that contract: `fork` in `forker.rs`, `setenv` in `identity.rs` and
-//! `steps.rs`, the sequence in `sequence.rs`, and the entry points in
+//! `steps/process.rs`, the sequence in `sequence.rs`, and the entry points in
 //! `lib.rs`.
 
 #![allow(unsafe_code)]

@@ -3,7 +3,7 @@
 //! launcher's side of the notification pipe.
 //!
 //! The entry points in `lib.rs` validate and check the thread count, then
-//! call [`daemonize_inner_with`]; the individual steps live in `steps.rs`.
+//! call [`daemonize_inner_with`]; the individual steps live in `steps/`.
 
 use std::os::fd::{AsRawFd, OwnedFd};
 use std::path::PathBuf;
