@@ -136,41 +136,6 @@ pub(crate) unsafe fn daemonize_inner_with<T>(
     }
 }
 
-/// Removes the pidfile this process wrote if the sequence never reaches the end.
-///
-/// Everything from the second half of step 8 through step 13 runs after this
-/// process has taken hold of the pidfile, and any of it can fail. In daemon mode the abort path signals the parent and `_exit`s, and in
-/// foreground mode the error returns to the caller; neither builds a
-/// [`DaemonContext`], so no drop-time cleanup ever runs. Without this the file
-/// is left naming a process that never started — what `kill $(cat …)`, a status
-/// script, or systemd's `PIDFile=` reads next, and after PID reuse some other
-/// process entirely.
-///
-/// Armed once [`steps::open_pidfile`] returns, which is when the file becomes
-/// this process's — not before, so a lock conflict or a refused `open` cannot
-/// remove a file that belongs to someone else, and not after the write, so a
-/// write that fails half way does not leave an empty pidfile behind. Gated on
-/// [`cleanup_on_drop`](DaemonConfig::cleanup_on_drop), matching the drop-time
-/// cleanup that [`DaemonContext::report_error`] replicates for the same reason.
-struct PidfileOnAbort<'a> {
-    path: Option<&'a std::path::Path>,
-}
-
-impl PidfileOnAbort<'_> {
-    /// The sequence reached the end; the [`DaemonContext`] owns the pidfile now.
-    fn disarm(&mut self) {
-        self.path = None;
-    }
-}
-
-impl Drop for PidfileOnAbort<'_> {
-    fn drop(&mut self) {
-        if let Some(path) = self.path {
-            let _ = std::fs::remove_file(path);
-        }
-    }
-}
-
 /// Steps 4–14: apply the configuration in the final daemon process.
 ///
 /// Forker-free and fallible: every step returns its error rather than touching
@@ -213,7 +178,7 @@ unsafe fn run_post_fork<T>(
     // no process at all. Nor any earlier: an `open_pidfile` that fails, or a
     // lock conflict at step 7, leaves a file that belongs to someone else.
     // Arm between the two halves, disarm at step 14 — see `PidfileOnAbort`.
-    let mut pidfile_on_abort = PidfileOnAbort { path: None };
+    let mut pidfile_on_abort = steps::PidfileOnAbort::new();
     // The files the sequence now holds, which step 12 must not redirect into.
     // The pidfile goes first: a derived lockfile is the same file, and the
     // user configured it as the pidfile.
@@ -221,7 +186,7 @@ unsafe fn run_post_fork<T>(
     if let Some(ref pidfile_path) = config.pidfile {
         let pidfile = steps::open_pidfile(pidfile_path, lockfile_path.zip(lockfile.as_ref()))?;
         if config.cleanup_on_drop {
-            pidfile_on_abort.path = Some(pidfile_path);
+            pidfile_on_abort.arm(pidfile_path);
         }
         owned.push(("pidfile", pidfile.write_pid()?));
     }
