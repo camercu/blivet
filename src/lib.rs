@@ -176,6 +176,8 @@ pub(crate) mod forker;
 #[cfg(unix)]
 mod identity;
 #[cfg(unix)]
+mod signals;
+#[cfg(unix)]
 pub(crate) mod unsafe_ops;
 
 #[cfg(unix)]
@@ -650,7 +652,7 @@ unsafe fn run_post_fork<T>(
     }
 
     // Step 9: Reset signal dispositions
-    unsafe_ops::reset_signal_dispositions()?;
+    signals::reset_signal_dispositions()?;
 
     // Step 10: Clear signal mask
     steps::clear_signal_mask()?;

@@ -229,7 +229,7 @@ impl DaemonContext {
         let c_path = CString::new(pidfile.as_os_str().as_bytes()).map_err(|_| {
             DaemonizeError::ValidationError("pidfile path contains NUL byte".into())
         })?;
-        crate::unsafe_ops::install_pidfile_cleanup_signals(&c_path, signals).map_err(|e| {
+        crate::signals::install_pidfile_cleanup_signals(&c_path, signals).map_err(|e| {
             DaemonizeError::ValidationError(format!("failed to install signal handler: {e}"))
         })
     }
@@ -311,7 +311,7 @@ impl DaemonContext {
                 _ => {}
             }
         }
-        crate::unsafe_ops::restore_default_sigpipe();
+        crate::signals::restore_default_sigpipe();
         let Err(errno) = nix::unistd::execvp(program, args);
         let message = format!("exec {}: {errno}", program.to_string_lossy());
         self.report_error(&exec_error(errno, message))
@@ -701,7 +701,7 @@ mod tests {
         );
         assert_eq!(
             current.sa_sigaction,
-            crate::unsafe_ops::pidfile_cleanup_handler as extern "C" fn(i32) as usize,
+            crate::signals::pidfile_cleanup_handler as extern "C" fn(i32) as usize,
             "SIGTERM is no longer the cleanup handler"
         );
     }
