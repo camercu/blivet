@@ -115,7 +115,7 @@ rather than behind a fake-safe wrapper.
   (`unlink()`, `raise()`), and the `SIGPIPE` restore before exec.
 - `thread_count.rs`: the per-OS thread-count queries.
 - `sys.rs`: `close()`, `initgroups()`, `_exit()`, `AT_FDCWD`.
-- `forker.rs` / `lib.rs`: `RealForker::fork` is an `unsafe fn` wrapping
+- `forker.rs` / `sequence.rs`: `RealForker::fork` is an `unsafe fn` wrapping
   `nix::unistd::fork()` (`unsafe` since nix 0.24). `daemonize_inner` is itself
   an `unsafe fn` that invokes it as `unsafe { forker.fork() }`, forwarding the
   single-threaded contract to its callers — `daemonize_unchecked`, or the
@@ -1336,8 +1336,8 @@ verification points.
 - R89. Raw FFI lives in modules that allow `unsafe` at module level:
   `signals.rs`, `thread_count.rs`, and `sys.rs`. Elsewhere `unsafe`
   appears only where a single-threaded contract is owned: `fork()` in
-  `forker.rs`, `setenv` in `identity.rs` and `steps.rs`, and the entry
-  points in `lib.rs`.
+  `forker.rs`, `setenv` in `identity.rs` and `steps.rs`, the sequence in
+  `sequence.rs`, and the entry points in `lib.rs`.
 - R90. `daemonize()` delegates to `daemonize_inner()` with
   `&mut impl Forker`.
 - R91. `Forker` is `pub(crate)`, invisible to consumers.
