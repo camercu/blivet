@@ -39,5 +39,4 @@ exclude_re = [
     'replace \| with \^ in open_and_lock$',
     'replace \| with \^ in open_pidfile$',
     'replace \| with \^ in open_stream$',
-    'replace \| with \^ in thread_count$',
 ]

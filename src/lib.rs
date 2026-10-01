@@ -283,47 +283,6 @@ pub unsafe fn daemonize_with_unchecked<T>(
     unsafe { daemonize_inner_with(config, &mut RealForker, init) }
 }
 
-// The `cfg`s below gate on `blivet_thread_count`, the capability alias
-// `build.rs` sets for targets where the live thread count can be read. The
-// count itself lives in the `thread_count` module.
-
-/// Returns the panic message if `count` is not exactly one thread, else `None`.
-///
-/// The checked entry points require *exactly* one thread (R45): forking — or
-/// calling `setenv` during the user switch — in a multi-threaded process is
-/// unsound. Any count other than 1 is a violation — including an anomalous `0`,
-/// which a healthy process can never report and so signals an unreliable
-/// thread-count query. Failing closed keeps the safety guard from
-/// green-lighting on a count it cannot trust. `caller` names the operation in
-/// the panic message.
-#[cfg(unix)]
-#[cfg(blivet_thread_count)]
-pub(crate) fn single_threaded_violation(caller: &str, count: usize) -> Option<String> {
-    (count != 1).then(|| {
-        format!(
-            "{caller}: {count} threads running (expected 1). \
-             Call {caller} before spawning threads, async runtimes, \
-             or libraries with background threads."
-        )
-    })
-}
-
-/// Reads the current thread count and panics unless it is exactly 1, naming
-/// `caller` in the message.
-///
-/// The imperative shell around [`single_threaded_violation`], used by the
-/// checked entry points, [`daemonize`] and [`daemonize_with`], before the fork.
-#[cfg(unix)]
-#[cfg(blivet_thread_count)]
-pub(crate) fn assert_single_threaded(caller: &str) {
-    let count = thread_count::count().unwrap_or_else(|_| {
-        panic!("{caller}: cannot determine thread count to verify single-threadedness")
-    });
-    if let Some(msg) = single_threaded_violation(caller, count) {
-        panic!("{msg}");
-    }
-}
-
 /// Daemonize the current process, verifying it is single-threaded first.
 ///
 /// Counts the threads in the current process and panics unless exactly one is
@@ -352,7 +311,7 @@ pub(crate) fn assert_single_threaded(caller: &str) {
 #[cfg(unix)]
 #[cfg(blivet_thread_count)]
 pub fn daemonize(config: &DaemonConfig) -> Result<DaemonContext, DaemonizeError> {
-    assert_single_threaded("daemonize");
+    thread_count::assert_single_threaded("daemonize");
     #[allow(unsafe_code)]
     // SAFETY: verified single-threaded above, and there is no init to start a
     // thread before the user switch.
@@ -405,40 +364,12 @@ pub fn daemonize_with<T>(
     config: &DaemonConfig,
     init: impl FnOnce() -> Result<T, DaemonizeError>,
 ) -> Result<(DaemonContext, T), DaemonizeError> {
-    assert_single_threaded("daemonize_with");
+    thread_count::assert_single_threaded("daemonize_with");
     #[allow(unsafe_code)]
     // SAFETY: verified single-threaded above, and `checked_init` verifies it
     // again after init, before the user switch's `setenv`.
     unsafe {
-        daemonize_with_unchecked(config, checked_init(config, init))
-    }
-}
-
-/// `init`, then the thread check a user switch's `setenv` needs (R126).
-///
-/// A group-only switch calls no `setenv`, so it is not checked.
-#[cfg(unix)]
-#[cfg(blivet_thread_count)]
-fn checked_init<T>(
-    config: &DaemonConfig,
-    init: impl FnOnce() -> Result<T, DaemonizeError>,
-) -> impl FnOnce() -> Result<T, DaemonizeError> {
-    let switches_user = config.user.is_some();
-    move || {
-        let value = init()?;
-        if switches_user {
-            let count = thread_count::count().unwrap_or_else(|_| {
-                panic!("daemonize_with: cannot determine thread count after init")
-            });
-            if count != 1 {
-                panic!(
-                    "daemonize_with: init left {count} threads running (expected 1). \
-                     Join them before init returns: switching user calls setenv, \
-                     which is not thread-safe."
-                );
-            }
-        }
-        Ok(value)
+        daemonize_with_unchecked(config, thread_count::checked_init(config, init))
     }
 }
 
@@ -833,25 +764,6 @@ mod tests {
         run_in_subprocess("tests::both_forks_child_succeeds_subprocess");
     }
 
-    // Covers: R45
-    #[cfg(blivet_thread_count)]
-    #[test]
-    fn single_threaded_violation_accepts_only_exactly_one() {
-        assert!(
-            single_threaded_violation("daemonize", 1).is_none(),
-            "exactly one thread is the single-threaded case"
-        );
-        assert!(
-            single_threaded_violation("daemonize", 0).is_some(),
-            "an anomalous 0 must fail closed, not green-light a fork"
-        );
-        let msg = single_threaded_violation("daemonize_with", 2).expect("2 threads is a violation");
-        assert!(
-            msg.contains("daemonize_with: 2 threads running (expected 1)"),
-            "message should name the caller, count, and expectation, got: {msg}"
-        );
-    }
-
     /// Test wrapper: `daemonize_inner` driven by the non-forking `NullForker`.
     ///
     /// `NullForker::fork` returns a configured result without actually forking,
@@ -1066,43 +978,6 @@ mod tests {
             "{result:?}"
         );
         assert!(!ran, "init ran for a user that does not exist");
-    }
-
-    // Covers: R126
-    //
-    // The test harness runs more than one thread, so a check that runs fails.
-    #[cfg(blivet_thread_count)]
-    #[test]
-    fn checked_init_verifies_one_thread_after_init_for_a_user_switch() {
-        let mut config = DaemonConfig::new();
-        config.user("nobody");
-        let init = checked_init(&config, || Ok(()));
-
-        let payload = catch_unwind(std::panic::AssertUnwindSafe(init))
-            .expect_err("a user switch checks the thread count after init");
-        let msg = payload
-            .downcast_ref::<String>()
-            .cloned()
-            .unwrap_or_default();
-        assert!(msg.contains("init left"), "{msg}");
-    }
-
-    // Covers: R126
-    #[cfg(blivet_thread_count)]
-    #[test]
-    fn checked_init_skips_the_check_without_a_user_switch() {
-        for group in [None, Some("99999")] {
-            let mut config = DaemonConfig::new();
-            if let Some(group) = group {
-                config.group(group);
-            }
-            let init = checked_init(&config, || Ok(7));
-            assert_eq!(
-                init().unwrap(),
-                7,
-                "group {group:?}: no setenv, so no check"
-            );
-        }
     }
 
     // Covers: R154
