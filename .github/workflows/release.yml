@@ -39,6 +39,16 @@ jobs:
             [ "$attempt" -lt 3 ] && sleep 30
           done
           exit 1
+      # Same for the shell publish-crate.sh runs cargo-semver-checks from, and
+      # the toolchain it runs on.
+      - name: Fetch the semver-checks shell
+        run: |
+          for attempt in 1 2 3; do
+            nix-shell nix/semver-checks.nix --run 'just semver-checks-toolchain' && exit 0
+            echo "::warning::fetching nix/semver-checks.nix failed (attempt $attempt)"
+            [ "$attempt" -lt 3 ] && sleep 30
+          done
+          exit 1
       - name: Release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

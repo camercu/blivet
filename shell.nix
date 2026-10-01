@@ -16,5 +16,6 @@ pkgs.mkShell {
     cargo-mutants
     cargo-nextest
     cargo-public-api
+    cargo-semver-checks
   ];
 }

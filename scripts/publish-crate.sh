@@ -29,6 +29,10 @@ case $status in
         echo "blivet $version is already on crates.io, built from HEAD; not publishing it again"
         ;;
     404)
+        # Cargo.toml now holds the version semantic-release chose. Refuse to
+        # publish an API change that version does not allow: a breaking change
+        # committed without `!` would otherwise ship as a minor release.
+        nix-shell nix/semver-checks.nix --run 'just semver-checks-toolchain semver-checks'
         # --allow-dirty: prepare has just rewritten Cargo.toml, Cargo.lock
         # and CHANGELOG.md, which @semantic-release/git commits after this.
         cargo publish --locked --allow-dirty

@@ -314,6 +314,24 @@ coverage:
 # reason.
 public_api_nightly := "nightly-2026-07-10"
 
+# ── Semver ──────────────────────────────────────────────────
+# cargo-semver-checks reads rustdoc JSON, whose format changes across rustc
+# releases, and the pinned version (nix/semver-checks.nix, shell.nix) reads
+# no newer format than 1.89's: on 1.95 it fails with "unsupported rustdoc
+# format v57". So it runs on this toolchain, which the MSRV (1.85) guarantees
+# can build the crate. Bump both together.
+semver_checks_toolchain := "1.89.0"
+
+# Install the toolchain semver-checks runs on.
+semver-checks-toolchain:
+    rustup toolchain install {{semver_checks_toolchain}} --profile minimal
+
+# Fail if the API change since the latest crates.io release needs a bigger
+# version bump than Cargo.toml's version makes. The release runs this after
+# semantic-release writes the new version, before publishing.
+semver-checks:
+    RUSTUP_TOOLCHAIN={{semver_checks_toolchain}} cargo semver-checks check-release
+
 # Install the pinned nightly used by the public-api recipes (used by CI).
 public-api-toolchain:
     rustup toolchain install {{public_api_nightly}} --profile minimal
