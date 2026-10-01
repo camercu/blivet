@@ -266,18 +266,19 @@ mod tests {
         );
     }
 
-    // Covers: R83 — Display messages are lowercase with no trailing punctuation.
-    #[test]
-    fn display_messages_are_lowercase_without_trailing_punctuation() {
-        use std::io::{Error, ErrorKind};
-
-        let variants = [
+    /// One sample of every variant. [`variant_name`] is the one exhaustive
+    /// match over `DaemonizeError`: a new variant fails to compile there, and
+    /// the README guard below fails until the variant is sampled here and
+    /// listed in the README table. Every test that needs every variant
+    /// iterates this list.
+    fn every_variant() -> Vec<DaemonizeError> {
+        vec![
             DaemonizeError::ValidationError("detail".into()),
             DaemonizeError::ProgramNotFound("detail".into()),
             DaemonizeError::UserNotFound("detail".into()),
             DaemonizeError::GroupNotFound("detail".into()),
             DaemonizeError::LockConflict {
-                path: "detail".into(),
+                path: "/detail".into(),
             },
             DaemonizeError::LockfileError("detail".into()),
             DaemonizeError::ForkFailed("detail".into()),
@@ -289,37 +290,39 @@ mod tests {
             DaemonizeError::OutputFileError("detail".into()),
             DaemonizeError::ChownError("detail".into()),
             DaemonizeError::ExecFailed("detail".into()),
-            DaemonizeError::NotifyFailed(Error::from(ErrorKind::BrokenPipe)),
-            DaemonizeError::application(71, "detail"),
-        ];
+            DaemonizeError::NotifyFailed(std::io::Error::from(std::io::ErrorKind::BrokenPipe)),
+            DaemonizeError::application(42, "detail"),
+        ]
+    }
 
-        // Exhaustiveness guard: adding a variant breaks compilation here,
-        // forcing it to be added to `variants` above and re-checked.
-        fn assert_all_variants_listed(e: &DaemonizeError) {
-            match e {
-                DaemonizeError::ValidationError(_)
-                | DaemonizeError::ProgramNotFound(_)
-                | DaemonizeError::UserNotFound(_)
-                | DaemonizeError::GroupNotFound(_)
-                | DaemonizeError::LockConflict { .. }
-                | DaemonizeError::LockfileError(_)
-                | DaemonizeError::ForkFailed(_)
-                | DaemonizeError::SetsidFailed(_)
-                | DaemonizeError::ChdirFailed(_)
-                | DaemonizeError::SystemError(_)
-                | DaemonizeError::PermissionDenied(_)
-                | DaemonizeError::PidfileError(_)
-                | DaemonizeError::OutputFileError(_)
-                | DaemonizeError::ChownError(_)
-                | DaemonizeError::ExecFailed(_)
-                | DaemonizeError::NotifyFailed(_)
-                | DaemonizeError::Application { .. } => {}
-            }
+    /// The variant's name, as the README table writes it.
+    fn variant_name(err: &DaemonizeError) -> &'static str {
+        match err {
+            DaemonizeError::ValidationError(_) => "ValidationError",
+            DaemonizeError::ProgramNotFound(_) => "ProgramNotFound",
+            DaemonizeError::UserNotFound(_) => "UserNotFound",
+            DaemonizeError::GroupNotFound(_) => "GroupNotFound",
+            DaemonizeError::LockConflict { .. } => "LockConflict",
+            DaemonizeError::LockfileError(_) => "LockfileError",
+            DaemonizeError::ForkFailed(_) => "ForkFailed",
+            DaemonizeError::SetsidFailed(_) => "SetsidFailed",
+            DaemonizeError::ChdirFailed(_) => "ChdirFailed",
+            DaemonizeError::SystemError(_) => "SystemError",
+            DaemonizeError::PermissionDenied(_) => "PermissionDenied",
+            DaemonizeError::PidfileError(_) => "PidfileError",
+            DaemonizeError::OutputFileError(_) => "OutputFileError",
+            DaemonizeError::ChownError(_) => "ChownError",
+            DaemonizeError::ExecFailed(_) => "ExecFailed",
+            DaemonizeError::NotifyFailed(_) => "NotifyFailed",
+            DaemonizeError::Application { .. } => "Application",
         }
+    }
 
-        for v in &variants {
-            assert_all_variants_listed(v);
-            let msg = v.to_string();
+    // Covers: R83
+    #[test]
+    fn display_messages_are_lowercase_without_trailing_punctuation() {
+        for err in every_variant() {
+            let msg = err.to_string();
             let first = msg.chars().next().expect("message is non-empty");
             assert!(
                 !first.is_ascii_uppercase(),
@@ -330,6 +333,78 @@ mod tests {
                 "message must not end with punctuation, got: {msg:?}"
             );
         }
+    }
+
+    /// The README, baked in at compile time.
+    ///
+    /// Never read at run time: this test ships with the crate, and a run-time
+    /// read would panic for anyone running `cargo test` on a packaged or
+    /// vendored copy. `just package-test` runs it on the packaged copy.
+    const README: &str = include_str!("../README.md");
+
+    /// The README's exit-code table restates `DaemonizeError`: its variants
+    /// and what `exit_code()` returns for each. It cannot be generated (the
+    /// "Meaning" column is prose) and nothing outside the crate can enumerate
+    /// a `#[non_exhaustive]` enum, so this guard lives here, in the crate.
+    /// The table must list every variant, no more, and each code must match.
+    #[test]
+    fn readme_exit_codes_match_error_impl() {
+        let documented = parse_exit_code_table();
+        let names: std::collections::BTreeSet<&str> =
+            every_variant().iter().map(variant_name).collect();
+        let table: std::collections::BTreeSet<&str> =
+            documented.keys().map(String::as_str).collect();
+        assert_eq!(
+            names, table,
+            "README exit-code table and DaemonizeError variants must match exactly"
+        );
+
+        for err in every_variant() {
+            let name = variant_name(&err);
+            let cell = &documented[name];
+            if name == "Application" {
+                assert_eq!(cell, "caller's", "Application row should read \"caller's\"");
+                assert_eq!(
+                    err.exit_code(),
+                    42,
+                    "Application forwards the caller's code"
+                );
+            } else {
+                let code: u8 = cell
+                    .parse()
+                    .unwrap_or_else(|_| panic!("{name} exit code cell '{cell}' is not a number"));
+                assert_eq!(
+                    code,
+                    err.exit_code(),
+                    "{name} exit code drifted from the README"
+                );
+            }
+        }
+    }
+
+    /// Parse the README "Errors & exit codes" table into `variant -> code cell`.
+    fn parse_exit_code_table() -> std::collections::BTreeMap<String, String> {
+        let section = README
+            .split("### Errors & exit codes")
+            .nth(1)
+            .expect("README has an 'Errors & exit codes' section")
+            .split("\n## ")
+            .next()
+            .unwrap();
+
+        let mut map = std::collections::BTreeMap::new();
+        for line in section.lines() {
+            let line = line.trim();
+            // Data rows start with a backticked variant name; the header and
+            // the `| --- |` separator do not.
+            if !line.starts_with("| `") {
+                continue;
+            }
+            let cells: Vec<&str> = line.split('|').map(str::trim).collect();
+            map.insert(cells[1].trim_matches('`').to_string(), cells[2].to_string());
+        }
+        assert!(!map.is_empty(), "parsed no rows from the exit-code table");
+        map
     }
 
     // Covers: R156
