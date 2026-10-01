@@ -12,7 +12,7 @@ use nix::sys::stat::Mode;
 use nix::unistd::{self, Whence};
 
 use crate::error::DaemonizeError;
-use crate::unsafe_ops;
+use crate::sys;
 use crate::util::paths_same;
 
 /// Test-only failure injection for post-fork syscalls that cannot be made to
@@ -636,7 +636,7 @@ impl Drop for SavedSlot {
             Some(fd) => {
                 let _ = self.target.dup2(fd);
             }
-            None => crate::unsafe_ops::raw_close(self.target.fd()),
+            None => crate::sys::raw_close(self.target.fd()),
         }
     }
 }
@@ -756,14 +756,14 @@ pub(crate) fn close_inherited_fds(skip_fds: &[i32]) -> Result<(), DaemonizeError
     if let Some(open_fds) = list_open_fds() {
         for fd in open_fds {
             if fd >= 3 && !skip_fds.contains(&fd) {
-                unsafe_ops::raw_close(fd);
+                sys::raw_close(fd);
             }
         }
         return Ok(());
     }
     let max_fd = get_max_fd()?;
     for fd in fds_to_close(max_fd, skip_fds) {
-        unsafe_ops::raw_close(fd);
+        sys::raw_close(fd);
     }
     Ok(())
 }

@@ -130,7 +130,7 @@ impl ResolvedIdentity {
         #[cfg(test)]
         crate::test_support::assert_isolated("the identity switch");
         if let Some(info) = self.user() {
-            crate::unsafe_ops::raw_initgroups(&info.cname()?, info.gid.as_raw())
+            crate::sys::raw_initgroups(&info.cname()?, info.gid.as_raw())
                 .map_err(|e| DaemonizeError::PermissionDenied(format!("initgroups: {e}")))?;
         }
         if let Some(gid) = self.effective_gid() {

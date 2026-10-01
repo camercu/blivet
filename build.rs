@@ -26,7 +26,7 @@
 enum ThreadCount {
     /// The `Threads:` line of `/proc/self/status`.
     ProcFs,
-    /// The per-OS kernel query in `unsafe_ops` — `proc_pidinfo` on macOS, a
+    /// The per-OS kernel query in `thread_count.rs` — `proc_pidinfo` on macOS, a
     /// `sysctl` on each BSD.
     KernelQuery(&'static str),
 }

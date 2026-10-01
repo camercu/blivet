@@ -1,23 +1,12 @@
-//! Unsafe code containment zone.
+//! Thin FFI wrappers with no concept of their own to live in: closing a
+//! descriptor by number, `initgroups`, `_exit`, and `AT_FDCWD`.
 //!
-//! Contains safe wrappers around libc/std functions whose invariants this
-//! module upholds internally, so other modules call them without
-//! `#[allow(unsafe_code)]`.
-//!
-//! Some `unsafe` operations are *not* encapsulable here because their safety is
-//! context-dependent — single-threadedness the caller must establish — so they
-//! live at the call site that owns that contract, not behind a fake-safe
-//! wrapper:
-//! - the `fork` call ([`Forker::fork`](crate::forker::Forker::fork) wrapping
-//!   `nix::unistd::fork`) in `forker.rs`, invoked from `daemonize_inner` in
-//!   `lib.rs`
-//! - `std::env::set_var` (USER/HOME/LOGNAME) in `ResolvedIdentity::switch_to`
-//!   (`identity.rs`) and the post-fork env step `set_env_vars` (`steps.rs`)
-//! - `nix::sys::signal::sigaction` in test code
-//!
-//! The CLI binary (`main.rs`) is a separate crate root that cannot reach this
-//! module, so it carries its own documented `unsafe` blocks: the
-//! `daemonize_unchecked` call (single-threaded contract) and the pre-exec `libc::signal(SIGPIPE, SIG_DFL)` reset (R128).
+//! Each upholds its own invariants, so callers use it without `unsafe`. Raw
+//! FFI that belongs to a concept lives with it instead: signal handling in
+//! `signals.rs`, the per-OS thread counts in `thread_count.rs`. `unsafe` whose
+//! soundness depends on a single-threaded caller stays at the call site that
+//! owns that contract: `fork` in `forker.rs`, `setenv` in `identity.rs` and
+//! `steps.rs`, and the entry points in `lib.rs`.
 
 #![allow(unsafe_code)]
 /// Close a file descriptor by number, ignoring errors.

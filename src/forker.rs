@@ -9,7 +9,7 @@ use std::os::fd::{AsFd, OwnedFd};
 use nix::unistd::ForkResult;
 
 use crate::error::DaemonizeError;
-use crate::unsafe_ops;
+use crate::sys;
 
 /// Abstraction over fork/setsid/pipe for testability.
 ///
@@ -75,7 +75,7 @@ impl Forker for RealForker {
     }
 
     fn exit(&self, code: i32) -> ! {
-        unsafe_ops::raw_exit(code)
+        sys::raw_exit(code)
     }
 }
 

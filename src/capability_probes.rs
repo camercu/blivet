@@ -183,7 +183,7 @@ fn rt_signal_range_starts_above_the_standard_signals() {
 fn faccessat_accepts_at_eaccess() {
     let dir = tempfile::tempdir().expect("a temp dir");
     nix::unistd::faccessat(
-        crate::unsafe_ops::at_fdcwd(),
+        crate::sys::at_fdcwd(),
         dir.path(),
         nix::unistd::AccessFlags::W_OK,
         nix::fcntl::AtFlags::AT_EACCESS,
@@ -207,7 +207,7 @@ fn faccessat_rejects_at_eaccess() {
 
     let dir = tempfile::tempdir().expect("a temp dir");
     let err = nix::unistd::faccessat(
-        crate::unsafe_ops::at_fdcwd(),
+        crate::sys::at_fdcwd(),
         dir.path(),
         nix::unistd::AccessFlags::W_OK,
         AT_EACCESS,

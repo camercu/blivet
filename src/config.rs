@@ -509,7 +509,7 @@ fn validate_parent_writable(path: &std::path::Path, name: &str) -> Result<(), Da
     // Writability is probed with faccessat, against the effective UID/GID where
     // the platform supports it (see EFFECTIVE_ACCESS).
     match nix::unistd::faccessat(
-        crate::unsafe_ops::at_fdcwd(),
+        crate::sys::at_fdcwd(),
         parent,
         AccessFlags::W_OK,
         EFFECTIVE_ACCESS,

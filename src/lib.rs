@@ -178,7 +178,7 @@ mod identity;
 #[cfg(unix)]
 mod signals;
 #[cfg(unix)]
-pub(crate) mod unsafe_ops;
+pub(crate) mod sys;
 
 #[cfg(unix)]
 mod notify;

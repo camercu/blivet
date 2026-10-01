@@ -334,7 +334,7 @@ impl DaemonContext {
     /// aborts startup must not leave a stale pidfile behind.
     pub fn report_error(&mut self, err: &DaemonizeError) -> ! {
         let code = self.cleanup_and_signal_error(err);
-        crate::unsafe_ops::raw_exit(code as i32)
+        crate::sys::raw_exit(code as i32)
     }
 
     /// Removes the pidfile, signals the error to the parent, and returns the

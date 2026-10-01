@@ -37,7 +37,7 @@ trustworthy open-fd directory exists, whether libc reserves a
 real-time signal range the sweep must skip, and whether `faccessat`
 accepts `AT_EACCESS`. The build script emits one `cfg` alias per
 capability, and no module gates a capability *decision* on an OS name;
-the per-kernel thread-count syscalls in `src/unsafe_ops.rs` stay
+the per-kernel thread-count syscalls in `src/thread_count.rs` stay
 per-OS, because which syscall reads the count is not a question the
 table asks. Adding a platform is one row. A target absent from the
 table takes the fallback for each capability, which is the
@@ -98,20 +98,23 @@ real-time signal iteration.
 
 ## Unsafe boundary
 
-The crate root uses `#![deny(unsafe_code)]`; modules opt back in locally with
+The crate root uses `#![deny(unsafe_code)]`; modules opt back in with
 `#[allow(unsafe_code)]` only where required. Raw libc/syscall FFI whose
 invariants can be upheld internally is encapsulated as safe `pub(crate)`
-wrappers in one `unsafe_ops` module. The remaining `unsafe` is for operations
+wrappers in the module of its concept, which allows `unsafe` at module
+level: `signals.rs`, `thread_count.rs`, and `sys.rs` for the few with no
+concept of their own. The remaining `unsafe` is for operations
 whose safety is *context-dependent* — they require single-threadedness the
 caller establishes — so they live at the call site that owns that contract
 rather than behind a fake-safe wrapper.
 
 `unsafe` appears in these places:
 
-- `unsafe_ops`: the encapsulated FFI wrappers — signal reset
-  (`libc::sigaction()`, incl. the real-time range via `SIGRTMIN()`/
-  `SIGRTMAX()`), `close()`, `initgroups()`, `_exit()`, `unlink()`, `raise()`,
-  and the per-OS thread-count queries.
+- `signals.rs`: signal reset (`libc::sigaction()`, incl. the real-time
+  range via `SIGRTMIN()`/`SIGRTMAX()`), the pidfile cleanup handler
+  (`unlink()`, `raise()`), and the `SIGPIPE` restore before exec.
+- `thread_count.rs`: the per-OS thread-count queries.
+- `sys.rs`: `close()`, `initgroups()`, `_exit()`, `AT_FDCWD`.
 - `forker.rs` / `lib.rs`: `RealForker::fork` is an `unsafe fn` wrapping
   `nix::unistd::fork()` (`unsafe` since nix 0.24). `daemonize_inner` is itself
   an `unsafe fn` that invokes it as `unsafe { forker.fork() }`, forwarding the
@@ -347,7 +350,7 @@ support" section is generated from it.
 
 On a target the table gives no thread-count source it is a
 `#[deprecated]` stub that panics. The thread-count FFI lives in
-`unsafe_ops`.
+`thread_count.rs`.
 
 > With a single thread, the observation "thread count is 1" is stable:
 > incrementing it requires an existing thread to call `pthread_create`,
@@ -1330,9 +1333,11 @@ verification points.
   here is a copy of the table that nothing checks, and it went stale on
   Android once already.
 - R88. Crate root: `#![deny(unsafe_code)]`.
-- R89. Raw FFI is concentrated in `unsafe_ops`; the only `unsafe` outside
-  it is the `fork()` call in `forker.rs` and `daemonize_unchecked` / its
-  call sites in `lib.rs`.
+- R89. Raw FFI lives in modules that allow `unsafe` at module level:
+  `signals.rs`, `thread_count.rs`, and `sys.rs`. Elsewhere `unsafe`
+  appears only where a single-threaded contract is owned: `fork()` in
+  `forker.rs`, `setenv` in `identity.rs` and `steps.rs`, and the entry
+  points in `lib.rs`.
 - R90. `daemonize()` delegates to `daemonize_inner()` with
   `&mut impl Forker`.
 - R91. `Forker` is `pub(crate)`, invisible to consumers.
