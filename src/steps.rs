@@ -966,25 +966,38 @@ mod tests {
             return;
         }
         let dir = tempfile::tempdir().unwrap();
-        let lock_path = dir.path().join("x.lock");
-        let pid_path = dir.path().join("x.pid");
-        let saved: Vec<i32> = (1..3).map(|fd| unsafe { libc::dup(fd) }).collect();
-        for fd in 1..3 {
-            unsafe { libc::close(fd) };
-        }
+        // Stdout and stderr closed gives the first open fd 1; only stderr
+        // closed gives it fd 2 itself, the boundary. Both files stay open
+        // while the other is opened, so neither reuses the other's slot.
+        for (round, closed) in [&[1, 2][..], &[2][..]].into_iter().enumerate() {
+            let lock_path = dir.path().join(format!("{round}.lock"));
+            let pid_path = dir.path().join(format!("{round}.pid"));
+            let saved: Vec<(i32, i32)> = closed
+                .iter()
+                .map(|&fd| (fd, unsafe { libc::dup(fd) }))
+                .collect();
+            for &fd in closed {
+                unsafe { libc::close(fd) };
+            }
 
-        let lock = open_and_lock(&lock_path).map(|f| f.as_raw_fd());
-        let pid = open_pidfile(&pid_path, None).map(|p| match p {
-            Pidfile::Opened { fd, .. } => fd.as_raw_fd(),
-            Pidfile::Locked(_) => unreachable!("no lockfile given"),
-        });
+            let lock = open_and_lock(&lock_path);
+            let pid = open_pidfile(&pid_path, None);
 
-        for (fd, copy) in (1..3).zip(saved) {
-            unsafe { libc::dup2(copy, fd) };
-            unsafe { libc::close(copy) };
+            for (fd, copy) in saved {
+                unsafe { libc::dup2(copy, fd) };
+                unsafe { libc::close(copy) };
+            }
+            let lock = lock.unwrap();
+            let pid = match pid.unwrap() {
+                Pidfile::Opened { fd, .. } => fd.as_raw_fd(),
+                Pidfile::Locked(_) => unreachable!("no lockfile given"),
+            };
+            assert!(
+                lock.as_raw_fd() > 2 && pid > 2,
+                "with {closed:?} closed: lockfile fd {}, pidfile fd {pid}",
+                lock.as_raw_fd()
+            );
         }
-        let (lock, pid) = (lock.unwrap(), pid.unwrap());
-        assert!(lock > 2 && pid > 2, "lockfile fd {lock}, pidfile fd {pid}");
     }
 
     #[test]

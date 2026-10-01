@@ -313,24 +313,31 @@ mod tests {
         if !crate::test_support::is_subprocess() {
             return;
         }
-        let saved: Vec<i32> = (0..3).map(|fd| unsafe { libc::dup(fd) }).collect();
-        for fd in 0..3 {
-            unsafe { libc::close(fd) };
-        }
+        // All of stdio closed gives the ends 0 and 1; only stderr closed gives
+        // one end fd 2 itself, the boundary.
+        for closed in [&[0, 1, 2][..], &[2][..]] {
+            let saved: Vec<(i32, i32)> = closed
+                .iter()
+                .map(|&fd| (fd, unsafe { libc::dup(fd) }))
+                .collect();
+            for &fd in closed {
+                unsafe { libc::close(fd) };
+            }
 
-        let ends = RealForker.create_notification_pipe();
+            let ends = RealForker.create_notification_pipe();
 
-        for (fd, copy) in saved.into_iter().enumerate() {
-            unsafe { libc::dup2(copy, fd as i32) };
-            unsafe { libc::close(copy) };
+            for (fd, copy) in saved {
+                unsafe { libc::dup2(copy, fd) };
+                unsafe { libc::close(copy) };
+            }
+            let (rd, wr) = ends.expect("RealForker creates a pipe");
+            assert!(
+                rd.as_raw_fd() > 2 && wr.as_raw_fd() > 2,
+                "with {closed:?} closed, pipe ends {} and {} overlap stdio",
+                rd.as_raw_fd(),
+                wr.as_raw_fd()
+            );
         }
-        let (rd, wr) = ends.expect("RealForker creates a pipe");
-        assert!(
-            rd.as_raw_fd() > 2 && wr.as_raw_fd() > 2,
-            "pipe ends {} and {} overlap stdio",
-            rd.as_raw_fd(),
-            wr.as_raw_fd()
-        );
     }
 
     // Covers: R107 — both notification pipe ends are created with O_CLOEXEC, so
