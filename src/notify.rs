@@ -188,14 +188,18 @@ pub(crate) enum Outcome {
 /// `exec` closes the pipe.
 pub(crate) fn read_outcome(pipe: &mut impl io::Read) -> Outcome {
     let mut header = [0u8; 2];
-    let first = match pipe.read(&mut header[..1]) {
-        Ok(1) => header[0],
-        _ => return decode(&[]),
+    let Some(first) = read_byte(pipe) else {
+        return decode(&[]);
     };
+    header[0] = first;
     if first == 0 {
         // Sent in the same write as the first byte; EOF here is a bare 0x00,
         // which only an older writer sends, and reads as readiness.
-        if !matches!(pipe.read(&mut header[1..]), Ok(1)) || header == SUCCESS {
+        match read_byte(pipe) {
+            None => return Outcome::Success,
+            Some(second) => header[1] = second,
+        }
+        if header == SUCCESS {
             return Outcome::Success;
         }
     }
@@ -206,6 +210,19 @@ pub(crate) fn read_outcome(pipe: &mut impl io::Read) -> Outcome {
     };
     let _ = pipe.read_to_end(&mut buf);
     decode(&buf)
+}
+
+/// One byte from the pipe, or `None` at EOF or on an error. A read a signal
+/// interrupts is retried (R158): `read` returns `EINTR` then, not data.
+fn read_byte(pipe: &mut impl io::Read) -> Option<u8> {
+    let mut byte = [0u8; 1];
+    loop {
+        match pipe.read(&mut byte) {
+            Ok(1) => return Some(byte[0]),
+            Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
+            _ => return None,
+        }
+    }
 }
 
 /// Decode a whole message read from the notification pipe.
@@ -334,6 +351,52 @@ mod tests {
             }
             Ok(n)
         }
+    }
+
+    /// A pipe read that a signal interrupts before each byte, as a SIGCHLD
+    /// arriving in the launcher would.
+    struct Interrupted(std::collections::VecDeque<u8>, bool);
+
+    impl io::Read for Interrupted {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            self.1 = !self.1;
+            if self.1 {
+                return Err(io::ErrorKind::Interrupted.into());
+            }
+            match self.0.pop_front() {
+                Some(byte) => {
+                    buf[0] = byte;
+                    Ok(1)
+                }
+                None => Ok(0),
+            }
+        }
+    }
+
+    // Covers: R158
+    #[test]
+    fn read_outcome_retries_a_read_a_signal_interrupts() {
+        let mut ready = Interrupted(SUCCESS.into_iter().collect(), false);
+        assert_eq!(read_outcome(&mut ready), Outcome::Success);
+
+        let err = DaemonizeError::ForkFailed("boom".into());
+        let mut failed = Interrupted(error_bytes(&err).into_iter().collect(), false);
+        assert_eq!(read_outcome(&mut failed), decode(&error_bytes(&err)));
+    }
+
+    /// A pipe whose read fails for good, as on `EBADF`.
+    struct Broken;
+
+    impl io::Read for Broken {
+        fn read(&mut self, _: &mut [u8]) -> io::Result<usize> {
+            Err(io::ErrorKind::Other.into())
+        }
+    }
+
+    // Covers: R158
+    #[test]
+    fn read_outcome_gives_up_on_a_read_error_other_than_eintr() {
+        assert_eq!(read_outcome(&mut Broken), decode(&[]));
     }
 
     #[test]

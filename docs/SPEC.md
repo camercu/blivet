@@ -1559,3 +1559,6 @@ verification points.
   ignores a broken pipe there, and only then restores the default
   SIGPIPE. If the exec fails, it ignores SIGPIPE again before reporting,
   so the daemon exits with the exec's code (66 or 71), not by SIGPIPE.
+- R158. The launcher retries a pipe read that a signal interrupts
+  (`EINTR`), so a signal it receives while waiting cannot turn a
+  healthy start into a failure, or an exec still pending into success.
