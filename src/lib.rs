@@ -817,6 +817,16 @@ fn parent_pipe_reader(rd: OwnedFd, forker: &impl Forker) -> ! {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Covers: R46, R47, R48
+    #[test]
+    fn send_sync() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<DaemonConfig>();
+        assert_send_sync::<DaemonContext>();
+        assert_send_sync::<DaemonizeError>();
+    }
+
     use crate::forker::null_forker::NullForker;
     use crate::test_support::{is_subprocess, run_in_subprocess};
     use std::panic::catch_unwind;

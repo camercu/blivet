@@ -212,6 +212,126 @@ impl<T, E: std::fmt::Display> WithExitCode<T> for Result<T, E> {
 mod tests {
     use super::*;
 
+    // Covers: R49
+    #[test]
+    fn exit_codes() {
+        assert_eq!(
+            DaemonizeError::ValidationError(String::new()).exit_code(),
+            64
+        );
+        assert_eq!(
+            DaemonizeError::ProgramNotFound(String::new()).exit_code(),
+            66
+        );
+        assert_eq!(DaemonizeError::UserNotFound(String::new()).exit_code(), 67);
+        assert_eq!(DaemonizeError::GroupNotFound(String::new()).exit_code(), 67);
+        assert_eq!(
+            DaemonizeError::LockConflict {
+                path: std::path::PathBuf::new()
+            }
+            .exit_code(),
+            69
+        );
+        assert_eq!(DaemonizeError::LockfileError(String::new()).exit_code(), 73);
+        assert_eq!(DaemonizeError::ForkFailed(String::new()).exit_code(), 71);
+        assert_eq!(DaemonizeError::SetsidFailed(String::new()).exit_code(), 71);
+        assert_eq!(DaemonizeError::ChdirFailed(String::new()).exit_code(), 71);
+        assert_eq!(
+            DaemonizeError::PermissionDenied(String::new()).exit_code(),
+            77
+        );
+        assert_eq!(DaemonizeError::PidfileError(String::new()).exit_code(), 73);
+        assert_eq!(
+            DaemonizeError::OutputFileError(String::new()).exit_code(),
+            73
+        );
+        assert_eq!(DaemonizeError::ChownError(String::new()).exit_code(), 73);
+        assert_eq!(DaemonizeError::ExecFailed(String::new()).exit_code(), 71);
+        assert_eq!(
+            DaemonizeError::NotifyFailed(std::io::Error::from(std::io::ErrorKind::BrokenPipe))
+                .exit_code(),
+            71
+        );
+        // Application errors carry a caller-chosen sysexits code.
+        assert_eq!(
+            DaemonizeError::application(75, "queued").exit_code(),
+            75 // EX_TEMPFAIL, chosen by the caller
+        );
+        // exit_code() is always non-zero: a 0 would make process::exit treat a
+        // reported error as success. It is remapped to EX_SOFTWARE.
+        assert_eq!(DaemonizeError::application(0, "boom").exit_code(), 70);
+        assert_eq!(
+            DaemonizeError::application(71, "bind failed").to_string(),
+            "application error: bind failed"
+        );
+    }
+
+    // Covers: R83 — Display messages are lowercase with no trailing punctuation.
+    #[test]
+    fn display_messages_are_lowercase_without_trailing_punctuation() {
+        use std::io::{Error, ErrorKind};
+
+        let variants = [
+            DaemonizeError::ValidationError("detail".into()),
+            DaemonizeError::ProgramNotFound("detail".into()),
+            DaemonizeError::UserNotFound("detail".into()),
+            DaemonizeError::GroupNotFound("detail".into()),
+            DaemonizeError::LockConflict {
+                path: "detail".into(),
+            },
+            DaemonizeError::LockfileError("detail".into()),
+            DaemonizeError::ForkFailed("detail".into()),
+            DaemonizeError::SetsidFailed("detail".into()),
+            DaemonizeError::ChdirFailed("detail".into()),
+            DaemonizeError::SystemError("detail".into()),
+            DaemonizeError::PermissionDenied("detail".into()),
+            DaemonizeError::PidfileError("detail".into()),
+            DaemonizeError::OutputFileError("detail".into()),
+            DaemonizeError::ChownError("detail".into()),
+            DaemonizeError::ExecFailed("detail".into()),
+            DaemonizeError::NotifyFailed(Error::from(ErrorKind::BrokenPipe)),
+            DaemonizeError::application(71, "detail"),
+        ];
+
+        // Exhaustiveness guard: adding a variant breaks compilation here,
+        // forcing it to be added to `variants` above and re-checked.
+        fn assert_all_variants_listed(e: &DaemonizeError) {
+            match e {
+                DaemonizeError::ValidationError(_)
+                | DaemonizeError::ProgramNotFound(_)
+                | DaemonizeError::UserNotFound(_)
+                | DaemonizeError::GroupNotFound(_)
+                | DaemonizeError::LockConflict { .. }
+                | DaemonizeError::LockfileError(_)
+                | DaemonizeError::ForkFailed(_)
+                | DaemonizeError::SetsidFailed(_)
+                | DaemonizeError::ChdirFailed(_)
+                | DaemonizeError::SystemError(_)
+                | DaemonizeError::PermissionDenied(_)
+                | DaemonizeError::PidfileError(_)
+                | DaemonizeError::OutputFileError(_)
+                | DaemonizeError::ChownError(_)
+                | DaemonizeError::ExecFailed(_)
+                | DaemonizeError::NotifyFailed(_)
+                | DaemonizeError::Application { .. } => {}
+            }
+        }
+
+        for v in &variants {
+            assert_all_variants_listed(v);
+            let msg = v.to_string();
+            let first = msg.chars().next().expect("message is non-empty");
+            assert!(
+                !first.is_ascii_uppercase(),
+                "message must start lowercase, got: {msg:?}"
+            );
+            assert!(
+                !msg.ends_with(['.', '!', '?']),
+                "message must not end with punctuation, got: {msg:?}"
+            );
+        }
+    }
+
     // Covers: R156
     #[test]
     fn with_exit_code_turns_any_error_into_an_application_error() {
