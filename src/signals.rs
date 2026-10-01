@@ -39,7 +39,7 @@ pub(crate) fn reset_signal_dispositions() -> Result<(), crate::error::DaemonizeE
     }
     let signals = signal_range();
     for sig in signals {
-        if sig == libc::SIGKILL || sig == libc::SIGSTOP || sig == libc::SIGPIPE {
+        if matches!(sig, libc::SIGKILL | libc::SIGSTOP | libc::SIGPIPE) {
             continue;
         }
 
