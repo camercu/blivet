@@ -53,7 +53,7 @@ daemon. The launcher does not return. It blocks on a pipe until the daemon
 reports in. Inside the call, in the daemon, blivet takes the pidfile lock, runs
 your privileged init if you passed one to `daemonize_with()`, then chowns the
 pidfile, lockfile, and logs to the configured user and switches to it. Your
-daemon then calls `notify_parent()`, which writes one readiness byte down the
+daemon then calls `notify_parent()`, which writes a readiness message down the
 pipe.
 
 ```text
@@ -146,7 +146,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ```
 
 An error from `init` reaches the launcher with its exit code, and the pidfile
-is removed. `with_exit_code(code)` gives any failed `Result` that code.
+is removed (unless `cleanup_on_drop(false)`). `with_exit_code(code)` gives any failed `Result` that code.
 
 **Foreground mode.** For systemd, containers, or debugging: skip forking while
 applying all other setup (umask, chdir, signal reset, …). Stdout/stderr stay
@@ -206,7 +206,7 @@ the shell with a meaningful status:
 | `SystemError`      | 71          | Syscall failed (notification pipe, `/dev/null` open or `dup2`, `sigaction`, `sigprocmask`, `getrlimit`) |
 | `PermissionDenied` | 77          | Not root, or setuid/setgid failed        |
 | `ExecFailed`       | 71          | CLI: `exec` failed (other than `ENOENT`/`EACCES`) |
-| `NotifyFailed`     | 71          | Can't write readiness byte to launcher   |
+| `NotifyFailed`     | 71          | Can't write readiness to launcher        |
 | `Application`      | caller's    | App-level failure you report yourself    |
 
 ## Recipes

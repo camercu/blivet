@@ -72,7 +72,7 @@
 //! ```text
 //! daemonize_with(|| init)  <- fork, init, switch
 //! │ threads, async, accept loops OK
-//! notify_parent()          <- writes one byte
+//! notify_parent()          <- writes readiness
 //! ```
 //!
 //! [`daemonize`] and [`daemonize_with`] check for you and panic if violated:
@@ -263,7 +263,8 @@ pub unsafe fn daemonize_unchecked(config: &DaemonConfig) -> Result<DaemonContext
 ///
 /// As [`daemonize_unchecked`]. An error from `init` is the sequence's error:
 /// returned in foreground mode, sent to the launcher with its exit code in
-/// daemon mode. Either way the pidfile the sequence wrote is removed.
+/// daemon mode. Either way the pidfile the sequence wrote is removed, unless
+/// [`cleanup_on_drop`](DaemonConfig::cleanup_on_drop) is `false`.
 #[cfg(unix)]
 #[allow(unsafe_code)]
 pub unsafe fn daemonize_with_unchecked<T>(

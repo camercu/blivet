@@ -91,7 +91,7 @@ pub enum DaemonizeError {
     #[error("exec failed: {0}")]
     ExecFailed(String),
 
-    /// Writing the readiness byte to the parent notification pipe failed.
+    /// Writing the readiness message to the parent notification pipe failed.
     ///
     /// Produced by [`notify_parent`](crate::DaemonContext::notify_parent) when
     /// the pipe write returns an `io::Error`.

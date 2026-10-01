@@ -236,7 +236,8 @@ impl DaemonContext {
 
     /// Signals the parent that the daemon is ready.
     ///
-    /// Writes a success byte (`0x00`) to the notification pipe and closes it.
+    /// Writes the readiness message (`0x00 0x00`) to the notification pipe and
+    /// closes it.
     /// The parent reads this and exits 0.
     ///
     /// After this call, subsequent calls are no-ops (the pipe is consumed).

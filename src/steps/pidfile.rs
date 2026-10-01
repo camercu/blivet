@@ -150,7 +150,7 @@ fn write_all_fd(fd: impl AsFd, buf: &[u8]) -> Result<(), nix::errno::Errno> {
 
 /// Removes the pidfile this process wrote if the sequence never reaches the end.
 ///
-/// Everything from the second half of step 8 through step 13 runs after this
+/// Everything from the second half of step 8 through step 17 runs after this
 /// process has taken hold of the pidfile, and any of it can fail. In daemon mode the abort path signals the parent and `_exit`s, and in
 /// foreground mode the error returns to the caller; neither builds a
 /// [`DaemonContext`](crate::DaemonContext), so no drop-time cleanup ever runs. Without this the file

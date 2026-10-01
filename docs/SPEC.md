@@ -248,26 +248,26 @@ to ensure `cleanup()` runs (either explicitly or by dropping
 
 **Notification methods:**
 
-`notify_parent(&mut self) -> Result<(), DaemonizeError>` writes a success
-byte (`0x00`) to the notification pipe and closes it. A pipe write error
+`notify_parent(&mut self) -> Result<(), DaemonizeError>` writes the
+readiness message (`0x00 0x00`) to the notification pipe and closes it. A pipe write error
 is returned as `DaemonizeError::NotifyFailed` (exit code 71) so callers
 get one error type with a preserved exit code. The companion
 `notify_parent_or_report(&mut self)` does the same but reports the error
 to the parent and `_exit`s instead of returning it. The parent reads the
-success byte and exits 0. After this call, `notify_pipe` is `None`. This
+readiness message and exits 0. After this call, `notify_pipe` is `None`. This
 is the API for library consumers to signal readiness.
 
 `report_error(&mut self, err: &DaemonizeError) -> !` writes the error
-protocol to the notification pipe (exit code byte + Display message),
-closes it, then calls `_exit()` with the mapped exit code. This is used
-by the CLI to report post-daemonization failures (e.g., exec failure).
+to the notification pipe (exit code byte, two-byte length, `Display`
+message; see the notification pipe protocol), closes it, then calls
+`_exit()` with the mapped exit code. With no pipe it prints the error
+to stderr first (R161). `exec` uses it to report an exec failure.
 
 **Drop behavior:** if `notify_pipe` is still `Some` when `DaemonContext`
-is dropped, the `Drop` impl writes exit code `1` followed by the
-message "daemon exited without signaling readiness" to the pipe, then
-closes it. The parent reads this and exits 1. If `cleanup_on_drop` is
-`true` (the default), `Drop` then calls `cleanup()` to remove the
-pidfile.
+is dropped, the `Drop` impl removes the pidfile (if `cleanup_on_drop`
+is `true`, the default), then writes an error with exit code `1` and the
+message "daemon exited without signaling readiness" to the pipe and
+closes it. The parent reads this and exits 1.
 
 > Exit code `1` (not a `sysexits.h` value) is used for the Drop case
 > to distinguish it from categorized `DaemonizeError` failures.
@@ -303,7 +303,7 @@ are lowercase with no trailing punctuation.
 | `OutputFileError`  | stdout/stderr file cannot be opened, truncated or dup2'd, or, in foreground mode, fd 1/2 cannot be saved first |
 | `ChownError`       | chown of pidfile/lockfile/output file failed             |
 | `ExecFailed`       | `DaemonContext::exec` failed (other than `ENOENT`/`EACCES`) |
-| `NotifyFailed`     | Writing the readiness byte to the notification pipe failed |
+| `NotifyFailed`     | Writing the readiness message to the notification pipe failed |
 | `Application`      | Caller-reported startup failure (returned from `init`, or via `application()`/`report_error`) |
 
 `ProgramNotFound` and `ExecFailed` come only from `DaemonContext::exec`
@@ -396,7 +396,7 @@ no-op.
   with the mapped exit code. The grandchild's `_exit()` code uses the
   mapped code for consistency in process accounting, but is not
   observable — the parent's exit code is authoritative.
-- In foreground mode every error (steps 4–14 included) returns `Err`
+- In foreground mode every error (steps 4–17 included) returns `Err`
   to the caller: no fork happened, so the caller is still the running
   process and the library never exits it.
 
@@ -595,7 +595,7 @@ chdir, stdin redirect, and env changes may already have happened).
 
 ### Post-fork error policy
 
-Post-fork errors in steps 2–13 are written to the notification pipe
+Post-fork errors in steps 2–17 are written to the notification pipe
 per the error protocol and the process calls `_exit()` with the mapped
 exit code. In foreground mode there is no pipe and no `_exit()`;
 failures return `Err` (see Foreground mode). Every fallible step maps
@@ -629,8 +629,10 @@ second byte:
   succeeded and `O_CLOEXEC` closed the write end: `_exit(0)`. An error
   message means the exec failed (R150).
 - **Error byte (nonzero):** value is the `exit_code()` of the error.
-  Remaining bytes are the `Display` message as UTF-8. Parent prints
-  the message to stderr and calls `_exit()` with the code.
+  The next two bytes are the message's length (big-endian), then the
+  `Display` message as UTF-8 (R160). The parent reads exactly that
+  much, prints the message to stderr, and calls `_exit()` with the
+  code.
 - **EOF with no marker:** the daemon ended before notifying without
   dropping its `DaemonContext`: a fatal signal, `abort`, or
   `std::process::exit`. The parent prints that and calls `_exit(1)`
@@ -795,7 +797,8 @@ joins them before it returns. The unchecked forms skip both checks.
 User resolution failure returns `UserNotFound`, group resolution
 failure `GroupNotFound`, and `initgroups`/`setgid`/`setuid` failure
 `PermissionDenied`. Each is a post-fork error (see post-fork error
-policy); the pidfile the sequence wrote is removed.
+policy); the pidfile the sequence wrote is removed when
+`cleanup_on_drop` is on.
 
 > `initgroups()` (not bare `setgroups()`) is needed because
 > `getpwnam()` only returns the primary GID; `initgroups()` consults
@@ -1370,7 +1373,8 @@ verification points.
 - R112. Trailing args parsed with `trailing_var_arg` +
   `allow_hyphen_values`.
 - R113. All CLI validation occurs before daemonization.
-- R114. Library does not accept a program path or call exec.
+- R114. The library execs a program only in `DaemonContext::exec`,
+  which takes the program and its argv from the caller.
 - R115. Path comparison resolves both operands to one identity before
   comparing, whether or not the file exists yet: `canonicalize()` when
   it does, canonical parent directory plus file name when it does not,
@@ -1382,8 +1386,9 @@ verification points.
   is true.
 - R119. Parent-side pipe reader is implemented inside `daemonize()`'s
   parent branch (step 1).
-- R120. `DaemonContext` stores cloned path/user/group fields from
-  config (not a config reference or full clone).
+- R120. `DaemonContext` stores a clone of the validated `DaemonConfig`,
+  the one source of its pidfile, lockfile, stream, user, and group
+  settings.
 - R121. Foreground mode skips steps 1–3 (pipe, forks, setsid) and
   leaves stdout/stderr inherited in step 6.
 - R122. `close_fds` false skips step 13 (fd closing).
@@ -1423,7 +1428,7 @@ verification points.
 - R132. `no_lockfile()` disables locking: the pidfile is written
   without a flock and no lockfile is created.
 - R133. `.lockfile(path)` and `.no_lockfile()` are last-call-wins.
-- R134. In foreground mode, setup errors (steps 4–14) return `Err` to
+- R134. In foreground mode, setup errors (steps 4–17) return `Err` to
   the caller; the library never exits the caller's process.
 - R135. With `close_fds` true, open fds are enumerated via the
   platform fd directory where reliable (Linux and Android
@@ -1545,7 +1550,8 @@ verification points.
   beside the `DaemonContext`.
 - R154. An error from `init` is the sequence's error: returned in
   foreground mode, sent to the launcher with its exit code in daemon
-  mode. The pidfile the sequence wrote is removed either way.
+  mode. Either way the pidfile the sequence wrote is removed when
+  `cleanup_on_drop` is on.
 - R155. The target identity is resolved before `init` runs, so a user
   or group that does not exist fails before init's side effects. The
   chown (unless disabled) and the switch run after `init`, in that

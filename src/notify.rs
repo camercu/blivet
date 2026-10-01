@@ -67,7 +67,7 @@ impl NotifyPipe {
         drop(self.0.take());
     }
 
-    /// Signal readiness: write the success byte and close the pipe.
+    /// Signal readiness: write [`SUCCESS`] and close the pipe.
     ///
     /// # Errors
     ///
@@ -544,7 +544,7 @@ mod tests {
 
     #[test]
     fn application_zero_code_is_not_silently_success() {
-        // A caller-chosen code of 0 would collide with the success byte and be
+        // A caller-chosen code of 0 would collide with the readiness header and be
         // decoded as readiness. exit_code() remaps it, so the encoded message
         // is still a real failure.
         let err = DaemonizeError::application(0, "boom");

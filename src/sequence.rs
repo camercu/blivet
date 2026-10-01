@@ -117,7 +117,7 @@ pub(crate) unsafe fn daemonize_inner_with<T>(
         Some(pipe_wr)
     };
 
-    // Steps 4–14 run in the final daemon process and report failures as a
+    // Steps 4–18 run in the final daemon process and report failures as a
     // single Result. In foreground mode no fork happened, so errors simply
     // propagate to the caller. In daemon mode the child cannot return to the
     // original caller, so funnel any error through one place: notify the
@@ -136,7 +136,7 @@ pub(crate) unsafe fn daemonize_inner_with<T>(
     }
 }
 
-/// Steps 4–14: apply the configuration in the final daemon process.
+/// Steps 4–18: apply the configuration in the final daemon process.
 ///
 /// Forker-free and fallible: every step returns its error rather than touching
 /// the notification pipe, leaving the single error-to-parent seam in
@@ -177,7 +177,7 @@ unsafe fn run_post_fork<T>(
     // write succeeds: a write that fails half way leaves an empty file naming
     // no process at all. Nor any earlier: an `open_pidfile` that fails, or a
     // lock conflict at step 7, leaves a file that belongs to someone else.
-    // Arm between the two halves, disarm at step 14 — see `PidfileOnAbort`.
+    // Arm between the two halves, disarm at step 18 — see `PidfileOnAbort`.
     let mut pidfile_on_abort = steps::PidfileOnAbort::new();
     // The files the sequence now holds, which step 12 must not redirect into.
     // The pidfile goes first: a derived lockfile is the same file, and the
