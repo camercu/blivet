@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 
 use crate::error::DaemonizeError;
-use crate::util::paths_same;
+use crate::file_identity::paths_same;
 
 /// How the lockfile is determined. Tri-state so "not set" (derive from the
 /// pidfile) is distinguishable from an explicit opt-out.
@@ -1328,19 +1328,6 @@ mod tests {
             "a symlink loop must answer as non-existent, not as a probe \
              failure: {m}"
         );
-    }
-
-    #[test]
-    fn paths_same_canonicalize_fallback() {
-        // Paths that don't exist — canonicalize will fail, should fall back to byte comparison
-        assert!(paths_same(
-            std::path::Path::new("/nonexistent/a"),
-            std::path::Path::new("/nonexistent/a"),
-        ));
-        assert!(!paths_same(
-            std::path::Path::new("/nonexistent/a"),
-            std::path::Path::new("/nonexistent/b"),
-        ));
     }
 
     // Covers: R83

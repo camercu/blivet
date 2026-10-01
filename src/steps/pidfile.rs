@@ -10,7 +10,7 @@ use nix::unistd::Whence;
 
 use super::*;
 use crate::error::DaemonizeError;
-use crate::util::paths_same;
+use crate::file_identity::{file_id, paths_same, FileId};
 
 /// Step 7: Open and exclusively lock a lockfile.
 pub(crate) fn open_and_lock(path: &Path) -> Result<Flock<OwnedFd>, DaemonizeError> {

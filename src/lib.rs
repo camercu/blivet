@@ -181,6 +181,8 @@ mod signals;
 pub(crate) mod sys;
 
 #[cfg(unix)]
+mod file_identity;
+#[cfg(unix)]
 mod notify;
 #[cfg(unix)]
 mod sequence;
@@ -188,8 +190,6 @@ mod sequence;
 mod steps;
 #[cfg(unix)]
 mod thread_count;
-#[cfg(unix)]
-pub(crate) mod util;
 
 #[cfg(test)]
 mod test_support;

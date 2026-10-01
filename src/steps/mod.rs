@@ -5,8 +5,6 @@
 //! testable. Callers use `steps::name`; the submodules are an internal
 //! grouping.
 
-use std::os::fd::AsFd;
-
 mod fds;
 mod pidfile;
 mod process;
@@ -91,29 +89,5 @@ pub(crate) mod failpoints {
     pub(crate) fn injected_max_fd() -> Option<i32> {
         let max_fd = MAX_FD.load(Ordering::Relaxed);
         (max_fd > 0).then_some(max_fd)
-    }
-}
-
-/// A file's identity: the device and inode `fstat` reports. Two paths, or two
-/// descriptors, name the same file exactly when these match — however they
-/// were spelled, through whatever symlinks, on whatever filesystem.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct FileId {
-    dev: libc::dev_t,
-    ino: libc::ino_t,
-}
-
-/// The identity of the open file `fd`.
-pub(crate) fn file_id(fd: impl AsFd) -> Result<FileId, nix::errno::Errno> {
-    nix::sys::stat::fstat(fd).map(|st| FileId::of(&st))
-}
-
-impl FileId {
-    /// The identity `fstat` reported.
-    fn of(st: &nix::sys::stat::FileStat) -> Self {
-        FileId {
-            dev: st.st_dev,
-            ino: st.st_ino,
-        }
     }
 }

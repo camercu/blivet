@@ -226,7 +226,7 @@ unsafe fn run_post_fork<T>(
         owned.push(("pidfile", pidfile.write_pid()?));
     }
     if let Some(ref lockfile) = lockfile {
-        let id = steps::file_id(&**lockfile)
+        let id = crate::file_identity::file_id(&**lockfile)
             .map_err(|e| DaemonizeError::LockfileError(format!("fstat: {e}")))?;
         owned.push(("lockfile", id));
     }

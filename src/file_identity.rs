@@ -1,7 +1,36 @@
-//! Shared utility functions used across multiple modules.
+//! File identity: whether two descriptors, or two paths, name the same file.
+//!
+//! [`FileId`] compares open files by device and inode. [`paths_same`]
+//! compares paths, including ones that do not exist yet, which is what
+//! `validate()`'s overlap checks need before any file is opened.
 
 use std::ffi::OsStr;
+use std::os::fd::AsFd;
 use std::path::{Path, PathBuf};
+
+/// A file's identity: the device and inode `fstat` reports. Two paths, or two
+/// descriptors, name the same file exactly when these match — however they
+/// were spelled, through whatever symlinks, on whatever filesystem.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct FileId {
+    pub(crate) dev: libc::dev_t,
+    pub(crate) ino: libc::ino_t,
+}
+
+/// The identity of the open file `fd`.
+pub(crate) fn file_id(fd: impl AsFd) -> Result<FileId, nix::errno::Errno> {
+    nix::sys::stat::fstat(fd).map(|st| FileId::of(&st))
+}
+
+impl FileId {
+    /// The identity `fstat` reported.
+    pub(crate) fn of(st: &nix::sys::stat::FileStat) -> Self {
+        FileId {
+            dev: st.st_dev,
+            ino: st.st_ino,
+        }
+    }
+}
 
 /// True when both paths name one file, whether or not it exists yet.
 ///
@@ -42,6 +71,19 @@ fn resolve_in_parent(path: &Path) -> Option<(PathBuf, &OsStr)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn paths_same_canonicalize_fallback() {
+        // Paths that don't exist — canonicalize will fail, should fall back to byte comparison
+        assert!(paths_same(
+            std::path::Path::new("/nonexistent/a"),
+            std::path::Path::new("/nonexistent/a"),
+        ));
+        assert!(!paths_same(
+            std::path::Path::new("/nonexistent/a"),
+            std::path::Path::new("/nonexistent/b"),
+        ));
+    }
 
     #[test]
     fn symlink_and_target_are_canonically_equal() {

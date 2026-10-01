@@ -9,8 +9,8 @@ use nix::fcntl::{open, OFlag};
 use nix::sys::stat::Mode;
 use nix::unistd::{self};
 
-use super::*;
 use crate::error::DaemonizeError;
+use crate::file_identity::FileId;
 use std::os::fd::AsRawFd;
 
 /// What step 12 does with the streams it has opened — see
@@ -375,6 +375,7 @@ pub(crate) fn above_stdio(fd: OwnedFd) -> std::io::Result<OwnedFd> {
 
 #[cfg(test)]
 mod tests {
+    use crate::file_identity::file_id;
     use std::io::Write;
 
     use super::*;
