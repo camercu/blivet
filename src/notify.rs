@@ -1,16 +1,20 @@
 //! Wire protocol for the parent-readiness notification pipe.
 //!
-//! After the double fork, the grandchild (the daemon) writes exactly one
-//! message to the pipe; the original parent reads it, and both exit. The
-//! format is a single leading **exit-code byte**, optionally followed by a
-//! UTF-8 message:
+//! After the double fork, the grandchild (the daemon) writes to the pipe; the
+//! original parent reads it, and both exit. A message starts with an
+//! **exit-code byte**:
 //!
-//! - `0x00` — success; the daemon is ready. Any trailing bytes are ignored.
-//! - non-zero `code` + message — failure; the parent prints `message` to
-//!   stderr and exits with `code`.
-//! - pipe closed with no bytes (EOF) — success where the daemon was to `exec`
-//!   (a successful `exec` closes the `O_CLOEXEC` write end); otherwise the
-//!   daemon ended without notifying, a failure. See [`EofMeans`].
+//! - `0x00 0x00` ([`SUCCESS`]) — the daemon is ready.
+//! - `0x00 0x01` ([`EXEC_PENDING`]) — the daemon is about to `exec`. A
+//!   successful `exec` closes the `O_CLOEXEC` write end, so EOF after this
+//!   marker is success; a failed one is followed by an error message.
+//! - non-zero `code` + UTF-8 message — failure; the parent prints `message`
+//!   to stderr and exits with `code`.
+//! - EOF with no marker — the daemon ended without notifying (a signal killed
+//!   it, or it exited without dropping its context): failure (R150).
+//!
+//! Both two-byte messages go out in one `write` well under `PIPE_BUF`, so the
+//! reader never waits for the second byte.
 //!
 //! Centralizing the byte layout here keeps the three writers (success, error,
 //! drop-without-notify) and the single reader from drifting out of sync.
@@ -73,6 +77,22 @@ impl NotifyPipe {
         self.write_all(&SUCCESS)
     }
 
+    /// Say the daemon is about to `exec`, keeping the pipe open: a successful
+    /// `exec` closes it (EOF reads as success), and a failed one reports its
+    /// error through [`signal_error`](Self::signal_error).
+    ///
+    /// # Errors
+    ///
+    /// Returns `io::Error` if writing to the pipe fails.
+    pub(crate) fn signal_exec_pending(&mut self) -> io::Result<()> {
+        let fd = self
+            .0
+            .as_ref()
+            .expect("exec marker written after the pipe was consumed");
+        let mut file = std::fs::File::from(fd.try_clone()?);
+        file.write_all(&EXEC_PENDING)
+    }
+
     /// Signal a daemonization failure: write the error's exit-code byte and
     /// message, then close the pipe. Best-effort — write errors are ignored
     /// because the process is aborting regardless.
@@ -119,12 +139,15 @@ const UNNOTIFIED_CODE: u8 = 1;
 /// Message paired with [`UNNOTIFIED_CODE`].
 const UNNOTIFIED_MSG: &[u8] = b"daemon exited without signaling readiness";
 
-/// Message for a pipe that closed with no message where no `exec` was expected.
+/// Message for a pipe that closed with no message and no exec marker.
 const EOF_UNNOTIFIED_MSG: &str =
     "daemon ended without signaling readiness (killed by a signal, or exited without dropping its DaemonContext)";
 
-/// The single success byte (`0x00`).
-pub(crate) const SUCCESS: [u8; 1] = [0x00];
+/// Readiness: the daemon is up.
+pub(crate) const SUCCESS: [u8; 2] = [0x00, 0x00];
+
+/// The daemon is about to `exec`; EOF after this is success.
+pub(crate) const EXEC_PENDING: [u8; 2] = [0x00, 0x01];
 
 /// Encode a failure message: exit-code byte followed by the error's `Display`.
 ///
@@ -149,53 +172,56 @@ fn encode(code: u8, msg: &[u8]) -> Vec<u8> {
 /// The decoded result of a message read from the notification pipe.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum Outcome {
-    /// Daemon is ready: the success byte, or EOF where that means an exec.
+    /// Daemon is ready, or exec'd after the exec marker.
     Success,
     /// Daemon failed; report `message` to stderr and exit with `code`.
     Failure { code: i32, message: String },
 }
 
-/// What the pipe closing with no message (EOF) means.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum EofMeans {
-    /// The daemon was to `exec`, and a successful `exec` closes the
-    /// `O_CLOEXEC` write end: the daemon is running.
-    Ready,
-    /// The daemon was not to `exec`, and every way of ending with its
-    /// `DaemonContext` dropped writes a message: it ended without notifying.
-    Unnotified,
-}
-
 /// Read the daemon's message from the pipe and decode it.
 ///
-/// Returns on the success byte without reading on. A process the daemon forked
+/// Returns on [`SUCCESS`] without reading on. A process the daemon forked
 /// before notifying holds a copy of the write end, so the pipe reaches EOF only
 /// when that process exits too: waiting for EOF would hold the launcher until
-/// then. A failure reads to EOF for its message, which the writer sends and
-/// closes in one step.
-pub(crate) fn read_outcome(pipe: &mut impl io::Read, eof: EofMeans) -> Outcome {
-    let mut first = [0u8; 1];
-    let buf = match pipe.read(&mut first) {
-        Ok(0) | Err(_) => Vec::new(),
-        Ok(_) if first == SUCCESS => return Outcome::Success,
-        Ok(_) => {
-            let mut buf = first.to_vec();
-            let _ = pipe.read_to_end(&mut buf);
-            buf
-        }
+/// then. A failure, or what follows [`EXEC_PENDING`], reads to EOF: the
+/// writer sends an error message and closes in one step, and a successful
+/// `exec` closes the pipe.
+pub(crate) fn read_outcome(pipe: &mut impl io::Read) -> Outcome {
+    let mut header = [0u8; 2];
+    let first = match pipe.read(&mut header[..1]) {
+        Ok(1) => header[0],
+        _ => return decode(&[]),
     };
-    decode(&buf, eof)
+    if first == 0 {
+        // Sent in the same write as the first byte; EOF here is a bare 0x00,
+        // which only an older writer sends, and reads as readiness.
+        if !matches!(pipe.read(&mut header[1..]), Ok(1)) || header == SUCCESS {
+            return Outcome::Success;
+        }
+    }
+    let mut buf = if first == 0 {
+        header.to_vec()
+    } else {
+        vec![first]
+    };
+    let _ = pipe.read_to_end(&mut buf);
+    decode(&buf)
 }
 
-/// Decode a message read from the notification pipe.
-pub(crate) fn decode(buf: &[u8], eof: EofMeans) -> Outcome {
-    match (buf.first(), eof) {
-        (None, EofMeans::Ready) | (Some(&0x00), _) => Outcome::Success,
-        (None, EofMeans::Unnotified) => Outcome::Failure {
+/// Decode a whole message read from the notification pipe.
+pub(crate) fn decode(buf: &[u8]) -> Outcome {
+    let rest = buf.strip_prefix(&EXEC_PENDING[..]);
+    match (rest, buf.first()) {
+        // The exec marker, then EOF: the exec closed the pipe.
+        (Some([]), _) => Outcome::Success,
+        // The exec marker, then the exec's error.
+        (Some(error), _) => decode(error),
+        (None, None) => Outcome::Failure {
             code: UNNOTIFIED_CODE as i32,
             message: EOF_UNNOTIFIED_MSG.into(),
         },
-        (Some(&code), _) => Outcome::Failure {
+        (None, Some(&0x00)) => Outcome::Success,
+        (None, Some(&code)) => Outcome::Failure {
             code: code as i32,
             message: String::from_utf8_lossy(&buf[1..]).into_owned(),
         },
@@ -219,10 +245,7 @@ mod tests {
         let (rd, wr) = make_pipe();
         let err = DaemonizeError::ForkFailed("boom".into());
         NotifyPipe::new(wr).signal_error(&err);
-        assert_eq!(
-            decode(&read_pipe(rd), EofMeans::Unnotified),
-            decode(&error_bytes(&err), EofMeans::Unnotified)
-        );
+        assert_eq!(decode(&read_pipe(rd)), decode(&error_bytes(&err)));
     }
 
     #[test]
@@ -230,7 +253,7 @@ mod tests {
         let (rd, wr) = make_pipe();
         NotifyPipe::new(wr).signal_unnotified();
         assert_eq!(
-            decode(&read_pipe(rd), EofMeans::Unnotified),
+            decode(&read_pipe(rd)),
             Outcome::Failure {
                 code: UNNOTIFIED_CODE as i32,
                 message: "daemon exited without signaling readiness".into(),
@@ -247,7 +270,7 @@ mod tests {
         let (rd, wr) = make_pipe();
         drop(NotifyPipe::new(wr));
         assert_eq!(
-            decode(&read_pipe(rd), EofMeans::Unnotified),
+            decode(&read_pipe(rd)),
             Outcome::Failure {
                 code: UNNOTIFIED_CODE as i32,
                 message: "daemon exited without signaling readiness".into(),
@@ -291,7 +314,7 @@ mod tests {
 
     #[test]
     fn decode_success_byte() {
-        assert_eq!(decode(&SUCCESS, EofMeans::Unnotified), Outcome::Success);
+        assert_eq!(decode(&SUCCESS), Outcome::Success);
     }
 
     /// A pipe that has delivered `.0` and whose write end another process still
@@ -316,27 +339,47 @@ mod tests {
     #[test]
     fn read_outcome_stops_at_the_success_byte() {
         let mut pipe = StillOpen(SUCCESS.into_iter().collect());
+        assert_eq!(read_outcome(&mut pipe), Outcome::Success);
+    }
+
+    // Covers: R150
+    #[test]
+    fn eof_without_the_exec_marker_is_failure() {
         assert_eq!(
-            read_outcome(&mut pipe, EofMeans::Unnotified),
-            Outcome::Success
+            decode(&[]),
+            Outcome::Failure {
+                code: UNNOTIFIED_CODE as i32,
+                message: EOF_UNNOTIFIED_MSG.into(),
+            }
         );
     }
 
     // Covers: R150
     #[test]
-    fn decode_eof_after_an_exec_is_success() {
-        assert_eq!(decode(&[], EofMeans::Ready), Outcome::Success);
+    fn eof_after_the_exec_marker_is_success() {
+        assert_eq!(read_outcome(&mut &EXEC_PENDING[..]), Outcome::Success);
     }
 
     // Covers: R150
     #[test]
-    fn decode_eof_without_an_exec_is_failure() {
+    fn an_error_after_the_exec_marker_is_that_error() {
+        let err = DaemonizeError::ExecFailed("exec /x: E2BIG".into());
+        let mut bytes = EXEC_PENDING.to_vec();
+        bytes.extend(error_bytes(&err));
+        assert_eq!(read_outcome(&mut &bytes[..]), decode(&error_bytes(&err)));
+    }
+
+    // Covers: R150
+    #[test]
+    fn signal_exec_pending_leaves_the_pipe_open_for_an_exec_error() {
+        let (rd, wr) = make_pipe();
+        let err = DaemonizeError::ProgramNotFound("exec /x: ENOENT".into());
+        let mut pipe = NotifyPipe::new(wr);
+        pipe.signal_exec_pending().unwrap();
+        pipe.signal_error(&err);
         assert_eq!(
-            decode(&[], EofMeans::Unnotified),
-            Outcome::Failure {
-                code: UNNOTIFIED_CODE as i32,
-                message: EOF_UNNOTIFIED_MSG.into(),
-            }
+            read_outcome(&mut std::fs::File::from(rd)),
+            decode(&error_bytes(&err))
         );
     }
 
@@ -345,7 +388,7 @@ mod tests {
         let err = DaemonizeError::ForkFailed("boom".into());
         let code = err.exit_code();
         assert_eq!(
-            decode(&error_bytes(&err), EofMeans::Unnotified),
+            decode(&error_bytes(&err)),
             Outcome::Failure {
                 code: code as i32,
                 message: "fork failed: boom".into(),
@@ -359,7 +402,7 @@ mod tests {
         // decoded as readiness. exit_code() remaps it, so the encoded message
         // is still a real failure.
         let err = DaemonizeError::application(0, "boom");
-        match decode(&error_bytes(&err), EofMeans::Unnotified) {
+        match decode(&error_bytes(&err)) {
             Outcome::Failure { code, message } => {
                 assert_ne!(code, 0);
                 assert_eq!(message, "application error: boom");
@@ -371,7 +414,7 @@ mod tests {
     #[test]
     fn unnotified_round_trip() {
         assert_eq!(
-            decode(&unnotified_bytes(), EofMeans::Unnotified),
+            decode(&unnotified_bytes()),
             Outcome::Failure {
                 code: UNNOTIFIED_CODE as i32,
                 message: "daemon exited without signaling readiness".into(),

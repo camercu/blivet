@@ -1,5 +1,4 @@
 use std::ffi::CString;
-use std::os::fd::BorrowedFd;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -94,8 +93,6 @@ fn main() -> ExitCode {
 
     // Build config
     let mut config = DaemonConfig::new();
-    // The daemon execs the program, whose success closes the pipe unwritten.
-    config.exec_notifies(true);
     if let Some(ref p) = args.pidfile {
         config.pidfile(p);
     }
@@ -211,15 +208,6 @@ fn main() -> ExitCode {
         }
     };
 
-    // Clear CLOEXEC on lockfile fd so the lock survives exec
-    if let Some(lockfile_fd) = ctx.lockfile_fd() {
-        if let Err(e) = clear_cloexec(lockfile_fd) {
-            ctx.report_error(&DaemonizeError::ExecFailed(format!(
-                "failed to clear CLOEXEC on lockfile fd: {e}"
-            )));
-        }
-    }
-
     // Build argv for execvp
     let c_program = CString::new(program_path.as_str()).unwrap_or_else(|_| {
         ctx.report_error(&DaemonizeError::ExecFailed(
@@ -243,35 +231,9 @@ fn main() -> ExitCode {
         })
         .collect();
 
-    // Restore the conventional default SIGPIPE disposition for the target
-    // program: daemonization preserves the launcher's disposition (Rust
-    // ignores SIGPIPE), and an ignored disposition would survive exec(2).
-    // SAFETY: SIG_DFL is a valid disposition; the process is single-threaded.
-    #[allow(unsafe_code)]
-    unsafe {
-        libc::signal(libc::SIGPIPE, libc::SIG_DFL)
-    };
-
-    // exec — if this returns, it failed; exec_error_variant classifies the errno.
-    let Err(err) = nix::unistd::execvp(&c_program, &c_args);
-    ctx.report_error(&exec_error_variant(
-        err,
-        format!("exec {program_path}: {err}"),
-    ));
-}
-
-/// Maps an `execvp` errno to the reported error. `ENOENT` (program or script
-/// interpreter missing) and `EACCES` (program not executable) both become
-/// [`DaemonizeError::ProgramNotFound`], matching the pre-fork path check so a
-/// missing-or-unusable program is exit 66 in both path and bare form. Every
-/// other errno is a genuine OS-level exec failure ([`DaemonizeError::ExecFailed`],
-/// exit 71) (R130).
-fn exec_error_variant(err: nix::errno::Errno, message: String) -> DaemonizeError {
-    use nix::errno::Errno;
-    match err {
-        Errno::ENOENT | Errno::EACCES => DaemonizeError::ProgramNotFound(message),
-        _ => DaemonizeError::ExecFailed(message),
-    }
+    // Keeps the lock across the exec, restores the default SIGPIPE, and tells
+    // the launcher an exec is pending; reports and exits if the exec fails.
+    ctx.exec(&c_program, &c_args)
 }
 
 fn resolve_program_path(program: &str) -> Result<String, DaemonizeError> {
@@ -309,50 +271,9 @@ fn derive_stderr_path(stdout: &Path) -> PathBuf {
     }
 }
 
-fn clear_cloexec(fd: BorrowedFd<'_>) -> Result<(), nix::Error> {
-    use nix::fcntl::{fcntl, FcntlArg, FdFlag};
-    fcntl(fd, FcntlArg::F_SETFD(FdFlag::empty()))?;
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    // --- exec_error_variant ---
-
-    // Covers: R130
-    #[test]
-    fn exec_enoent_maps_to_program_not_found() {
-        assert!(matches!(
-            exec_error_variant(nix::errno::Errno::ENOENT, "m".into()),
-            DaemonizeError::ProgramNotFound(_)
-        ));
-    }
-
-    // Covers: R130
-    #[test]
-    fn exec_eacces_maps_to_program_not_found() {
-        // A missing-or-unusable program is one exit code (66) in both path and
-        // bare form; EACCES is the bare-form counterpart to the path-form X_OK
-        // check.
-        assert!(matches!(
-            exec_error_variant(nix::errno::Errno::EACCES, "m".into()),
-            DaemonizeError::ProgramNotFound(_)
-        ));
-    }
-
-    // Covers: R130
-    #[test]
-    fn exec_other_errno_stays_exec_failed() {
-        // Anything that is not "program missing/unusable" is a genuine OS error
-        // (exit 71). E2BIG stands in for that class; it is not integration-
-        // reachable, hence the unit test.
-        assert!(matches!(
-            exec_error_variant(nix::errno::Errno::E2BIG, "m".into()),
-            DaemonizeError::ExecFailed(_)
-        ));
-    }
 
     // --- README flag table parity ---
 
@@ -502,30 +423,5 @@ mod tests {
     fn derive_stderr_no_extension() {
         let result = derive_stderr_path(Path::new("/var/log/app"));
         assert_eq!(result, PathBuf::from("/var/log/app"));
-    }
-
-    // --- clear_cloexec ---
-
-    // Covers: R110
-    #[test]
-    #[allow(clippy::disallowed_methods)] // a test probe; no stdio slot is in play
-    fn clear_cloexec_removes_flag() {
-        use nix::fcntl::{fcntl, open, FcntlArg, FdFlag, OFlag};
-        use nix::sys::stat::Mode;
-        use std::os::fd::AsFd;
-
-        let fd = open(
-            c"/dev/null",
-            OFlag::O_RDONLY | OFlag::O_CLOEXEC,
-            Mode::empty(),
-        )
-        .unwrap();
-        let flags = fcntl(fd.as_fd(), FcntlArg::F_GETFD).unwrap();
-        assert!(FdFlag::from_bits_truncate(flags).contains(FdFlag::FD_CLOEXEC));
-
-        clear_cloexec(fd.as_fd()).unwrap();
-
-        let flags = fcntl(fd.as_fd(), FcntlArg::F_GETFD).unwrap();
-        assert!(!FdFlag::from_bits_truncate(flags).contains(FdFlag::FD_CLOEXEC));
     }
 }

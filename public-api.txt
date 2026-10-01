@@ -44,7 +44,6 @@ pub fn blivet::DaemonConfig::chown_paths(&mut self, chown: bool) -> &mut Self
 pub fn blivet::DaemonConfig::cleanup_on_drop(&mut self, cleanup: bool) -> &mut Self
 pub fn blivet::DaemonConfig::close_fds(&mut self, close_fds: bool) -> &mut Self
 pub fn blivet::DaemonConfig::env(&mut self, key: impl core::convert::Into<alloc::string::String>, value: impl core::convert::Into<alloc::string::String>) -> &mut Self
-pub fn blivet::DaemonConfig::exec_notifies(&mut self, exec_notifies: bool) -> &mut Self
 pub fn blivet::DaemonConfig::foreground(&mut self, foreground: bool) -> &mut Self
 pub fn blivet::DaemonConfig::group(&mut self, name: impl core::convert::Into<alloc::string::String>) -> &mut Self
 pub fn blivet::DaemonConfig::lockfile(&mut self, path: impl core::convert::Into<std::path::PathBuf>) -> &mut Self
@@ -80,6 +79,7 @@ impl blivet::DaemonContext
 pub fn blivet::DaemonContext::cleanup(&mut self)
 pub fn blivet::DaemonContext::cleanup_on_signals(&self, signals: &[i32]) -> core::result::Result<(), blivet::DaemonizeError>
 pub fn blivet::DaemonContext::cleanup_on_term_signals(&self) -> core::result::Result<(), blivet::DaemonizeError>
+pub fn blivet::DaemonContext::exec<S: core::convert::AsRef<core::ffi::c_str::CStr>>(self, program: &core::ffi::c_str::CStr, args: &[S]) -> never
 pub fn blivet::DaemonContext::lockfile_fd(&self) -> core::option::Option<std::os::fd::owned::BorrowedFd<'_>>
 pub fn blivet::DaemonContext::notify_parent(&mut self) -> core::result::Result<(), blivet::DaemonizeError>
 pub fn blivet::DaemonContext::notify_parent_or_report(&mut self)

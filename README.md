@@ -287,6 +287,13 @@ let db = match Database::connect(&url) {
 };
 ```
 
+### Handing off to another program
+
+`ctx.exec(program, argv)` replaces the daemon with another program, as the
+`daemonize` CLI does. The program keeps the lock and starts with the default
+`SIGPIPE`. The launcher exits 0 once the exec succeeds, or with the exec's
+error (66 for a missing program, 71 otherwise) if it fails.
+
 ### Propagating exit codes
 
 The `sysexits.h` codes only reach the shell if you use them. The idiomatic

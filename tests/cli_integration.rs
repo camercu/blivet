@@ -204,7 +204,7 @@ fn append_mode_preserves_existing_content() {
     assert!(content.contains("appended"), "should append new content");
 }
 
-// Covers: R15, R16
+// Covers: R15, R16, R110
 #[test]
 fn lockfile_exclusion_second_instance_fails() {
     let dir = tempfile::tempdir().unwrap();

@@ -1,7 +1,7 @@
 //! Post-daemonization context: parent notification, lockfile management,
 //! and pidfile cleanup.
 
-use std::ffi::CString;
+use std::ffi::{CStr, CString};
 use std::fmt;
 use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
 use std::os::unix::ffi::OsStrExt;
@@ -23,9 +23,10 @@ use crate::notify::NotifyPipe;
 /// writes a failure message to the notification pipe, causing the parent to
 /// exit non-zero. Ending without dropping it, because a signal killed the
 /// daemon or it called [`std::process::exit`], closes the pipe with no
-/// message, which the parent also reads as a failure unless
-/// [`exec_notifies`](crate::DaemonConfig::exec_notifies) is set. When [`cleanup_on_drop`](crate::DaemonConfig::cleanup_on_drop)
-/// is `true` (the default), dropping also removes the pidfile from disk.
+/// message, which the parent also reads as a failure. Only
+/// [`exec`](DaemonContext::exec) tells the parent to read that close as
+/// success. When [`cleanup_on_drop`](crate::DaemonConfig::cleanup_on_drop) is
+/// `true` (the default), dropping also removes the pidfile from disk.
 ///
 /// **Signal caveat:** `Drop` does not run when the process is killed by a
 /// signal. To clean up the pidfile on `SIGTERM`/`SIGINT`, either call
@@ -277,6 +278,39 @@ impl DaemonContext {
         }
     }
 
+    /// Replaces the daemon with `program`, as the `daemonize` CLI does.
+    ///
+    /// Before `execvp`, it clears close-on-exec on the lockfile so the program
+    /// keeps the lock, restores the default `SIGPIPE` disposition (daemonizing
+    /// keeps the Rust runtime's ignored one, which would survive the exec),
+    /// and tells the launcher an exec is pending. A successful exec closes the
+    /// notification pipe and the launcher exits 0. `args` is the full argv,
+    /// `args[0]` included; `execvp` searches `PATH` for a bare `program`.
+    ///
+    /// Never returns. If the exec fails, this reports the error like
+    /// [`report_error`](Self::report_error): `ENOENT` and `EACCES` as
+    /// [`ProgramNotFound`](DaemonizeError::ProgramNotFound) (exit 66), any
+    /// other errno as [`ExecFailed`](DaemonizeError::ExecFailed) (exit 71).
+    pub fn exec<S: AsRef<CStr>>(mut self, program: &CStr, args: &[S]) -> ! {
+        if let Some(lockfile) = self.lockfile_fd() {
+            use nix::fcntl::{fcntl, FcntlArg, FdFlag};
+            if let Err(e) = fcntl(lockfile, FcntlArg::F_SETFD(FdFlag::empty())) {
+                self.report_error(&DaemonizeError::ExecFailed(format!(
+                    "clear close-on-exec on the lockfile: {e}"
+                )));
+            }
+        }
+        crate::unsafe_ops::restore_default_sigpipe();
+        if let Some(pipe) = self.notify_pipe.as_mut() {
+            if let Err(e) = pipe.signal_exec_pending() {
+                self.report_error(&DaemonizeError::NotifyFailed(e));
+            }
+        }
+        let Err(errno) = nix::unistd::execvp(program, args);
+        let message = format!("exec {}: {errno}", program.to_string_lossy());
+        self.report_error(&exec_error(errno, message))
+    }
+
     /// Reports an error to the parent process and exits.
     ///
     /// Removes the pidfile, then writes the error's exit code byte followed by
@@ -367,9 +401,57 @@ impl Drop for DaemonContext {
     }
 }
 
+/// Maps an `execvp` errno to the reported error. `ENOENT` (program or script
+/// interpreter missing) and `EACCES` (program not executable) both become
+/// [`DaemonizeError::ProgramNotFound`], matching the CLI's pre-fork path check,
+/// so a missing or unusable program is exit 66 either way. Every other errno is
+/// a genuine OS-level exec failure ([`DaemonizeError::ExecFailed`], exit 71)
+/// (R130).
+fn exec_error(errno: nix::errno::Errno, message: String) -> DaemonizeError {
+    use nix::errno::Errno;
+    match errno {
+        Errno::ENOENT | Errno::EACCES => DaemonizeError::ProgramNotFound(message),
+        _ => DaemonizeError::ExecFailed(message),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Covers: R130
+    #[test]
+    fn exec_enoent_maps_to_program_not_found() {
+        assert!(matches!(
+            exec_error(nix::errno::Errno::ENOENT, "m".into()),
+            DaemonizeError::ProgramNotFound(_)
+        ));
+    }
+
+    // Covers: R130
+    #[test]
+    fn exec_eacces_maps_to_program_not_found() {
+        // A missing-or-unusable program is one exit code (66) in both path and
+        // bare form; EACCES is the bare-form counterpart to the path-form X_OK
+        // check.
+        assert!(matches!(
+            exec_error(nix::errno::Errno::EACCES, "m".into()),
+            DaemonizeError::ProgramNotFound(_)
+        ));
+    }
+
+    // Covers: R130
+    #[test]
+    fn exec_other_errno_stays_exec_failed() {
+        // Anything that is not "program missing/unusable" is a genuine OS error
+        // (exit 71). E2BIG stands in for that class; it is not integration-
+        // reachable, hence the unit test.
+        assert!(matches!(
+            exec_error(nix::errno::Errno::E2BIG, "m".into()),
+            DaemonizeError::ExecFailed(_)
+        ));
+    }
+
     use crate::test_support::{make_pipe, read_pipe};
     use std::io::Read;
 
@@ -395,7 +477,7 @@ mod tests {
         let (rd, wr) = make_pipe();
         let mut ctx = ctx(&DaemonConfig::new(), None, Some(NotifyPipe::new(wr)));
         ctx.notify_parent().unwrap();
-        assert_eq!(read_pipe(rd), vec![0x00]);
+        assert_eq!(read_pipe(rd), crate::notify::SUCCESS);
     }
 
     #[test]
@@ -403,7 +485,7 @@ mod tests {
         let (rd, wr) = make_pipe();
         let mut ctx = ctx(&DaemonConfig::new(), None, Some(NotifyPipe::new(wr)));
         ctx.notify_parent_or_report(); // success path returns normally
-        assert_eq!(read_pipe(rd), vec![0x00]);
+        assert_eq!(read_pipe(rd), crate::notify::SUCCESS);
     }
 
     #[test]
@@ -816,7 +898,7 @@ mod tests {
             let mut ctx = ctx(&DaemonConfig::new(), None, Some(NotifyPipe::new(wr)));
             ctx.notify_parent().unwrap();
         }
-        assert_eq!(read_pipe(rd), vec![0x00]);
+        assert_eq!(read_pipe(rd), crate::notify::SUCCESS);
     }
 
     #[test]

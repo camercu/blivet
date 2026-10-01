@@ -3,7 +3,8 @@
 /// Errors produced during configuration validation or the daemonization sequence.
 ///
 /// Each variant maps to a `sysexits.h` exit code via [`exit_code`](DaemonizeError::exit_code).
-/// `ProgramNotFound` and `ExecFailed` are produced only by the CLI binary, never by the library.
+/// `ProgramNotFound` and `ExecFailed` come only from
+/// [`DaemonContext::exec`](crate::DaemonContext::exec) and the CLI's checks.
 ///
 /// # Payload stability
 ///
@@ -19,8 +20,8 @@ pub enum DaemonizeError {
     #[error("validation error: {0}")]
     ValidationError(String),
 
-    /// CLI-only: program missing or not executable — caught by the pre-fork
-    /// path check, or at exec time by `ENOENT` (missing PATH command or script
+    /// Program missing or not executable: caught by the CLI's pre-fork path
+    /// check, or at exec time by `ENOENT` (missing PATH command or script
     /// interpreter) or `EACCES` (program not executable).
     #[error("program not found: {0}")]
     ProgramNotFound(String),
@@ -84,8 +85,9 @@ pub enum DaemonizeError {
     #[error("chown error: {0}")]
     ChownError(String),
 
-    /// CLI-only: exec of target program failed for a reason other than
-    /// `ENOENT`/`EACCES` (which map to [`ProgramNotFound`](Self::ProgramNotFound)).
+    /// Exec of the target program failed for a reason other than
+    /// `ENOENT`/`EACCES` (which map to [`ProgramNotFound`](Self::ProgramNotFound)),
+    /// or the steps before it failed.
     #[error("exec failed: {0}")]
     ExecFailed(String),
 

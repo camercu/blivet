@@ -63,7 +63,6 @@ pub struct DaemonConfig {
     pub(crate) close_fds: bool,
     pub(crate) cleanup_on_drop: bool,
     pub(crate) chown_paths: bool,
-    pub(crate) exec_notifies: bool,
     pub(crate) env: Vec<(String, String)>,
 }
 
@@ -83,7 +82,6 @@ impl Default for DaemonConfig {
             close_fds: true,
             cleanup_on_drop: true,
             chown_paths: true,
-            exec_notifies: false,
             env: Vec::new(),
         }
     }
@@ -271,26 +269,6 @@ impl DaemonConfig {
     /// its logs — or to manage ownership yourself with custom users/groups.
     pub fn chown_paths(&mut self, chown: bool) -> &mut Self {
         self.chown_paths = chown;
-        self
-    }
-
-    /// Sets whether the daemon signals readiness by `exec`ing another program.
-    /// Default: `false`.
-    ///
-    /// The launcher waits on a pipe whose write end is close-on-exec. When
-    /// `true`, the pipe closing with no message means the `exec` succeeded, and
-    /// the launcher exits 0: the `daemonize` CLI works this way. When `false`,
-    /// only [`notify_parent`](crate::DaemonContext::notify_parent) reports
-    /// success. The pipe closing with no message then means the daemon ended
-    /// before notifying without dropping its
-    /// [`DaemonContext`](crate::DaemonContext), because a signal killed it or
-    /// it called [`std::process::exit`], and the launcher exits 1.
-    ///
-    /// Set this only if the daemon `exec`s instead of calling `notify_parent`.
-    /// If the `exec` fails, report it with
-    /// [`report_error`](crate::DaemonContext::report_error).
-    pub fn exec_notifies(&mut self, exec_notifies: bool) -> &mut Self {
-        self.exec_notifies = exec_notifies;
         self
     }
 

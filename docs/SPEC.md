@@ -157,7 +157,6 @@ All fields are private; callers use builder methods.
 | `close_fds`  | `bool`                  | `true`               | `.close_fds(bool)`   | `bool`                     | Setter      |
 | `cleanup_on_drop` | `bool`             | `true`               | `.cleanup_on_drop(bool)` | `bool`                 | Setter      |
 | `chown_paths` | `bool`                 | `true`               | `.chown_paths(bool)` | `bool`                     | Setter      |
-| `exec_notifies` | `bool`               | `false`              | `.exec_notifies(bool)` | `bool`                   | Setter      |
 | `env`        | `Vec<(String, String)>` | `vec![]`             | `.env(key, value)`   | `impl Into<String>` (both) | Accumulator |
 
 All builder methods except `.env()` are setters: each call replaces the
@@ -287,7 +286,7 @@ are lowercase with no trailing punctuation.
 | Variant            | Condition                                               |
 | ------------------ | ------------------------------------------------------- |
 | `ValidationError`  | Bad path, bad env key, path overlap, other config error |
-| `ProgramNotFound`  | CLI-only: program missing or not executable (pre-fork path check, or `ENOENT`/`EACCES` at exec) |
+| `ProgramNotFound`  | Program missing or not executable (the CLI's pre-fork path check, or `ENOENT`/`EACCES` from `DaemonContext::exec`) |
 | `UserNotFound`     | User does not exist at runtime during user switching    |
 | `GroupNotFound`    | Group does not exist at runtime during group switching  |
 | `LockConflict`     | flock already held by another process                   |
@@ -300,13 +299,12 @@ are lowercase with no trailing punctuation.
 | `PidfileError`     | Pidfile cannot be written                               |
 | `OutputFileError`  | stdout/stderr file cannot be opened, truncated or dup2'd, or, in foreground mode, fd 1/2 cannot be saved first |
 | `ChownError`       | chown of pidfile/lockfile/output file failed             |
-| `ExecFailed`       | CLI-only: exec of target program failed (other than `ENOENT`/`EACCES`) |
+| `ExecFailed`       | `DaemonContext::exec` failed (other than `ENOENT`/`EACCES`) |
 | `NotifyFailed`     | Writing the readiness byte to the notification pipe failed |
 | `Application`      | Caller-reported startup failure (returned from `init`, or via `application()`/`report_error`) |
 
-`ProgramNotFound` and `ExecFailed` are produced only by the CLI, never
-by the library. They are in the shared enum so the CLI can use the
-library's error type and notification pipe protocol uniformly.
+`ProgramNotFound` and `ExecFailed` come only from `DaemonContext::exec`
+and the CLI's pre-fork path check.
 
 `exit_code(&self) -> u8` returns the `sysexits.h` code for the variant
 (see CLI exit code table).
@@ -614,30 +612,27 @@ Individual `close()` errors in step 13 are silently ignored.
 
 ### Notification pipe protocol
 
-The parent-side reader (in step 1's parent branch) reads from the pipe
-and takes one of three actions:
+The parent-side reader (in step 1's parent branch) reads from the pipe.
+Every message starts with a byte; the two-byte messages go out in one
+`write`, well under `PIPE_BUF`, so the reader never waits for their
+second byte:
 
-- **Success byte (0x00):** library consumer called `notify_parent()`.
-  Parent calls `_exit(0)`.
+- **`0x00 0x00` (ready):** the daemon called `notify_parent()`. The
+  parent calls `_exit(0)` at once, without reading on: a process the
+  daemon forked before notifying holds a copy of the write end, so EOF
+  could be far off.
+- **`0x00 0x01` (exec pending):** the daemon is in
+  `DaemonContext::exec`. The parent reads on. EOF means the exec
+  succeeded and `O_CLOEXEC` closed the write end: `_exit(0)`. An error
+  message means the exec failed (R150).
 - **Error byte (nonzero):** value is the `exit_code()` of the error.
   Remaining bytes are the `Display` message as UTF-8. Parent prints
   the message to stderr and calls `_exit()` with the code.
-- **EOF (no bytes read):** the pipe was closed without any write. With
-  `exec_notifies(true)` this means `exec` succeeded and `O_CLOEXEC`
-  closed the write end, and the parent calls `_exit(0)`. Otherwise it
-  means the daemon ended before notifying without dropping its
-  `DaemonContext`, and the parent prints a message and calls
-  `_exit(1)` (R150).
-
-> EOF-means-success exists for the CLI exec path: `execvp` replaces the
-> process image, and `O_CLOEXEC` on the pipe write end closes it
-> automatically, producing EOF. The CLI sets `exec_notifies(true)`. A
-> library consumer that never execs signals with `notify_parent()`,
-> which writes the explicit `0x00` byte, and every other way its
-> `DaemonContext` ends writes a failure: dropping it without notifying
-> makes `Drop` write the unnotified failure. EOF is left for an end
-> that skips `Drop`: a fatal signal, `abort`, or `std::process::exit`.
-> The launcher reports those as failures rather than a clean start.
+- **EOF with no marker:** the daemon ended before notifying without
+  dropping its `DaemonContext`: a fatal signal, `abort`, or
+  `std::process::exit`. The parent prints that and calls `_exit(1)`
+  (R150). Every other way a context ends writes a message: dropping it
+  without notifying makes `Drop` write the unnotified failure.
 
 ### /dev/null redirect policy
 
@@ -947,18 +942,21 @@ This is a CLI-only convenience; the library requires explicit
 
 The CLI calls `unsafe { daemonize_unchecked(&config) }`, which also
 chowns the configured paths and switches to the configured user and
-group, then:
+group, then `ctx.exec(program, argv)`. argv[0] is the (possibly
+canonicalized) program path; subsequent elements are trailing arguments
+in order. `DaemonContext::exec`:
 
 1. Clears `CLOEXEC` on the lockfile fd (so the lock survives exec).
-2. Execs via `execvp`. argv[0] is the (possibly canonicalized) program
-   path; subsequent elements are trailing arguments in order.
+2. Restores `SIGPIPE` to `SIG_DFL` (R128).
+3. Writes the exec-pending marker to the notification pipe.
+4. Execs via `execvp`.
 
-The CLI does **not** call `notify_parent()`. Instead, it relies on the
-notification pipe's `O_CLOEXEC` flag: successful `execvp` replaces the
-process, CLOEXEC closes the pipe write end, and the parent reads EOF
-(which means success per the notification protocol).
+The CLI does **not** call `notify_parent()`. A successful `execvp`
+replaces the process, `O_CLOEXEC` closes the pipe write end, and the
+parent reads EOF after the marker (success per the notification
+protocol).
 
-If `execvp` fails, the CLI calls `ctx.report_error(...)`, which writes
+If `execvp` fails, `exec` calls `report_error(...)`, which writes
 the error to the notification pipe and calls `_exit()`. The parent
 reads the error and exits with the mapped code. `ENOENT` (the program,
 or a script's interpreter, does not exist) and `EACCES` (the program is
@@ -967,8 +965,9 @@ the pre-fork path check, so a missing-or-unusable program is exit 66 in
 both path and bare form; any other exec error is `ExecFailed` (exit 71).
 (R130)
 
-If clearing `CLOEXEC` on the lockfile fd fails, the CLI likewise calls
-`report_error` with `ExecFailed` (exit 71).
+If clearing `CLOEXEC` on the lockfile fd fails, `exec` likewise calls
+`report_error` with `ExecFailed` (exit 71); if writing the marker fails,
+with `NotifyFailed` (exit 71).
 
 > This design means successful exec is automatically detected (no
 > explicit write needed), and exec failure is reported to the parent
@@ -1068,8 +1067,7 @@ Tests call `daemonize_inner()` directly and cover each code path:
 
 - Pipe creation fails: `SystemError` returned, no fork.
 - Both forks Child: success.
-- First fork Parent: reads EOF from the pipe; exit(0) with
-  `exec_notifies(true)`, exit(1) without.
+- First fork Parent: reads EOF with no marker from the pipe; exit(1).
 - First Child, second Parent: closes the pipe unwritten, exit(0).
 - First fork fails: `ForkFailed` returned, pipe unwritten.
 - Setsid fails: `SetsidFailed` on the pipe, exit(71).
@@ -1176,7 +1174,7 @@ continues; (2) `daemonize_with()` with privileged `init` →
   `notify_parent()` was not called, removes pidfile if
   `cleanup_on_drop` is true, `#[non_exhaustive]`.
 - `DaemonizeError`: each variant's condition, `exit_code()`.
-  Note which variants are CLI-only.
+  Note which variants only `DaemonContext::exec` produces.
 
 ### Cargo.toml metadata
 
@@ -1200,7 +1198,6 @@ categories = ["os::unix-apis"]
 - POSIX capability manipulation
 - Linux namespace handling
 - Chroot support
-- Any form of `exec` within the library (exec is CLI-only)
 - Serde support for `DaemonConfig`
 - `.clear_env()` builder method
 
@@ -1261,7 +1258,7 @@ verification points.
 - R40. Parent exits 0 after `notify_parent()` is called.
 - R41. Parent exits non-zero if `DaemonContext` is dropped without
   `notify_parent()`.
-- R42. Parent exits 0 when exec succeeds (EOF on pipe).
+- R42. Parent exits 0 when exec succeeds (the exec marker, then EOF).
 - R43. Parent exits non-zero with error message when exec fails.
 - R44. Post-fork errors are reported via parent's stderr, not lost.
 - R45. `daemonize()` panics when thread count is not exactly 1.
@@ -1361,7 +1358,8 @@ verification points.
 - R107. Notification pipe both ends created with `O_CLOEXEC`.
 - R108. CLI does not call `notify_parent()`; relies on CLOEXEC + exec.
 - R109. CLI calls `report_error()` on exec failure.
-- R110. CLI clears CLOEXEC on lockfile fd before exec.
+- R110. `DaemonContext::exec`, which the CLI uses, clears CLOEXEC on the
+  lockfile fd before exec, so the program keeps the lock.
 - R111. `execvp` argv[0] is the program path as provided by user
   (possibly canonicalized).
 - R112. Trailing args parsed with `trailing_var_arg` +
@@ -1401,14 +1399,15 @@ verification points.
   daemonization: the signal reset never touches SIGPIPE (see signal
   reset), so the Rust runtime's `SIG_IGN` — and with it `EPIPE`-on-write
   semantics — survives `daemonize()`.
-- R128. The CLI sets SIGPIPE to `SIG_DFL` immediately before `exec`, so
+- R128. `DaemonContext::exec` sets SIGPIPE to `SIG_DFL` immediately
+  before `exec`, so
   the target program starts with the conventional default disposition.
 - R129. `cleanup_on_signals()` is all-or-nothing: if installing a
   handler fails, dispositions already replaced for earlier signals in
   the slice — and the handler's pidfile path — are restored before the
   error (which names the failing signal) is returned, so an `Err`
   leaves the process exactly as it was.
-- R130. CLI exec failure with `ENOENT` (missing program or script
+- R130. Exec failure with `ENOENT` (missing program or script
   interpreter) or `EACCES` (program not executable) is reported as
   `ProgramNotFound` (exit 66), matching the pre-fork path check — so a
   missing-or-unusable program is exit 66 in both path and bare form. Any
@@ -1514,12 +1513,12 @@ verification points.
   SIGPIPE's, so any other was installed since. SIGPIPE keeps its
   disposition, usually the Rust runtime's `SIG_IGN`, which is refused
   like any other ignored signal.
-- R150. The launcher reads the notification pipe closing with no
-  message as success only when `exec_notifies(true)` is set, which the
-  CLI does: there a successful `exec` closes the pipe. Otherwise it
-  reports a failure and exits 1, so a daemon killed by a signal, or
-  ended by `std::process::exit`, before it notifies is not reported as
-  started.
+- R150. The launcher reads the notification pipe closing as success
+  only after the exec-pending marker, which `DaemonContext::exec`
+  writes just before `execvp`: a successful exec closes the pipe, and
+  a failed one is followed by its error. Without the marker, EOF is a
+  failure (exit 1), so a daemon killed by a signal, or ended by
+  `std::process::exit`, before it notifies is not reported as started.
 - R151. `cleanup_on_signals()` refuses, before changing anything, a
   signal whose default action does not terminate the process (ignore,
   stop, or continue: SIGCHLD, SIGURG, SIGWINCH, SIGCONT, SIGTSTP,

@@ -567,12 +567,7 @@ pub(crate) unsafe fn daemonize_inner_with<T>(
                 // read and exit. A plain drop would trip the NotifyPipe Drop
                 // safety net and make the parent read its own failure bytes.
                 pipe_wr.close();
-                let eof = if config.exec_notifies {
-                    notify::EofMeans::Ready
-                } else {
-                    notify::EofMeans::Unnotified
-                };
-                parent_pipe_reader(pipe_rd, eof, forker);
+                parent_pipe_reader(pipe_rd, forker);
             }
             ForkResult::Child => {
                 // Child: close read end, continue
@@ -809,8 +804,8 @@ unsafe fn run_post_fork<T>(
 
 /// Parent-side pipe reader. Reads from the pipe and exits accordingly.
 #[cfg(unix)]
-fn parent_pipe_reader(rd: OwnedFd, eof: notify::EofMeans, forker: &impl Forker) -> ! {
-    match notify::read_outcome(&mut std::fs::File::from(rd), eof) {
+fn parent_pipe_reader(rd: OwnedFd, forker: &impl Forker) -> ! {
+    match notify::read_outcome(&mut std::fs::File::from(rd)) {
         notify::Outcome::Success => forker.exit(0),
         notify::Outcome::Failure { code, message } => {
             eprintln!("{message}");
@@ -1147,48 +1142,48 @@ mod tests {
         assert!(result.is_ok());
     }
 
-    // Covers: R137
+    // Covers: R137, R150
+    //
+    // NullForker runs no daemon, so the parent reads its pipe after closing
+    // its own write end: what a daemon killed before notifying leaves. The
+    // parent must *close* that end, not drop it, or NotifyPipe's Drop safety
+    // net writes failure bytes the parent then reads as the daemon's. Both
+    // exit 1, so the printed message tells them apart.
     #[test]
-    fn first_fork_parent_closes_pipe_silently() {
-        // The parent's write-end copy must be *closed*, not dropped: NotifyPipe's
-        // Drop safety net writes failure bytes, and a parent that drops would
-        // read its own bytes and report a failure for a healthy start. With the
-        // write end closed silently, the reader sees EOF -> success -> exit(0).
-        // EOF means success only where an exec is expected to close the pipe.
-        let mut config = DaemonConfig::new();
-        config.exec_notifies(true);
-        let mut forker = NullForker::first_parent();
-        let result = catch_unwind(std::panic::AssertUnwindSafe(|| {
-            run_inner(&config, &mut forker)
-        }));
-        let panic_msg = result
-            .expect_err("parent exits after reading the pipe")
-            .downcast_ref::<String>()
-            .cloned()
-            .unwrap();
-        assert!(
-            panic_msg.contains("NullForker::exit(0)"),
-            "parent must read EOF = success from its own silently-closed write \
-             end, got: {panic_msg}"
-        );
-    }
+    fn launcher_reads_its_own_silent_close_as_the_eof_failure() {
+        const MARKER: &str = "__BLIVET_LAUNCHER_EOF";
+        const NAME: &str = "tests::launcher_reads_its_own_silent_close_as_the_eof_failure";
 
-    // Covers: R150
-    #[test]
-    fn launcher_reads_a_silent_close_as_failure_without_an_exec() {
-        // NullForker runs no daemon, so the parent's reader sees the pipe close
-        // with no message: what a daemon killed before notifying leaves behind.
-        let config = DaemonConfig::new();
-        let mut forker = NullForker::first_parent();
-        let result = catch_unwind(std::panic::AssertUnwindSafe(|| {
-            run_inner(&config, &mut forker)
-        }));
-        let panic_msg = result
-            .expect_err("parent exits after reading the pipe")
-            .downcast_ref::<String>()
-            .cloned()
-            .unwrap();
-        assert!(panic_msg.contains("NullForker::exit(1)"), "{panic_msg}");
+        if std::env::var(MARKER).is_ok() {
+            let config = DaemonConfig::new();
+            let mut forker = NullForker::first_parent();
+            let result = catch_unwind(std::panic::AssertUnwindSafe(|| {
+                run_inner(&config, &mut forker)
+            }));
+            let panic_msg = result
+                .expect_err("parent exits after reading the pipe")
+                .downcast_ref::<String>()
+                .cloned()
+                .unwrap();
+            assert!(panic_msg.contains("NullForker::exit(1)"), "{panic_msg}");
+            return;
+        }
+
+        let output = crate::test_support::rerun_in_subprocess(NAME, MARKER, "1");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            output.status.success(),
+            "{}",
+            crate::test_support::subprocess_report(NAME, &output)
+        );
+        assert!(
+            stderr.contains("daemon ended without signaling readiness"),
+            "the launcher did not report EOF: {stderr}"
+        );
+        assert!(
+            !stderr.contains("daemon exited without signaling readiness"),
+            "the launcher read its own drop bytes: {stderr}"
+        );
     }
 
     // Covers: R137

@@ -181,6 +181,16 @@ pub(crate) fn terminates_by_default(sig: i32) -> bool {
     .contains(&sig)
 }
 
+/// Restore `SIGPIPE`'s default disposition, before an `exec`.
+///
+/// Daemonizing keeps the Rust runtime's ignored `SIGPIPE` (R127), and an
+/// ignored disposition survives `exec(2)`; the exec'd program expects the
+/// default (R128).
+pub(crate) fn restore_default_sigpipe() {
+    // SAFETY: SIG_DFL is a valid disposition for SIGPIPE.
+    unsafe { libc::signal(libc::SIGPIPE, libc::SIG_DFL) };
+}
+
 /// Install [`pidfile_cleanup_handler`] for each signal in `signals`.
 ///
 /// Stores `pidfile` (leaked, so it outlives any later free) for the handler to
