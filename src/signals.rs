@@ -143,6 +143,14 @@ pub(crate) fn restore_default_sigpipe() {
     unsafe { libc::signal(libc::SIGPIPE, libc::SIG_DFL) };
 }
 
+/// Ignore `SIGPIPE` again, after an `exec` that [`restore_default_sigpipe`]
+/// prepared for has failed: the error report goes into a pipe whose reader
+/// may be gone, and a write there must fail, not kill the process (R157).
+pub(crate) fn ignore_sigpipe() {
+    // SAFETY: SIG_IGN is a valid disposition for SIGPIPE.
+    unsafe { libc::signal(libc::SIGPIPE, libc::SIG_IGN) };
+}
+
 /// Install [`pidfile_cleanup_handler`] for each signal in `signals`.
 ///
 /// Stores `pidfile` (leaked, so it outlives any later free) for the handler to

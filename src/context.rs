@@ -313,6 +313,7 @@ impl DaemonContext {
         }
         crate::signals::restore_default_sigpipe();
         let Err(errno) = nix::unistd::execvp(program, args);
+        crate::signals::ignore_sigpipe();
         let message = format!("exec {}: {errno}", program.to_string_lossy());
         self.report_error(&exec_error(errno, message))
     }
@@ -486,7 +487,7 @@ mod tests {
             let (rd, wr) = make_pipe();
             drop(rd);
             let ctx = ctx(&DaemonConfig::new(), None, Some(NotifyPipe::new(wr)));
-            ctx.exec(c"/bin/sh", &[c"sh", c"-c", c"exit 7"]);
+            ctx.exec(c"sh", &[c"sh", c"-c", c"exit 7"]);
         }
 
         let output = crate::test_support::rerun_in_subprocess(NAME, MARKER, "1");
@@ -494,6 +495,33 @@ mod tests {
             output.status.code(),
             Some(7),
             "the program did not run: {}",
+            crate::test_support::subprocess_report(NAME, &output)
+        );
+    }
+
+    // Covers: R157
+    //
+    // A failed exec reports into the pipe after SIGPIPE was restored to its
+    // default; with the launcher gone that write must not kill the daemon
+    // before it exits with the exec's code.
+    #[test]
+    fn exec_failure_exits_with_its_code_when_the_launcher_is_gone() {
+        const MARKER: &str = "__BLIVET_EXEC_FAIL_NO_LAUNCHER";
+        const NAME: &str =
+            "context::tests::exec_failure_exits_with_its_code_when_the_launcher_is_gone";
+
+        if std::env::var(MARKER).is_ok() {
+            let (rd, wr) = make_pipe();
+            drop(rd);
+            let ctx = ctx(&DaemonConfig::new(), None, Some(NotifyPipe::new(wr)));
+            ctx.exec(c"/nonexistent_blivet_program", &[c"x"]);
+        }
+
+        let output = crate::test_support::rerun_in_subprocess(NAME, MARKER, "1");
+        assert_eq!(
+            output.status.code(),
+            Some(66),
+            "{}",
             crate::test_support::subprocess_report(NAME, &output)
         );
     }

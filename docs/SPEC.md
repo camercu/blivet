@@ -1557,4 +1557,5 @@ verification points.
 - R157. `DaemonContext::exec` runs the program even when the launcher
   is gone: it writes the exec marker while SIGPIPE is still ignored,
   ignores a broken pipe there, and only then restores the default
-  SIGPIPE.
+  SIGPIPE. If the exec fails, it ignores SIGPIPE again before reporting,
+  so the daemon exits with the exec's code (66 or 71), not by SIGPIPE.
