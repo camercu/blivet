@@ -4,7 +4,7 @@
 //! orchestrated by [`daemonize_inner`](crate::daemonize_inner). They are
 //! collected here rather than inlined because each is independently testable.
 
-use std::os::fd::{AsFd, AsRawFd, OwnedFd};
+use std::os::fd::{AsFd, OwnedFd};
 use std::path::Path;
 
 use nix::fcntl::{open, Flock, FlockArg, OFlag};
@@ -13,7 +13,7 @@ use nix::unistd::{self, Whence};
 
 use crate::error::DaemonizeError;
 use crate::sys;
-use crate::util::paths_same;
+use crate::util::{above_stdio, paths_same};
 
 /// Test-only failure injection for post-fork syscalls that cannot be made to
 /// fail from inside a test process (that would need a missing `/dev/null` or a
@@ -153,25 +153,16 @@ pub(crate) fn change_dir(path: &Path) -> Result<(), DaemonizeError> {
         .map_err(|e| DaemonizeError::ChdirFailed(format!("{}: {e}", path.display())))
 }
 
-/// Opens `path`, never on fd 0, 1 or 2. Every file the sequence opens goes
-/// through here (R152); clippy.toml bans a bare `nix::fcntl::open`.
-///
-/// With a stdio slot closed, `open` returns that slot itself. A later `dup2`
-/// onto that slot, step 6's or step 12's, would then close the file: a lock
-/// would be dropped, or a redirect source would be its own target. `try_clone`
-/// duplicates with a floor of 3.
+/// Opens `path`, never on fd 0, 1 or 2 (see [`above_stdio`]). Every file the
+/// sequence opens goes through here; clippy.toml bans a bare
+/// `nix::fcntl::open`.
 #[allow(clippy::disallowed_methods)] // the one place a bare open is allowed
 fn open_above_stdio<P: ?Sized + nix::NixPath>(
     path: &P,
     flags: OFlag,
     mode: Mode,
 ) -> std::io::Result<OwnedFd> {
-    let fd = open(path, flags, mode)?;
-    if fd.as_raw_fd() <= 2 {
-        fd.try_clone()
-    } else {
-        Ok(fd)
-    }
+    above_stdio(open(path, flags, mode)?)
 }
 
 /// Step 6: Redirect standard streams to /dev/null.
@@ -771,6 +762,7 @@ pub(crate) fn close_inherited_fds(skip_fds: &[i32]) -> Result<(), DaemonizeError
 #[cfg(test)]
 mod tests {
     use std::io::Write;
+    use std::os::fd::AsRawFd;
     use std::path::PathBuf;
 
     use super::*;
