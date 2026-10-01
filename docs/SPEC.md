@@ -1549,3 +1549,7 @@ verification points.
   error is `Display` into one whose error is `DaemonizeError::Application`
   with that code and the error's text, so `?` works on `io::Error` and
   friends inside `init`.
+- R157. `DaemonContext::exec` runs the program even when the launcher
+  is gone: it writes the exec marker while SIGPIPE is still ignored,
+  ignores a broken pipe there, and only then restores the default
+  SIGPIPE.

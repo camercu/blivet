@@ -300,12 +300,18 @@ impl DaemonContext {
                 )));
             }
         }
-        crate::unsafe_ops::restore_default_sigpipe();
+        // The marker goes out while SIGPIPE is still ignored, and a broken pipe
+        // there means only that the launcher is gone: run the program anyway
+        // (R157). Restoring the default first would let that write kill us.
         if let Some(pipe) = self.notify_pipe.as_mut() {
-            if let Err(e) = pipe.signal_exec_pending() {
-                self.report_error(&DaemonizeError::NotifyFailed(e));
+            match pipe.signal_exec_pending() {
+                Err(e) if e.kind() != std::io::ErrorKind::BrokenPipe => {
+                    self.report_error(&DaemonizeError::NotifyFailed(e));
+                }
+                _ => {}
             }
         }
+        crate::unsafe_ops::restore_default_sigpipe();
         let Err(errno) = nix::unistd::execvp(program, args);
         let message = format!("exec {}: {errno}", program.to_string_lossy());
         self.report_error(&exec_error(errno, message))
@@ -464,6 +470,32 @@ mod tests {
         notify_pipe: Option<NotifyPipe>,
     ) -> DaemonContext {
         DaemonContext::new(config, lockfile, notify_pipe)
+    }
+
+    // Covers: R157
+    //
+    // A launcher that is gone must not stop the hand-off: the daemon runs the
+    // program anyway. Writing the exec marker into a pipe with no reader, after
+    // SIGPIPE was restored to its default, killed the daemon instead.
+    #[test]
+    fn exec_runs_the_program_when_the_launcher_is_gone() {
+        const MARKER: &str = "__BLIVET_EXEC_NO_LAUNCHER";
+        const NAME: &str = "context::tests::exec_runs_the_program_when_the_launcher_is_gone";
+
+        if std::env::var(MARKER).is_ok() {
+            let (rd, wr) = make_pipe();
+            drop(rd);
+            let ctx = ctx(&DaemonConfig::new(), None, Some(NotifyPipe::new(wr)));
+            ctx.exec(c"/bin/sh", &[c"sh", c"-c", c"exit 7"]);
+        }
+
+        let output = crate::test_support::rerun_in_subprocess(NAME, MARKER, "1");
+        assert_eq!(
+            output.status.code(),
+            Some(7),
+            "the program did not run: {}",
+            crate::test_support::subprocess_report(NAME, &output)
+        );
     }
 
     /// Context with all defaults and no runtime resources.
