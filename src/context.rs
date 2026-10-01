@@ -183,10 +183,14 @@ impl DaemonContext {
     /// One approach per signal: this replaces the signal's disposition, so it
     /// refuses a signal that already has a handler (one registered with
     /// [`signal_hook`](https://docs.rs/signal-hook), say) or is ignored. It also
-    /// refuses a signal whose default action does not end the process, such as
-    /// `SIGCHLD`: the handler re-raises into that default, so it would remove
-    /// the pidfile of a daemon that keeps running. `SIGUSR1` and the other
-    /// terminating signals are accepted.
+    /// accepts only the signals POSIX defines as terminating by default:
+    /// `SIGHUP`, `SIGINT`, `SIGQUIT`, `SIGTERM`, `SIGUSR1`, `SIGUSR2`,
+    /// `SIGALRM`, `SIGVTALRM`, `SIGPROF`, `SIGXCPU`, `SIGXFSZ`, the crash
+    /// signals (`SIGABRT`, `SIGBUS`, `SIGFPE`, `SIGILL`, `SIGSEGV`, `SIGSYS`,
+    /// `SIGTRAP`), and the real-time signals on Linux and Android. The handler
+    /// re-raises into the default action, so on a signal whose default does
+    /// not end the process (`SIGCHLD`, or `SIGINFO` on the BSDs) it would
+    /// remove the pidfile of a daemon that keeps running.
     ///
     /// Call this before any other thread installs signal handlers. The check
     /// and the install are separate steps, so a handler another thread

@@ -1529,16 +1529,17 @@ verification points.
   a failed one is followed by its error. Without the marker, EOF is a
   failure (exit 1), so a daemon killed by a signal, or ended by
   `std::process::exit`, before it notifies is not reported as started.
-- R151. `cleanup_on_signals()` refuses, before changing anything, a
-  signal whose default action does not terminate the process (ignore,
-  stop, or continue: SIGCHLD, SIGURG, SIGWINCH, SIGCONT, SIGTSTP,
-  SIGTTIN, SIGTTOU on every platform. SIGIO and SIGINFO, ignored by
-  default on the BSDs and macOS only, are not in the list: telling them
-  apart needs a per-OS answer the capability table does not hold). Its
-  handler re-raises into the default action, so on such a signal it
-  would remove the pidfile of a daemon that keeps running. A signal
-  that terminates by default, SIGUSR1 included, is accepted. The error
-  names the signal.
+- R151. `cleanup_on_signals()` refuses, before changing anything, any
+  signal outside an allowlist: the signals POSIX defines as terminating
+  the process by default on every system (SIGHUP, SIGINT, SIGQUIT,
+  SIGTERM, SIGUSR1, SIGUSR2, SIGALRM, SIGVTALRM, SIGPROF, SIGXCPU,
+  SIGXFSZ, and the crash signals SIGABRT, SIGBUS, SIGFPE, SIGILL,
+  SIGSEGV, SIGSYS, SIGTRAP), plus the real-time signals where the
+  capability table knows the range. Its handler re-raises into the
+  default action, so on a signal whose default does not end the process
+  it would remove the pidfile of a daemon that keeps running. Signals
+  whose default varies by OS (SIGIO, SIGINFO, SIGPWR) are refused
+  everywhere. The error names the signal.
 - R152. Every descriptor the sequence opens — both notification pipe
   ends, the lockfile, the pidfile, and redirect sources — sits above
   descriptor 2, even when the caller closed stdin, stdout, or stderr, so

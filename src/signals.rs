@@ -114,21 +114,38 @@ pub(crate) extern "C" fn pidfile_cleanup_handler(signum: i32) {
     unsafe { libc::raise(signum) };
 }
 
-/// Whether `sig`'s default action ends the process (R151).
+/// Whether the pidfile cleanup handler may be installed on `sig` (R151).
 ///
-/// [`pidfile_cleanup_handler`] re-raises into the default action. On a signal
-/// whose default is to ignore, stop, or continue, it would remove the pidfile
-/// and leave the daemon running. The list holds the signals every supported
-/// platform treats that way.
-pub(crate) fn terminates_by_default(sig: i32) -> bool {
-    ![
-        libc::SIGCHLD,
-        libc::SIGURG,
-        libc::SIGWINCH,
-        libc::SIGCONT,
-        libc::SIGTSTP,
-        libc::SIGTTIN,
-        libc::SIGTTOU,
+/// [`pidfile_cleanup_handler`] re-raises into the default action, so `sig`'s
+/// default must end the process: otherwise the daemon keeps running without
+/// its pidfile. The accepted signals are the ones POSIX defines as
+/// terminating (some with a core dump) on every system, plus the real-time
+/// range where the capability table knows it. Anything else, platform-specific
+/// signals included (SIGIO, SIGINFO, SIGPWR differ by OS), is refused.
+pub(crate) fn may_clean_up_on(sig: i32) -> bool {
+    #[cfg(blivet_rt_signals_reserved)]
+    if (libc::SIGRTMIN()..=libc::SIGRTMAX()).contains(&sig) {
+        return true;
+    }
+    [
+        libc::SIGHUP,
+        libc::SIGINT,
+        libc::SIGQUIT,
+        libc::SIGTERM,
+        libc::SIGUSR1,
+        libc::SIGUSR2,
+        libc::SIGALRM,
+        libc::SIGVTALRM,
+        libc::SIGPROF,
+        libc::SIGXCPU,
+        libc::SIGXFSZ,
+        libc::SIGABRT,
+        libc::SIGBUS,
+        libc::SIGFPE,
+        libc::SIGILL,
+        libc::SIGSEGV,
+        libc::SIGSYS,
+        libc::SIGTRAP,
     ]
     .contains(&sig)
 }
@@ -183,10 +200,10 @@ pub(crate) fn install_pidfile_cleanup_signals(
     // names the signal.
     let ours = pidfile_cleanup_handler as extern "C" fn(i32) as usize;
     for &sig in signals {
-        if !terminates_by_default(sig) {
+        if !may_clean_up_on(sig) {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
-                format!("signal {sig} does not terminate the process by default; its cleanup would remove a running daemon's pidfile"),
+                format!("signal {sig} is not one whose default action POSIX defines as terminating, so its cleanup could remove a running daemon's pidfile"),
             ));
         }
         let mut current: libc::sigaction = unsafe { std::mem::zeroed() };
@@ -340,21 +357,34 @@ mod tests {
 
     // Covers: R151
     #[test]
-    fn only_signals_that_terminate_by_default_qualify_for_cleanup() {
+    fn only_signals_posix_has_terminate_qualify_for_cleanup() {
         for sig in [
-            libc::SIGUSR1,
-            libc::SIGUSR2,
             libc::SIGHUP,
             libc::SIGINT,
             libc::SIGQUIT,
             libc::SIGTERM,
+            libc::SIGUSR1,
+            libc::SIGUSR2,
             libc::SIGALRM,
+            libc::SIGVTALRM,
+            libc::SIGPROF,
+            libc::SIGXCPU,
+            libc::SIGXFSZ,
+            libc::SIGABRT,
+            libc::SIGBUS,
+            libc::SIGFPE,
+            libc::SIGILL,
+            libc::SIGSEGV,
+            libc::SIGSYS,
+            libc::SIGTRAP,
         ] {
             assert!(
-                terminates_by_default(sig),
-                "signal {sig} terminates by default"
+                may_clean_up_on(sig),
+                "signal {sig} terminates by default everywhere"
             );
         }
+        // Ignored, stopping, or continuing everywhere, and SIGIO, which the
+        // BSDs and macOS ignore by default while Linux terminates.
         for sig in [
             libc::SIGCHLD,
             libc::SIGURG,
@@ -363,12 +393,20 @@ mod tests {
             libc::SIGTSTP,
             libc::SIGTTIN,
             libc::SIGTTOU,
+            libc::SIGIO,
+            0,
+            1000,
         ] {
-            assert!(
-                !terminates_by_default(sig),
-                "signal {sig} does not terminate by default"
-            );
+            assert!(!may_clean_up_on(sig), "signal {sig} is not on the list");
         }
+    }
+
+    // Covers: R151
+    #[cfg(blivet_rt_signals_reserved)]
+    #[test]
+    fn real_time_signals_qualify_for_cleanup() {
+        assert!(may_clean_up_on(libc::SIGRTMIN()));
+        assert!(may_clean_up_on(libc::SIGRTMAX()));
     }
 
     /// Current disposition of `sig` (the `sa_sigaction` word), read without
