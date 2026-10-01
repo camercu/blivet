@@ -32,6 +32,10 @@ lint:
 lint-deny:
     cargo deny check
 
+# Fail on a dependency nothing uses.
+machete:
+    cargo machete
+
 # Build documentation (warnings are errors)
 doc:
     RUSTDOCFLAGS="-D warnings" cargo doc {{locked}} --no-deps
@@ -187,7 +191,7 @@ check-no-default-features:
     fi
 
 # Run all static checks
-check: fmt-check lint lint-deny doc msrv-check check-cross check-non-unix check-no-default-features
+check: fmt-check lint lint-deny machete doc msrv-check check-cross check-non-unix check-no-default-features
 
 # Run tests (excludes ignored root/Linux tests)
 #

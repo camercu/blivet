@@ -35,6 +35,10 @@ jobs:
       - uses: taiki-e/install-action@just
       - uses: taiki-e/install-action@cargo-deny
       - uses: taiki-e/install-action@nextest
+      # The version shell.nix pins, so CI and the dev shell agree.
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-machete@0.9.1
       - name: CI
         run: just ci
 
