@@ -351,6 +351,11 @@ impl DaemonContext {
     /// first. Signaling before cleanup let an observer see the parent exit
     /// while the pidfile was still being removed — a race.
     fn cleanup_and_signal_error(&mut self, err: &DaemonizeError) -> u8 {
+        if self.notify_pipe.is_none() {
+            // No launcher to tell (foreground mode, or the pipe was used):
+            // say it on stderr instead of exiting with only a code (R161).
+            eprintln!("{err}");
+        }
         self.cleanup_then_signal(|pipe| pipe.signal_error(err));
         err.exit_code()
     }
@@ -521,6 +526,29 @@ mod tests {
         assert_eq!(
             output.status.code(),
             Some(66),
+            "{}",
+            crate::test_support::subprocess_report(NAME, &output)
+        );
+    }
+
+    // Covers: R161
+    //
+    // Foreground mode has no launcher pipe, so the error goes to stderr, or
+    // `daemonize -f -- missing-program` exits 66 having said nothing.
+    #[test]
+    fn report_error_without_a_launcher_prints_the_error() {
+        const MARKER: &str = "__BLIVET_REPORT_NO_PIPE";
+        const NAME: &str = "context::tests::report_error_without_a_launcher_prints_the_error";
+
+        if std::env::var(MARKER).is_ok() {
+            default_ctx().report_error(&DaemonizeError::application(75, "database unreachable"));
+        }
+
+        let output = crate::test_support::rerun_in_subprocess(NAME, MARKER, "1");
+        assert_eq!(output.status.code(), Some(75));
+        assert!(
+            String::from_utf8_lossy(&output.stderr)
+                .contains("application error: database unreachable"),
             "{}",
             crate::test_support::subprocess_report(NAME, &output)
         );

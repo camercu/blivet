@@ -1569,3 +1569,6 @@ verification points.
   so the launcher stops reading at its end: a process the daemon forked
   that still holds the write end cannot keep the launcher waiting for
   EOF after a failure.
+- R161. With no launcher pipe (foreground mode, or after the pipe was
+  used), `report_error` and a failed `exec` print the error to stderr
+  before exiting with its code.
