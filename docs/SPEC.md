@@ -1565,3 +1565,7 @@ verification points.
 - R159. The launcher accepts only the two-byte readiness and exec
   messages; a `0x00` header followed by anything else, or by nothing, is
   a failure (exit 1) whose message says the header was malformed.
+- R160. An error message on the notification pipe carries its length,
+  so the launcher stops reading at its end: a process the daemon forked
+  that still holds the write end cannot keep the launcher waiting for
+  EOF after a failure.

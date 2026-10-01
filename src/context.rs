@@ -857,11 +857,12 @@ mod tests {
             let _ctx = ctx(&DaemonConfig::new(), None, Some(NotifyPipe::new(wr)));
         }
 
-        let buf = read_pipe(rd);
-        assert_eq!(buf[0], 1u8);
         assert_eq!(
-            std::str::from_utf8(&buf[1..]).unwrap(),
-            "daemon exited without signaling readiness"
+            crate::notify::decode(&read_pipe(rd)),
+            crate::notify::Outcome::Failure {
+                code: 1,
+                message: "daemon exited without signaling readiness".into(),
+            }
         );
     }
 
@@ -929,9 +930,14 @@ mod tests {
             !pidfile.exists(),
             "pidfile must be removed before the parent is signaled"
         );
-        let buf = read_pipe(rd);
-        assert_eq!(buf[0], 71, "error code byte signaled to parent");
-        assert_eq!(std::str::from_utf8(&buf[1..]).unwrap(), "exec failed: boom");
+        assert_eq!(
+            crate::notify::decode(&read_pipe(rd)),
+            crate::notify::Outcome::Failure {
+                code: 71,
+                message: "exec failed: boom".into(),
+            },
+            "the error is signaled to the parent"
+        );
     }
 
     #[test]

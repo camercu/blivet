@@ -19,7 +19,7 @@
 //! Centralizing the byte layout here keeps the three writers (success, error,
 //! drop-without-notify) and the single reader from drifting out of sync.
 
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
 
 use crate::error::DaemonizeError;
@@ -162,9 +162,14 @@ pub(crate) fn unnotified_bytes() -> Vec<u8> {
     encode(UNNOTIFIED_CODE, UNNOTIFIED_MSG)
 }
 
+/// A failure on the wire: the code byte, the message's length as two
+/// big-endian bytes, then the message (R160). The length lets the launcher
+/// stop at the message's end instead of waiting for EOF.
 fn encode(code: u8, msg: &[u8]) -> Vec<u8> {
-    let mut buf = Vec::with_capacity(1 + msg.len());
+    let msg = &msg[..msg.len().min(u16::MAX as usize)];
+    let mut buf = Vec::with_capacity(3 + msg.len());
     buf.push(code);
+    buf.extend_from_slice(&(msg.len() as u16).to_be_bytes());
     buf.extend_from_slice(msg);
     buf
 }
@@ -187,30 +192,37 @@ pub(crate) enum Outcome {
 /// writer sends an error message and closes in one step, and a successful
 /// `exec` closes the pipe.
 pub(crate) fn read_outcome(pipe: &mut impl io::Read) -> Outcome {
-    let mut header = [0u8; 2];
+    let mut buf = Vec::new();
     let Some(first) = read_byte(pipe) else {
-        return decode(&[]);
+        return decode(&buf);
     };
-    header[0] = first;
+    buf.push(first);
     if first == 0 {
         // Sent in the same write as the first byte, so it is already here.
-        match read_byte(pipe) {
-            None => return decode(&header[..1]),
-            Some(second) => header[1] = second,
+        let Some(second) = read_byte(pipe) else {
+            return decode(&buf);
+        };
+        buf.push(second);
+        if buf != EXEC_PENDING {
+            return decode(&buf);
         }
-        if header == SUCCESS {
-            return Outcome::Success;
-        }
-        if header != EXEC_PENDING {
-            return decode(&header);
-        }
+        // After the exec marker: EOF when the exec closes the pipe, or the
+        // exec's error.
+        let Some(code) = read_byte(pipe) else {
+            return decode(&buf);
+        };
+        buf.push(code);
     }
-    let mut buf = if first == 0 {
-        header.to_vec()
-    } else {
-        vec![first]
-    };
-    let _ = pipe.read_to_end(&mut buf);
+    // An error message: its length, then that many bytes, and no further.
+    let mut len = Vec::new();
+    let _ = pipe.by_ref().take(2).read_to_end(&mut len);
+    buf.extend_from_slice(&len);
+    if let Ok(len) = <[u8; 2]>::try_from(len.as_slice()) {
+        let _ = pipe
+            .by_ref()
+            .take(u64::from(u16::from_be_bytes(len)))
+            .read_to_end(&mut buf);
+    }
     decode(&buf)
 }
 
@@ -253,10 +265,19 @@ pub(crate) fn decode(buf: &[u8]) -> Outcome {
                 &buf[..buf.len().min(8)]
             ),
         },
-        Some(&code) => Outcome::Failure {
-            code: code as i32,
-            message: String::from_utf8_lossy(&buf[1..]).into_owned(),
-        },
+        Some(&code) => {
+            let framed = buf
+                .get(1..3)
+                .map(|len| u16::from_be_bytes([len[0], len[1]]) as usize);
+            let message = match framed {
+                Some(len) => &buf[3..buf.len().min(3 + len)],
+                None => &buf[1..],
+            };
+            Outcome::Failure {
+                code: code as i32,
+                message: String::from_utf8_lossy(message).into_owned(),
+            }
+        }
     }
 }
 
@@ -418,6 +439,39 @@ mod tests {
     fn read_outcome_stops_at_the_success_byte() {
         let mut pipe = StillOpen(SUCCESS.into_iter().collect());
         assert_eq!(read_outcome(&mut pipe), Outcome::Success);
+    }
+
+    // Covers: R160
+    #[test]
+    fn read_outcome_stops_at_the_end_of_an_error_message() {
+        let err = DaemonizeError::ForkFailed("boom".into());
+        let mut pipe = StillOpen(error_bytes(&err).into_iter().collect());
+        assert_eq!(
+            read_outcome(&mut pipe),
+            Outcome::Failure {
+                code: err.exit_code() as i32,
+                message: "fork failed: boom".into(),
+            }
+        );
+    }
+
+    // Covers: R160
+    #[test]
+    fn decode_takes_the_message_its_length_names() {
+        let err = DaemonizeError::ForkFailed("boom".into());
+        let mut bytes = error_bytes(&err);
+        bytes.extend_from_slice(b" and more");
+        assert_eq!(decode(&bytes), decode(&error_bytes(&err)));
+    }
+
+    // Covers: R160
+    #[test]
+    fn read_outcome_stops_at_the_end_of_an_exec_error() {
+        let err = DaemonizeError::ExecFailed("exec /x: E2BIG".into());
+        let mut bytes = EXEC_PENDING.to_vec();
+        bytes.extend(error_bytes(&err));
+        let mut pipe = StillOpen(bytes.into_iter().collect());
+        assert_eq!(read_outcome(&mut pipe), decode(&error_bytes(&err)));
     }
 
     // Covers: R159
