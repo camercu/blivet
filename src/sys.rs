@@ -29,11 +29,7 @@ pub(crate) fn raw_initgroups(
     group: libc::gid_t,
 ) -> Result<(), nix::errno::Errno> {
     let ret = unsafe { libc::initgroups(user.as_ptr(), group as _) };
-    if ret < 0 {
-        Err(nix::errno::Errno::last())
-    } else {
-        Ok(())
-    }
+    nix::errno::Errno::result(ret).map(drop)
 }
 
 /// Terminate the process immediately via `_exit(2)`.
