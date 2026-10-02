@@ -153,6 +153,9 @@ pub(crate) unsafe fn daemonize_inner_with<T>(
 /// removes. Fields drop after the body of [`Drop::drop`], so `lock` is
 /// released after the body has removed the pidfile.
 struct AbortGuard<'a> {
+    /// `PutBack` in foreground mode, `Skip` in a daemon: the one place the
+    /// sequence decides how much a failure undoes.
+    rollback: steps::Rollback,
     stdio: Vec<steps::SavedSlot>,
     cwd: Option<OwnedFd>,
     umask: Option<nix::sys::stat::Mode>,
@@ -166,8 +169,13 @@ struct AbortGuard<'a> {
 }
 
 impl AbortGuard<'_> {
-    fn new() -> Self {
+    fn new(foreground: bool) -> Self {
         Self {
+            rollback: if foreground {
+                steps::Rollback::PutBack
+            } else {
+                steps::Rollback::Skip
+            },
             stdio: Vec::new(),
             cwd: None,
             umask: None,
@@ -176,15 +184,30 @@ impl AbortGuard<'_> {
         }
     }
 
-    /// Holds a descriptor of the working directory, to `fchdir` back to.
+    /// Whether stdio steps save the slots they move.
+    fn rollback(&self) -> steps::Rollback {
+        self.rollback
+    }
+
+    /// The umask step 4 replaced, to put back in foreground mode.
+    fn note_umask(&mut self, old: nix::sys::stat::Mode) {
+        if let steps::Rollback::PutBack = self.rollback {
+            self.umask = Some(old);
+        }
+    }
+
+    /// Holds a descriptor of the working directory, to `fchdir` back to, in
+    /// foreground mode.
     ///
     /// Best-effort: a directory the caller may enter but not read cannot be
     /// opened, and an undo aid must not fail the start (R164).
     fn save_cwd(&mut self) {
-        self.cwd = std::fs::File::open(".")
-            .map(OwnedFd::from)
-            .and_then(steps::above_stdio)
-            .ok();
+        if let steps::Rollback::PutBack = self.rollback {
+            self.cwd = std::fs::File::open(".")
+                .map(OwnedFd::from)
+                .and_then(steps::above_stdio)
+                .ok();
+        }
     }
 
     /// The descriptors it holds, which the fd sweep must spare.
@@ -241,31 +264,22 @@ unsafe fn run_post_fork<T>(
     // What a failure must undo (R164): everything restorable in foreground
     // mode, where the process is the caller's; only the pidfile in a daemon,
     // whose process exits on failure.
-    let mut abort = AbortGuard::new();
-    let rollback = if config.foreground {
-        steps::Rollback::PutBack
-    } else {
-        steps::Rollback::Skip
-    };
+    let mut abort = AbortGuard::new(config.foreground);
 
     // Step 4: Set umask
-    let old_umask = steps::set_umask(config.umask);
-    if config.foreground {
-        abort.umask = Some(old_umask);
-    }
+    abort.note_umask(steps::set_umask(config.umask));
 
     // Step 5: chdir
-    if config.foreground {
-        abort.save_cwd();
-    }
+    abort.save_cwd();
     steps::change_dir(&config.chdir)?;
 
     // Step 6: Redirect stdin to /dev/null (always); redirect stdout/stderr
     // to /dev/null only when not in foreground mode (foreground leaves them
     // inherited so output reaches the terminal or supervisor).
-    abort
-        .stdio
-        .extend(steps::redirect_to_devnull(!config.foreground, rollback)?);
+    abort.stdio.extend(steps::redirect_to_devnull(
+        !config.foreground,
+        abort.rollback(),
+    )?);
 
     // Step 7: Open and lock lockfile (explicit path, or the pidfile itself
     // unless derivation was opted out)
@@ -319,7 +333,7 @@ unsafe fn run_post_fork<T>(
             config.stderr.as_deref(),
             config.append,
             &owned,
-            rollback,
+            abort.rollback(),
         )?);
     }
 
