@@ -89,8 +89,9 @@ impl NotifyPipe {
             .0
             .as_ref()
             .expect("exec marker written after the pipe was consumed");
-        let mut file = std::fs::File::from(fd.try_clone()?);
-        file.write_all(&EXEC_PENDING)
+        // Through the borrowed fd: a `dup` to get a `File` would need a free
+        // descriptor, and a daemon at its limit must still be able to exec.
+        BorrowedWriter(fd.as_fd()).write_all(&EXEC_PENDING)
     }
 
     /// Signal a daemonization failure: write the error's exit-code byte and
@@ -116,6 +117,20 @@ impl NotifyPipe {
         let mut file = io::BufWriter::new(std::fs::File::from(fd));
         file.write_all(bytes)?;
         file.flush()
+    }
+}
+
+/// `Write` over a descriptor it does not own, so `write_all` brings its
+/// retry on `EINTR` and on a short write.
+struct BorrowedWriter<'a>(BorrowedFd<'a>);
+
+impl Write for BorrowedWriter<'_> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        Ok(nix::unistd::write(self.0, buf)?)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
     }
 }
 
@@ -527,6 +542,31 @@ mod tests {
             read_outcome(&mut std::fs::File::from(rd)),
             decode(&error_bytes(&err))
         );
+    }
+
+    // Covers: R150
+    #[test]
+    fn the_exec_marker_needs_no_free_descriptor() {
+        crate::test_support::run_in_subprocess(
+            "notify::tests::the_exec_marker_needs_no_free_descriptor_subprocess",
+        );
+    }
+
+    /// A daemon at its descriptor limit must still be able to `exec`.
+    #[test]
+    #[ignore]
+    fn the_exec_marker_needs_no_free_descriptor_subprocess() {
+        if !crate::test_support::is_subprocess() {
+            return;
+        }
+        let (rd, wr) = make_pipe();
+        let mut pipe = NotifyPipe::new(wr);
+        let held = crate::test_support::fill_fd_table(0);
+        let written = pipe.signal_exec_pending();
+        drop(held);
+        written.unwrap();
+        pipe.close();
+        assert_eq!(read_pipe(rd), EXEC_PENDING);
     }
 
     #[test]
