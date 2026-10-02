@@ -556,7 +556,8 @@ Step failures in foreground mode return `Err` to the caller instead
 of the write-to-pipe-and-`_exit()` behavior described per step below
 (see Error paths, R134). On the way out, the sequence's abort guard
 puts back what it can (R164): stdin, stdout, and stderr, the working
-directory when it could open it, and the umask, and it removes the pidfile it wrote. What it
+directory when it could open it, the umask, and the primary group of a
+half-done identity switch, and it removes the pidfile it wrote. What it
 cannot restore stays in effect: inherited descriptors it closed, the
 signal dispositions and mask, environment variables it set, the
 supplementary groups, and whatever `init` did.
@@ -1622,7 +1623,8 @@ verification points.
   those paths name.
 - R164. A foreground sequence that fails puts back what it changed in
   the caller's process and can restore: stdin, stdout, and stderr, the
-  umask, and the working directory when it could open it (a directory
+  umask, the primary group when `setuid` failed after `setgid`, and
+  the working directory when it could open it (a directory
   the caller may search but not read cannot be opened, and the start
   goes on without saving it), and removes the pidfile it wrote. In both
   modes the pidfile goes before the lock is released, so a second

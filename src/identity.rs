@@ -154,6 +154,12 @@ impl ResolvedIdentity {
                 .map_err(|e| DaemonizeError::PermissionDenied(format!("setgid: {e}")))?;
         }
         if let Some(info) = self.user() {
+            #[cfg(test)]
+            if crate::steps::failpoints::SETUID_FAILS.injected() {
+                return Err(DaemonizeError::PermissionDenied(
+                    "setuid: injected failure".into(),
+                ));
+            }
             nix::unistd::setuid(info.uid)
                 .map_err(|e| DaemonizeError::PermissionDenied(format!("setuid: {e}")))?;
             // SAFETY: this function's contract requires a single thread, so

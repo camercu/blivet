@@ -53,6 +53,10 @@ pub(crate) mod failpoints {
     pub(crate) static GETRLIMIT_FAILS: Failpoint = Failpoint::new();
     pub(crate) static FD_LISTING_UNAVAILABLE: Failpoint = Failpoint::new();
 
+    /// Fails `setuid` after `setgid` succeeded, which root cannot make
+    /// happen on demand.
+    pub(crate) static SETUID_FAILS: Failpoint = Failpoint::new();
+
     /// Fails the pidfile write *after* the file has been created and
     /// truncated, which is the shape of a real `ENOSPC`/`EIO`. The step-9-13
     /// failpoints cannot reach this: by the time they fire, step 8 has already
