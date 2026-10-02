@@ -304,6 +304,7 @@ are lowercase with no trailing punctuation.
 | `ChownError`       | chown of pidfile/lockfile/output file failed             |
 | `ExecFailed`       | `DaemonContext::exec` failed (other than `ENOENT`/`EACCES`) |
 | `NotifyFailed`     | Writing the readiness message to the notification pipe failed |
+| `InitLeftThreads`  | A checked `daemonize_with` init left threads running before a user switch |
 | `Application`      | Caller-reported startup failure (returned from `init`, or via `application()`/`report_error`) |
 
 `ProgramNotFound` and `ExecFailed` come only from `DaemonContext::exec`
@@ -1012,6 +1013,7 @@ exit_code()` returns these values.
 | `ChownError`             | 73        | `EX_CANTCREAT`        |
 | `ExecFailed`             | 71        | `EX_OSERR`            |
 | `NotifyFailed`           | 71        | `EX_OSERR`            |
+| `InitLeftThreads`        | 70        | `EX_SOFTWARE`         |
 | `Application`            | caller's `code`; 0 remapped to 70 | (caller's choice) |
 
 Pre-daemonization errors: CLI prints message to stderr, exits per
@@ -1405,12 +1407,13 @@ verification points.
 - R125. A daemon can never signal readiness while still holding
   elevated privileges: the `DaemonContext` exists only after the
   identity switch succeeds, and a switch failure ends the sequence.
-- R126. The checked `daemonize_with()` panics when a user switch is
-  configured and `init` leaves the thread count other than 1 (the
-  user-switch path calls `setenv`, which is not thread-safe). A
-  group-only switch is not checked. The unchecked forms skip the
-  check; on targets without a thread-count source the checked forms
-  are `#[deprecated]` stubs.
+- R126. The checked `daemonize_with()` fails with `InitLeftThreads`
+  (exit 70) when a user switch is configured and `init` leaves the
+  thread count other than 1 (the user-switch path calls `setenv`, which
+  is not thread-safe). An error, not a panic: in daemon mode the
+  launcher prints it. A group-only switch is not checked. The unchecked
+  forms skip the check; on targets without a thread-count source the
+  checked forms are `#[deprecated]` stubs.
 - R127. The caller's SIGPIPE disposition is preserved across
   daemonization: the signal reset never touches SIGPIPE (see signal
   reset), so the Rust runtime's `SIG_IGN` — and with it `EPIPE`-on-write

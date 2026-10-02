@@ -75,9 +75,10 @@
 //! notify_parent()          <- writes readiness
 //! ```
 //!
-//! [`daemonize`] and [`daemonize_with`] check for you and panic if violated:
-//! at the call, and after `init` when a user switch follows. An `init` may
-//! start threads only if it joins them before it returns.
+//! [`daemonize`] and [`daemonize_with`] check for you: at the call they panic
+//! if threads are running, and after `init`, when a user switch follows, they
+//! fail with [`DaemonizeError::InitLeftThreads`], which reaches the launcher.
+//! An `init` may start threads only if it joins them before it returns.
 //! [`daemonize_unchecked`] and [`daemonize_with_unchecked`] are the `unsafe`
 //! opt-outs. [`notify_parent`](DaemonContext::notify_parent) itself is
 //! thread-safe.
@@ -351,11 +352,13 @@ pub fn daemonize(config: &DaemonConfig) -> Result<DaemonContext, DaemonizeError>
 ///
 /// # Errors
 ///
-/// As [`daemonize_with_unchecked`].
+/// As [`daemonize_with_unchecked`], and
+/// [`InitLeftThreads`](DaemonizeError::InitLeftThreads) (exit 70) when a user
+/// switch is configured and `init` returns with threads still running.
 ///
 /// # Panics
 ///
-/// As [`daemonize`].
+/// As [`daemonize`], for threads running when it is called.
 #[cfg(unix)]
 #[cfg(blivet_thread_count)]
 pub fn daemonize_with<T>(

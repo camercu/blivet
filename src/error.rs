@@ -98,6 +98,16 @@ pub enum DaemonizeError {
     #[error("failed to notify parent: {0}")]
     NotifyFailed(#[source] std::io::Error),
 
+    /// The [`daemonize_with`](crate::daemonize_with) init left threads
+    /// running before a user switch, whose `setenv` is not thread-safe. Holds
+    /// the thread count. The checked entry point reports it instead of
+    /// switching (R126).
+    #[error(
+        "init left {0} threads running (expected 1); join them before init \
+         returns, since switching user calls setenv"
+    )]
+    InitLeftThreads(usize),
+
     /// Application-level failure during startup, returned from a
     /// [`daemonize_with`](crate::daemonize_with) init or reported by
     /// the caller (e.g. a socket bind or database connect that failed after
@@ -171,6 +181,7 @@ impl DaemonizeError {
             DaemonizeError::ChownError(_) => 73,       // EX_CANTCREAT
             DaemonizeError::ExecFailed(_) => 71,       // EX_OSERR
             DaemonizeError::NotifyFailed(_) => 71,     // EX_OSERR
+            DaemonizeError::InitLeftThreads(_) => 70,  // EX_SOFTWARE
             // Caller-chosen, but never 0: that would alias success.
             DaemonizeError::Application { code: 0, .. } => 70, // EX_SOFTWARE
             DaemonizeError::Application { code, .. } => *code,
@@ -252,6 +263,7 @@ mod tests {
                 .exit_code(),
             71
         );
+        assert_eq!(DaemonizeError::InitLeftThreads(2).exit_code(), 70);
         // Application errors carry a caller-chosen sysexits code.
         assert_eq!(
             DaemonizeError::application(75, "queued").exit_code(),
@@ -291,6 +303,7 @@ mod tests {
             DaemonizeError::ChownError("detail".into()),
             DaemonizeError::ExecFailed("detail".into()),
             DaemonizeError::NotifyFailed(std::io::Error::from(std::io::ErrorKind::BrokenPipe)),
+            DaemonizeError::InitLeftThreads(2),
             DaemonizeError::application(42, "detail"),
         ]
     }
@@ -314,6 +327,7 @@ mod tests {
             DaemonizeError::ChownError(_) => "ChownError",
             DaemonizeError::ExecFailed(_) => "ExecFailed",
             DaemonizeError::NotifyFailed(_) => "NotifyFailed",
+            DaemonizeError::InitLeftThreads(_) => "InitLeftThreads",
             DaemonizeError::Application { .. } => "Application",
         }
     }

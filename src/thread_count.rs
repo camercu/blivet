@@ -252,15 +252,13 @@ pub(crate) fn checked_init<T>(
     move || {
         let value = init()?;
         if switches_user {
-            let count = count().unwrap_or_else(|_| {
-                panic!("daemonize_with: cannot determine thread count after init")
-            });
+            // An error, not a panic: this runs in the daemon, where a panic's
+            // message reaches only its stderr, and the launcher prints an error.
+            let count = count().map_err(|e| {
+                DaemonizeError::SystemError(format!("thread count after init: {e}"))
+            })?;
             if count != 1 {
-                panic!(
-                    "daemonize_with: init left {count} threads running (expected 1). \
-                     Join them before init returns: switching user calls setenv, \
-                     which is not thread-safe."
-                );
+                return Err(DaemonizeError::InitLeftThreads(count));
             }
         }
         Ok(value)
@@ -270,7 +268,6 @@ pub(crate) fn checked_init<T>(
 #[cfg(all(test, blivet_thread_count))]
 mod tests {
     use super::*;
-    use std::panic::catch_unwind;
     // Covers: R45
     #[test]
     fn single_threaded_violation_accepts_only_exactly_one() {
@@ -298,13 +295,12 @@ mod tests {
         config.user("nobody");
         let init = checked_init(&config, || Ok(()));
 
-        let payload = catch_unwind(std::panic::AssertUnwindSafe(init))
-            .expect_err("a user switch checks the thread count after init");
-        let msg = payload
-            .downcast_ref::<String>()
-            .cloned()
-            .unwrap_or_default();
-        assert!(msg.contains("init left"), "{msg}");
+        // The test harness runs more than one thread, so the check fails, and
+        // as an error the launcher can print, not a panic it never sees.
+        match init() {
+            Err(DaemonizeError::InitLeftThreads(n)) => assert!(n > 1, "{n}"),
+            other => panic!("expected InitLeftThreads, got {other:?}"),
+        }
     }
 
     // Covers: R126

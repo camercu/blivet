@@ -177,8 +177,10 @@ it returns.
 
 The checked entry points enforce this. `daemonize()` and `daemonize_with()`
 read the kernel thread count and panic unless exactly one thread is running.
-With a user switch, `daemonize_with()` checks again after `init`. A group-only
-switch calls no `setenv`, so that second check is skipped. The `unsafe` forms
+With a user switch, `daemonize_with()` checks again after `init` and, if `init`
+left threads running, fails with `InitLeftThreads` (exit 70), which reaches the
+launcher. A group-only switch calls no `setenv`, so that second check is
+skipped. The `unsafe` forms
 `daemonize_unchecked()` and `daemonize_with_unchecked()` skip the checks, for
 callers who manage the contract themselves. They are also the only entry points
 on a target where the thread count can't be read (see
@@ -213,6 +215,7 @@ the shell with a meaningful status:
 | `PermissionDenied` | 77          | Not root, or setuid/setgid failed        |
 | `ExecFailed`       | 71          | CLI: `exec` failed (other than `ENOENT`/`EACCES`) |
 | `NotifyFailed`     | 71          | Can't write readiness to launcher        |
+| `InitLeftThreads`  | 70          | `daemonize_with` init left threads running before a user switch |
 | `Application`      | caller's    | App-level failure you report yourself    |
 
 ## Recipes
