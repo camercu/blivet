@@ -200,7 +200,7 @@ the shell with a meaningful status:
 | Variant            | Exit code   | Meaning                                  |
 | ------------------ | ----------- | ---------------------------------------- |
 | `ValidationError`  | 64          | Bad config (paths, env keys, overlaps)   |
-| `ProgramNotFound`  | 66          | CLI: program missing or not executable (pre-fork check or exec `ENOENT`/`EACCES`) |
+| `ProgramNotFound`  | 66          | Program missing or not executable (the CLI's pre-fork check, or `exec` failing with `ENOENT`/`EACCES`) |
 | `UserNotFound`     | 67          | User doesn't exist                       |
 | `GroupNotFound`    | 67          | Group doesn't exist                      |
 | `LockConflict`     | 69          | Lockfile held by another process         |
@@ -213,7 +213,7 @@ the shell with a meaningful status:
 | `ChdirFailed`      | 71          | `chdir()` error                          |
 | `SystemError`      | 71          | Syscall failed (notification pipe, `/dev/null` open or `dup2`, `sigaction`, `sigprocmask`, `getrlimit`) |
 | `PermissionDenied` | 77          | Not root, or setuid/setgid failed        |
-| `ExecFailed`       | 71          | CLI: `exec` failed (other than `ENOENT`/`EACCES`) |
+| `ExecFailed`       | 71          | `exec` failed (other than `ENOENT`/`EACCES`) |
 | `NotifyFailed`     | 71          | Can't write readiness to launcher        |
 | `InitLeftThreads`  | 70          | `daemonize_with` init left threads running before a user switch |
 | `Application`      | caller's    | App-level failure you report yourself    |
