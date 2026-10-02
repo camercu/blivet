@@ -278,11 +278,11 @@ mod tests {
         );
     }
 
-    /// One sample of every variant. [`variant_name`] is the one exhaustive
-    /// match over `DaemonizeError`: a new variant fails to compile there, and
-    /// the README guard below fails until the variant is sampled here and
-    /// listed in the README table. Every test that needs every variant
-    /// iterates this list.
+    /// One sample of every variant, by hand. [`variant_name`] is the one
+    /// exhaustive match over `DaemonizeError`: a new variant fails to compile
+    /// there, which is the prompt to sample it here. Nothing checks that it
+    /// was: a variant left out of this list escapes the README guard below.
+    /// Every test that needs every variant iterates this list.
     fn every_variant() -> Vec<DaemonizeError> {
         vec![
             DaemonizeError::ValidationError("detail".into()),
