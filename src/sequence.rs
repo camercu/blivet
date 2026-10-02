@@ -138,9 +138,9 @@ pub(crate) unsafe fn daemonize_inner_with<T>(
 }
 
 /// What a failed sequence undoes (R164), in the reverse of the order it was
-/// done: the primary group (step 17), stdio slots (steps 12 and 6), the
-/// working directory (step 5), the umask (step 4), the pidfile (step 8), and
-/// last the lock (step 7).
+/// done: stdio slots (steps 12 and 6), the working directory (step 5), the
+/// umask (step 4), the pidfile (step 8), and last the lock (step 7). A
+/// half-done identity switch (step 17) undoes itself.
 ///
 /// In foreground mode the process is the caller's, and it gets back the parts
 /// that can be restored. In daemon mode the process exits on failure, so only
@@ -153,9 +153,6 @@ pub(crate) unsafe fn daemonize_inner_with<T>(
 /// removes. Fields drop after the body of [`Drop::drop`], so `lock` is
 /// released after the body has removed the pidfile.
 struct AbortGuard<'a> {
-    /// The caller's real and effective gid, for a `setuid` that fails after
-    /// `setgid` succeeded. The caller is still root then, so it can go back.
-    gid: Option<(nix::unistd::Gid, nix::unistd::Gid)>,
     stdio: Vec<steps::SavedSlot>,
     cwd: Option<OwnedFd>,
     umask: Option<nix::sys::stat::Mode>,
@@ -171,7 +168,6 @@ struct AbortGuard<'a> {
 impl AbortGuard<'_> {
     fn new() -> Self {
         Self {
-            gid: None,
             stdio: Vec::new(),
             cwd: None,
             umask: None,
@@ -201,7 +197,6 @@ impl AbortGuard<'_> {
 
     /// The sequence finished: keep every change, and hand over the lock.
     fn disarm(&mut self) -> Option<Flock<OwnedFd>> {
-        self.gid = None;
         self.stdio.drain(..).for_each(steps::SavedSlot::keep);
         self.cwd = None;
         self.umask = None;
@@ -212,10 +207,6 @@ impl AbortGuard<'_> {
 
 impl Drop for AbortGuard<'_> {
     fn drop(&mut self) {
-        if let Some((real, effective)) = self.gid.take() {
-            let _ = nix::unistd::setgid(real);
-            let _ = nix::unistd::setegid(effective);
-        }
         // Each saved slot puts itself back when dropped; latest first.
         while self.stdio.pop().is_some() {}
         if let Some(cwd) = self.cwd.take() {
@@ -388,9 +379,6 @@ unsafe fn run_post_fork<T>(
             let stdout = config.stdout.as_deref().map(|p| (p, out.as_fd()));
             let stderr = config.stderr.as_deref().map(|p| (p, err.as_fd()));
             identity.chown_files([pidfile, lock, stdout, stderr].into_iter().flatten())?;
-        }
-        if config.foreground {
-            abort.gid = Some((nix::unistd::getgid(), nix::unistd::getegid()));
         }
         // SAFETY: this function's contract requires a single thread, and the
         // checked entry points verify it again after init (R126).

@@ -1635,4 +1635,6 @@ verification points.
   modes the pidfile goes before the lock is released, so a second
   instance cannot take the lock and lose its pidfile to the first.
   It cannot restore inherited descriptors it closed, signal dispositions
-  and mask, environment variables it set, or supplementary groups.
+  and mask, environment variables it set, supplementary groups, or a
+  saved gid that differed from the real one (the group restore sets the
+  real and effective gid, and the saved gid follows the real one).

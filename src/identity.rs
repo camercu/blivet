@@ -150,19 +150,28 @@ impl ResolvedIdentity {
     pub(crate) unsafe fn switch_to(&self) -> Result<(), DaemonizeError> {
         #[cfg(test)]
         crate::test_support::assert_isolated("the identity switch");
+        let before = (nix::unistd::getgid(), nix::unistd::getegid());
         if let Some(gid) = self.effective_gid() {
             nix::unistd::setgid(gid)
                 .map_err(|e| DaemonizeError::PermissionDenied(format!("setgid: {e}")))?;
         }
         if let Some(info) = self.user() {
             #[cfg(test)]
-            if crate::steps::failpoints::SETUID_FAILS.injected() {
-                return Err(DaemonizeError::PermissionDenied(
-                    "setuid: injected failure".into(),
-                ));
+            let switched = if crate::steps::failpoints::SETUID_FAILS.injected() {
+                Err(nix::errno::Errno::EAGAIN)
+            } else {
+                nix::unistd::setuid(info.uid)
+            };
+            #[cfg(not(test))]
+            let switched = nix::unistd::setuid(info.uid);
+            if let Err(e) = switched {
+                // Still privileged, since setuid failed: put the group back
+                // rather than leave a half-switched identity (R164). The saved
+                // gid follows the real one; R164 lists that.
+                let _ = nix::unistd::setgid(before.0);
+                let _ = nix::unistd::setegid(before.1);
+                return Err(DaemonizeError::PermissionDenied(format!("setuid: {e}")));
             }
-            nix::unistd::setuid(info.uid)
-                .map_err(|e| DaemonizeError::PermissionDenied(format!("setuid: {e}")))?;
             // SAFETY: this function's contract requires a single thread, so
             // these `setenv` calls cannot race `environ`.
             unsafe {
