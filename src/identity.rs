@@ -131,9 +131,10 @@ impl ResolvedIdentity {
 
     /// Switch the process to this identity.
     ///
-    /// - User: `initgroups`, `setgid` to the explicit group or else the user's
-    ///   primary group, `setuid`, then `USER`, `HOME`, `LOGNAME` (overriding
-    ///   any configured `.env()` values).
+    /// - User: `setgid` to the explicit group or else the user's primary
+    ///   group, `setuid`, then `USER`, `HOME`, `LOGNAME` (overriding any
+    ///   configured `.env()` values). The supplementary groups were set
+    ///   earlier, by [`join_groups`](Self::join_groups).
     /// - Group only: `setgid`.
     ///
     /// # Safety
@@ -143,8 +144,8 @@ impl ResolvedIdentity {
     ///
     /// # Errors
     ///
-    /// Returns `DaemonizeError::PermissionDenied` if `initgroups`, `setgid`,
-    /// or `setuid` fails, and `UserNotFound` for a name with a NUL byte.
+    /// Returns `DaemonizeError::PermissionDenied` if `setgid` or `setuid`
+    /// fails.
     #[allow(unsafe_code)]
     pub(crate) unsafe fn switch_to(&self) -> Result<(), DaemonizeError> {
         #[cfg(test)]

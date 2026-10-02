@@ -598,8 +598,10 @@ supplementary groups, and whatever `init` did.
     See output file redirect.
 13. **Close inherited fds** (if `close_fds` is true). Close the
     enumerated open fds (or iterate 3..`rlim_cur` where enumeration
-    is unavailable), skipping lockfile fd and notification pipe fd.
-    See fd closing.
+    is unavailable), skipping the lockfile fd, the notification pipe
+    fd, a standalone pidfile's fd (kept for step 16's chown, R163), and
+    the descriptors the abort guard holds to undo a foreground failure
+    (R164). See fd closing.
 14. **Resolve the target identity** if a user or group is configured,
     so a missing one fails before `init` runs (R155), and with a user,
     set the supplementary groups (`initgroups`) from the real group
@@ -858,8 +860,9 @@ temporarily override umask.
 
 When `close_fds` is true (the default), close every open fd except
 0-2, the lockfile fd (from step 7, identified via
-`AsRawFd::as_raw_fd()` on the `Flock`), and the notification pipe
-write fd. Open fds are enumerated via the platform fd directory —
+`AsRawFd::as_raw_fd()` on the `Flock`), the notification pipe write
+fd, a standalone pidfile's fd (R163), and the descriptors the abort
+guard holds for a foreground undo (R164). Open fds are enumerated via the platform fd directory —
 `/proc/self/fd` on Linux and Android, `/dev/fd` on macOS — when
 available; where
 no reliable listing exists (the BSDs' `/dev/fd` covers only 0-2
