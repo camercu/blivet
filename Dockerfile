@@ -28,7 +28,8 @@ RUN case "$(uname -m)" in \
 
 # Create a non-root user and extra group for user/group-switching tests
 RUN useradd --create-home --shell /bin/bash testuser \
-    && groupadd testgroup
+    && groupadd testgroup \
+    && groupadd testsupp && usermod -aG testsupp testuser
 
 WORKDIR /src
 

@@ -109,6 +109,27 @@ impl ResolvedIdentity {
         Ok(())
     }
 
+    /// Set the supplementary groups to the user's, from the group database
+    /// (`initgroups`). A no-op without a user.
+    ///
+    /// The sequence calls this before the caller's `init`, so an `init` that
+    /// changes root cannot change which group database is read (R162). Root's
+    /// permission checks ignore supplementary groups, so `init` is unaffected.
+    ///
+    /// # Errors
+    ///
+    /// Returns `DaemonizeError::PermissionDenied` if `initgroups` fails, and
+    /// `UserNotFound` for a name with a NUL byte.
+    pub(crate) fn join_groups(&self) -> Result<(), DaemonizeError> {
+        #[cfg(test)]
+        crate::test_support::assert_isolated("joining the user's groups");
+        if let Some(info) = self.user() {
+            crate::sys::raw_initgroups(&info.cname()?, info.gid.as_raw())
+                .map_err(|e| DaemonizeError::PermissionDenied(format!("initgroups: {e}")))?;
+        }
+        Ok(())
+    }
+
     /// Switch the process to this identity.
     ///
     /// - User: `initgroups`, `setgid` to the explicit group or else the user's
@@ -129,10 +150,6 @@ impl ResolvedIdentity {
     pub(crate) unsafe fn switch_to(&self) -> Result<(), DaemonizeError> {
         #[cfg(test)]
         crate::test_support::assert_isolated("the identity switch");
-        if let Some(info) = self.user() {
-            crate::sys::raw_initgroups(&info.cname()?, info.gid.as_raw())
-                .map_err(|e| DaemonizeError::PermissionDenied(format!("initgroups: {e}")))?;
-        }
         if let Some(gid) = self.effective_gid() {
             nix::unistd::setgid(gid)
                 .map_err(|e| DaemonizeError::PermissionDenied(format!("setgid: {e}")))?;

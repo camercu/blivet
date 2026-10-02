@@ -190,21 +190,26 @@ pub(crate) fn assert_isolated(what: &str) {
     );
 }
 
-/// A gid the current user cannot chown files to: not the effective gid and
-/// not a supplementary group. An unprivileged chown to it fails `EPERM`, so a
-/// test sees that the chown was attempted, and it fails before any `setgid`
-/// changes the test process's groups.
-pub(crate) fn foreign_gid() -> u32 {
+/// This process's supplementary group IDs.
+pub(crate) fn supplementary_gids() -> Vec<libc::gid_t> {
     // libc, not nix::unistd::getgroups: nix gates it out on apple targets.
     #[allow(unsafe_code)]
-    let gids: Vec<u32> = unsafe {
+    unsafe {
         let n = libc::getgroups(0, std::ptr::null_mut());
         assert!(n >= 0, "getgroups failed");
         let mut buf = vec![0 as libc::gid_t; n as usize];
         let n = libc::getgroups(n, buf.as_mut_ptr());
         assert!(n >= 0, "getgroups failed");
         buf[..n as usize].to_vec()
-    };
+    }
+}
+
+/// A gid the current user cannot chown files to: not the effective gid and
+/// not a supplementary group. An unprivileged chown to it fails `EPERM`, so a
+/// test sees that the chown was attempted, and it fails before any `setgid`
+/// changes the test process's groups.
+pub(crate) fn foreign_gid() -> u32 {
+    let gids = supplementary_gids();
     let egid = nix::unistd::getegid().as_raw();
     (1..).find(|g| !gids.contains(g) && *g != egid).unwrap()
 }

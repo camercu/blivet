@@ -243,6 +243,11 @@ unsafe fn run_post_fork<T>(
     } else {
         None
     };
+    // The supplementary groups too, from the real group database, before
+    // init can change root (R162).
+    if let Some(identity) = &identity {
+        identity.join_groups()?;
+    }
 
     // Step 15: The caller's privileged init (R153). After the lock, so only
     // the instance holding it runs; after the fd sweep, so what it opens
@@ -523,6 +528,81 @@ mod tests {
             "{result:?}"
         );
         assert!(!ran, "init ran for a user that does not exist");
+    }
+
+    // Covers: R162
+    #[test]
+    fn supplementary_groups_are_set_before_init_runs() {
+        run_in_subprocess(
+            "sequence::tests::supplementary_groups_are_set_before_init_runs_subprocess",
+        );
+    }
+
+    /// Unprivileged, `initgroups` fails with EPERM, which shows where it runs:
+    /// the error must come before init, not after it.
+    #[test]
+    #[ignore]
+    fn supplementary_groups_are_set_before_init_runs_subprocess() {
+        if !is_subprocess() {
+            return;
+        }
+        crate::test_support::shed_root();
+        let mut config = DaemonConfig::new();
+        config.foreground(true).close_fds(false).user("0");
+        let mut ran = false;
+
+        let result = run_inner_with(&config, &mut NullForker::new(vec![], Ok(())), || {
+            ran = true;
+            Ok(())
+        });
+
+        assert!(
+            matches!(&result, Err(DaemonizeError::PermissionDenied(m)) if m.contains("initgroups")),
+            "{result:?}"
+        );
+        assert!(!ran, "init ran before the supplementary groups were set");
+    }
+
+    // Covers: R162
+    #[test]
+    #[ignore = "needs root and the image's testuser: the privileged tier runs it"]
+    fn supplementary_groups_come_from_the_real_database_when_init_chroots() {
+        run_in_subprocess(
+            "sequence::tests::supplementary_groups_come_from_the_real_database_when_init_chroots_subprocess",
+        );
+    }
+
+    /// An init that chroots into a jail whose `/etc/group` lists no groups
+    /// must not cost the daemon its supplementary groups (ADR 0005).
+    #[test]
+    #[ignore]
+    fn supplementary_groups_come_from_the_real_database_when_init_chroots_subprocess() {
+        if !is_subprocess() {
+            return;
+        }
+        let supp = nix::unistd::Group::from_name("testsupp")
+            .unwrap()
+            .expect("the privileged image has testsupp")
+            .gid;
+        let jail = tempfile::tempdir().unwrap();
+        std::fs::create_dir(jail.path().join("etc")).unwrap();
+        std::fs::write(jail.path().join("etc/group"), "").unwrap();
+        let mut config = DaemonConfig::new();
+        config.foreground(true).close_fds(false).user("testuser");
+
+        let root = jail.path().to_path_buf();
+        let result = run_inner_with(&config, &mut NullForker::new(vec![], Ok(())), || {
+            nix::unistd::chroot(&root).unwrap();
+            nix::unistd::chdir("/").unwrap();
+            Ok(())
+        });
+
+        result.expect("the sequence succeeds");
+        let groups = crate::test_support::supplementary_gids();
+        assert!(
+            groups.contains(&supp.as_raw()),
+            "testsupp ({supp}) missing from {groups:?}: groups were read inside the jail"
+        );
     }
 
     // Covers: R154

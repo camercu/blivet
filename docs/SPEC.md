@@ -581,7 +581,9 @@ chdir, stdin redirect, and env changes may already have happened).
     is unavailable), skipping lockfile fd and notification pipe fd.
     See fd closing.
 14. **Resolve the target identity** if a user or group is configured,
-    so a missing one fails before `init` runs (R155).
+    so a missing one fails before `init` runs (R155), and with a user,
+    set the supplementary groups (`initgroups`) from the real group
+    database, before `init` can change root (R162).
 15. **Run `init`** (`daemonize_with()` only; `daemonize()` runs none).
     It runs after the lock and the fd sweep, so only the instance
     holding the lock runs it and what it opens stays open (R153). Its
@@ -776,9 +778,9 @@ each differs:
 **Four combinations:**
 
 - Neither user nor group configured: no switch.
-- User only: `initgroups(username, primary_gid)` →
-  `setgid(primary_gid)` → `setuid(uid)`.
-- User and group: `initgroups(username, user_primary_gid)` →
+- User only: `initgroups(username, primary_gid)` (step 14, before
+  `init`) → `setgid(primary_gid)` → `setuid(uid)`.
+- User and group: `initgroups(username, user_primary_gid)` (step 14) →
   `setgid(group_gid)` → `setuid(uid)`.
 - Group only: `setgid(group_gid)`.
 
@@ -1355,8 +1357,8 @@ verification points.
 - R99. Signal reset: 1..SIGRTMAX, skip SIGKILL/SIGSTOP/SIGPIPE,
   EINVAL → skip.
 - R100. Signal reset uses `libc::sigaction()` directly.
-- R101. User switch order: `getpwnam` → `initgroups` → `setgid` →
-  `setuid`.
+- R101. User switch order: `getpwnam` → `initgroups` (both before
+  `init`) → `setgid` → `setuid`.
 - R102. Output files opened in daemonization step 12 (before the
   identity switch).
 - R103. Fd closing: brute-force 3..rlim_cur, not `/proc/self/fd`.
@@ -1579,3 +1581,6 @@ verification points.
 - R161. With no launcher pipe (foreground mode, or after the pipe was
   used), `report_error` and a failed `exec` print the error to stderr
   before exiting with its code.
+- R162. The supplementary groups are set (`initgroups`) before `init`
+  runs, from the real group database, so an `init` that changes root
+  cannot change them.
