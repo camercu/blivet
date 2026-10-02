@@ -630,10 +630,12 @@ Individual `close()` errors in step 13 are silently ignored.
 > from the pipe), but uses the mapped code for consistency in process
 > accounting. As a backstop, the notification-pipe write end reports a
 > failure if it is dropped without any message being sent — e.g. a
-> panic unwinding past the signalling seam. This stops the closed pipe
-> from being read as EOF = success, which would report a crashed daemon
-> as a clean start; `panic = "abort"` must therefore stay off (R93) so
-> the unwind reaches the `Drop`. See R137.
+> panic unwinding past the signalling seam (R137). A bare EOF already
+> reads as failure (R150), so before the exec marker the backstop only
+> names the cause. After the marker, EOF reads as success, and the
+> backstop is what keeps a panic between the marker and `execvp` from
+> being reported as a start. `panic = "abort"` must therefore stay off
+> (R93) so the unwind reaches the `Drop`.
 
 ### Notification pipe protocol
 
