@@ -162,13 +162,14 @@ impl AbortGuard<'_> {
     }
 
     /// Holds a descriptor of the working directory, to `fchdir` back to.
-    fn save_cwd(&mut self) -> Result<(), DaemonizeError> {
-        let saved = std::fs::File::open(".")
+    ///
+    /// Best-effort: a directory the caller may enter but not read cannot be
+    /// opened, and an undo aid must not fail the start (R164).
+    fn save_cwd(&mut self) {
+        self.cwd = std::fs::File::open(".")
             .map(OwnedFd::from)
             .and_then(steps::above_stdio)
-            .map_err(|e| DaemonizeError::ChdirFailed(format!("save working directory: {e}")))?;
-        self.cwd = Some(saved);
-        Ok(())
+            .ok();
     }
 
     /// The descriptors it holds, which the fd sweep must spare.
@@ -236,7 +237,7 @@ unsafe fn run_post_fork<T>(
 
     // Step 5: chdir
     if config.foreground {
-        abort.save_cwd()?;
+        abort.save_cwd();
     }
     steps::change_dir(&config.chdir)?;
 
@@ -799,6 +800,41 @@ mod tests {
             !dir.path().join("app.pid").exists(),
             "pidfile was left behind"
         );
+    }
+
+    // Covers: R164
+    #[test]
+    fn a_foreground_start_from_a_directory_it_cannot_read_succeeds() {
+        run_in_subprocess(
+            "sequence::tests::a_foreground_start_from_a_directory_it_cannot_read_succeeds_subprocess",
+        );
+    }
+
+    /// `sudo -u app daemonize -f` from a home the user may enter but not list:
+    /// saving the working directory for undo must not fail the start.
+    #[test]
+    #[ignore]
+    fn a_foreground_start_from_a_directory_it_cannot_read_succeeds_subprocess() {
+        use std::os::unix::fs::PermissionsExt;
+        if !is_subprocess() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let search_only = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(search_only.path(), std::fs::Permissions::from_mode(0o111))
+            .unwrap();
+        std::env::set_current_dir(search_only.path()).unwrap();
+
+        let mut config = DaemonConfig::new();
+        config
+            .foreground(true)
+            .close_fds(false)
+            .pidfile(dir.path().join("app.pid"));
+        let result = run_inner(&config, &mut NullForker::new(vec![], Ok(())));
+
+        std::fs::set_permissions(search_only.path(), std::fs::Permissions::from_mode(0o700))
+            .unwrap();
+        result.unwrap();
     }
 
     // Covers: R154
