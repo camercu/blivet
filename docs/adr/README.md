@@ -13,3 +13,4 @@ Format: `NNNN-kebab-case-title.md`, numbered in acceptance order.
 | [0002](0002-android-support-and-test-tiers.md) | Android is a supported platform, proven by tiered CI | Accepted (tier 3's standing superseded by 0003) |
 | [0003](0003-the-emulator-tier-is-advisory.md) | The Android emulator tier is advisory, not a release gate | Accepted |
 | [0004](0004-privileged-init-runs-inside-daemonize.md) | Privileged init runs inside the daemonize call | Accepted |
+| [0005](0005-chroot-stays-out-of-scope.md) | Chroot stays out of scope; library-owned chroot is deferred | Accepted (chroot deferred) |
