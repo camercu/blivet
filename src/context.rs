@@ -508,6 +508,33 @@ mod tests {
         );
     }
 
+    // Covers: R157
+    //
+    // Only a broken pipe means the launcher is gone. Any other failure to
+    // write the marker leaves a launcher that will read the closed pipe as a
+    // failed start, so running the program anyway would put a live daemon
+    // behind a reported failure.
+    #[test]
+    fn exec_stops_when_the_marker_cannot_be_written() {
+        const MARKER: &str = "__BLIVET_EXEC_MARKER_FAILS";
+        const NAME: &str = "context::tests::exec_stops_when_the_marker_cannot_be_written";
+
+        if std::env::var(MARKER).is_ok() {
+            // The read end: a write to it fails with EBADF, not EPIPE.
+            let (rd, _wr) = make_pipe();
+            let ctx = ctx(&DaemonConfig::new(), None, Some(NotifyPipe::new(rd)));
+            ctx.exec(c"sh", &[c"sh", c"-c", c"exit 7"]);
+        }
+
+        let output = crate::test_support::rerun_in_subprocess(NAME, MARKER, "1");
+        assert_eq!(
+            output.status.code(),
+            Some(71),
+            "{}",
+            crate::test_support::subprocess_report(NAME, &output)
+        );
+    }
+
     // Covers: R157, R161
     //
     // A failed exec reports into the pipe after SIGPIPE was restored to its
