@@ -507,6 +507,17 @@ configured. It does not call `getpwnam()` or `getgrnam()`.
 > concern: the post-fork sequence resolves them before `init` runs
 > (step 14). Consumers who want earlier validation should call
 > `getpwnam()`/`getgrnam()` themselves.
+>
+> Resolving before the fork was weighed and declined. NSS modules (sssd,
+> nscd) keep a socket open in the process: a lookup before the fork
+> would leave that descriptor for step 13 to close under the module,
+> and `initgroups`, which must run in the daemon, would then use the
+> module's stale state. Some NSS modules (older LDAP ones) start
+> threads, which a lookup before the fork would leave running when the
+> single-threaded check and the fork come. After the fork, every lookup
+> runs in the single-threaded daemon, past the fd sweep. A missing user
+> still exits 67 through the notification pipe, and the pidfile it
+> wrote is removed.
 
 ### Environment entry validation
 
