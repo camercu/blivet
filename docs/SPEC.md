@@ -344,7 +344,11 @@ panicking (with a message naming the problem and fix) unless it is exactly
 1, or if it cannot be determined, then calls
 `unsafe { daemonize_unchecked(config) }`. A count other than 1 — including
 an anomalous 0 a healthy process can never report — fails closed rather than
-forking on an untrusted count. The count is read from the kernel,
+forking on an untrusted count. A count above 1 is read again for up
+to 10ms before it is believed: the kernel drops a joined thread from
+its count some microseconds after `pthread_join` returns, so a thread
+the caller joined just before the call would otherwise fail the check.
+The count is read from the kernel,
 through whichever interface each platform offers; the capability table
 in `build.rs` records which, and the crate front page's "Platform
 support" section is generated from it.
@@ -1289,7 +1293,9 @@ verification points.
 - R42. Parent exits 0 when exec succeeds (the exec marker, then EOF).
 - R43. Parent exits non-zero with error message when exec fails.
 - R44. Post-fork errors are reported via parent's stderr, not lost.
-- R45. `daemonize()` panics when thread count is not exactly 1.
+- R45. `daemonize()` panics when thread count is not exactly 1, once
+  threads already joined have left it (a count above 1 is re-read for
+  up to 10ms).
 - R46. `DaemonConfig` is `Send + Sync`.
 - R47. `DaemonContext` is `Send + Sync`.
 - R48. `DaemonizeError` is `Send + Sync`.
@@ -1423,7 +1429,8 @@ verification points.
   identity switch succeeds, and a switch failure ends the sequence.
 - R126. The checked `daemonize_with()` fails with `InitLeftThreads`
   (exit 70) when a user switch is configured and `init` leaves the
-  thread count other than 1 (the user-switch path calls `setenv`, which
+  thread count other than 1, read as R45 reads it, so threads `init`
+  joined do not count (the user-switch path calls `setenv`, which
   is not thread-safe). An error, not a panic: in daemon mode the
   launcher prints it. A group-only switch is not checked. The unchecked
   forms skip the check; on targets without a thread-count source the

@@ -232,11 +232,31 @@ fn single_threaded_violation(caller: &str, count: usize) -> Option<String> {
 /// checked entry points, [`daemonize`] and [`daemonize_with`], before the fork.
 #[cfg(blivet_thread_count)]
 pub(crate) fn assert_single_threaded(caller: &str) {
-    let count = count().unwrap_or_else(|_| {
+    let count = settled_count(1).unwrap_or_else(|_| {
         panic!("{caller}: cannot determine thread count to verify single-threadedness")
     });
     if let Some(msg) = single_threaded_violation(caller, count) {
         panic!("{msg}");
+    }
+}
+
+/// [`count`], once threads already joined have left it.
+///
+/// The kernel drops an exiting thread from its count some microseconds after
+/// `pthread_join` returns (about 30µs measured on macOS; Linux decrements
+/// after the join's wake-up too). A count above `expected` is read again
+/// until it falls to `expected` or 10ms pass, so a thread still running is
+/// reported 10ms later, and a joined one is not reported at all. The checks
+/// expect 1.
+#[cfg(blivet_thread_count)]
+fn settled_count(expected: usize) -> std::io::Result<usize> {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(10);
+    loop {
+        let n = count()?;
+        if n <= expected || std::time::Instant::now() >= deadline {
+            return Ok(n);
+        }
+        std::thread::yield_now();
     }
 }
 
@@ -254,7 +274,7 @@ pub(crate) fn checked_init<T>(
         if switches_user {
             // An error, not a panic: this runs in the daemon, where a panic's
             // message reaches only its stderr, and the launcher prints an error.
-            let count = count().map_err(|e| {
+            let count = settled_count(1).map_err(|e| {
                 DaemonizeError::SystemError(format!("thread count after init: {e}"))
             })?;
             if count != 1 {
@@ -321,6 +341,31 @@ mod tests {
     }
 
     use crate::test_support::{is_subprocess, run_in_subprocess};
+
+    // Covers: R45, R126
+    #[test]
+    fn a_joined_thread_has_left_the_settled_count() {
+        run_in_subprocess(
+            "thread_count::tests::a_joined_thread_has_left_the_settled_count_subprocess",
+        );
+    }
+
+    /// The kernel drops an exited thread from its count some microseconds
+    /// after `pthread_join` returns, so one reading right after the join
+    /// often still counts it. The harness keeps a thread of its own, so the
+    /// count settles to this process's baseline rather than to 1.
+    #[test]
+    #[ignore]
+    fn a_joined_thread_has_left_the_settled_count_subprocess() {
+        if !is_subprocess() {
+            return;
+        }
+        let base = count().unwrap();
+        for round in 0..1000 {
+            std::thread::spawn(|| {}).join().unwrap();
+            assert_eq!(settled_count(base).unwrap(), base, "round {round}");
+        }
+    }
 
     /// The thread count backing `daemonize` must reflect the kernel's
     /// real thread count. Runs in an isolated subprocess: the assertion is
