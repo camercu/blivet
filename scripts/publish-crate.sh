@@ -1,13 +1,19 @@
 # Publishes blivet <version> to crates.io, unless crates.io already has it.
 #
 # Runs in semantic-release's prepare step, before @semantic-release/git
-# commits and tags: a failed publish then leaves no release commit and no tag,
-# and a re-run tries again. The skip covers the opposite failure, a publish
-# that succeeded before the tag push failed: the re-run tags without trying
-# to publish the version twice, which crates.io would refuse. It skips only
-# when the published crate was built from this very commit (its
-# .cargo_vcs_info.json names it); otherwise the tag would mark a tree other
-# than the one on crates.io, and the release stops for a human.
+# commits and pushes the release commit: a failed publish then leaves no
+# release commit and no tag, and a re-run tries again. The skip covers the
+# opposite failure, a publish that succeeded before the release commit's push
+# failed: HEAD is still the commit the crate was built from, and the re-run
+# goes on without publishing the version twice, which crates.io would refuse.
+# It skips only when the published crate was built from this very commit (its
+# .cargo_vcs_info.json names it); otherwise the release stops for a human.
+#
+# A failed tag push is not covered. The release commit is on main by then,
+# so a re-run would see HEAD one commit past the published crate and stop
+# here (and would add the release notes to CHANGELOG.md a second time if it
+# went on). Push the tag by hand instead:
+#   git tag v<version> <release commit> && git push origin v<version>
 #
 # Invoked as `sh scripts/publish-crate.sh <version>`.
 set -eu
