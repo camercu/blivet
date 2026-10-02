@@ -152,51 +152,6 @@ fn write_all_fd(fd: impl AsFd, buf: &[u8]) -> Result<(), nix::errno::Errno> {
     Ok(())
 }
 
-/// Removes the pidfile this process wrote if the sequence never reaches the end.
-///
-/// Everything from the second half of step 8 through step 17 runs after this
-/// process has taken hold of the pidfile, and any of it can fail. In daemon mode the abort path signals the parent and `_exit`s, and in
-/// foreground mode the error returns to the caller; neither builds a
-/// [`DaemonContext`](crate::DaemonContext), so no drop-time cleanup ever runs. Without this the file
-/// is left naming a process that never started — what `kill $(cat …)`, a status
-/// script, or systemd's `PIDFile=` reads next, and after PID reuse some other
-/// process entirely.
-///
-/// Armed once [`open_pidfile`] returns, which is when the file becomes
-/// this process's — not before, so a lock conflict or a refused `open` cannot
-/// remove a file that belongs to someone else, and not after the write, so a
-/// write that fails half way does not leave an empty pidfile behind. Gated on
-/// [`cleanup_on_drop`](crate::DaemonConfig::cleanup_on_drop), matching the drop-time
-/// cleanup that [`DaemonContext::report_error`](crate::DaemonContext::report_error) replicates for the same reason.
-pub(crate) struct PidfileOnAbort<'a> {
-    path: Option<&'a std::path::Path>,
-}
-
-impl<'a> PidfileOnAbort<'a> {
-    /// A guard that removes nothing until [`arm`](Self::arm)ed.
-    pub(crate) fn new() -> Self {
-        Self { path: None }
-    }
-
-    /// From now on, an abort removes the pidfile at `path`.
-    pub(crate) fn arm(&mut self, path: &'a std::path::Path) {
-        self.path = Some(path);
-    }
-
-    /// The sequence reached the end; the [`DaemonContext`](crate::DaemonContext) owns the pidfile now.
-    pub(crate) fn disarm(&mut self) {
-        self.path = None;
-    }
-}
-
-impl Drop for PidfileOnAbort<'_> {
-    fn drop(&mut self) {
-        if let Some(path) = self.path {
-            let _ = std::fs::remove_file(path);
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
 

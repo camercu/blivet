@@ -1613,6 +1613,8 @@ verification points.
   the caller's process and can restore: stdin, stdout, and stderr, the
   umask, and the working directory when it could open it (a directory
   the caller may search but not read cannot be opened, and the start
-  goes on without saving it), and removes the pidfile it wrote.
+  goes on without saving it), and removes the pidfile it wrote. In both
+  modes the pidfile goes before the lock is released, so a second
+  instance cannot take the lock and lose its pidfile to the first.
   It cannot restore inherited descriptors it closed, signal dispositions
   and mask, environment variables it set, or supplementary groups.

@@ -1,5 +1,5 @@
 //! The daemonize sequence: the forks, the post-fork steps in order, the
-//! guard that removes the pidfile when the sequence aborts, and the
+//! guard that undoes them when the sequence aborts, and the
 //! launcher's side of the notification pipe.
 //!
 //! The entry points in `lib.rs` validate and check the thread count, then
@@ -8,6 +8,7 @@
 use std::os::fd::{AsFd, AsRawFd, OwnedFd};
 use std::path::PathBuf;
 
+use nix::fcntl::Flock;
 use nix::unistd::ForkResult;
 
 use crate::forker::Forker;
@@ -138,17 +139,29 @@ pub(crate) unsafe fn daemonize_inner_with<T>(
 
 /// What a failed sequence undoes (R164), in the reverse of the order it was
 /// done: stdio slots (steps 12 and 6), the working directory (step 5), the
-/// umask (step 4), and the pidfile (step 8).
+/// umask (step 4), the pidfile (step 8), and last the lock (step 7).
 ///
 /// In foreground mode the process is the caller's, and it gets back the parts
 /// that can be restored. In daemon mode the process exits on failure, so only
 /// the pidfile is removed. What cannot be restored is in R164.
-/// [`disarm`](Self::disarm) at step 18 keeps every change.
+/// [`disarm`](Self::disarm) at step 18 keeps every change and hands over the
+/// lock.
+///
+/// The pidfile goes while the lock is still held: released first, the lock
+/// would let a second instance in to write its pid into a file this one then
+/// removes. Fields drop after the body of [`Drop::drop`], so `lock` is
+/// released after the body has removed the pidfile.
 struct AbortGuard<'a> {
     stdio: Vec<steps::SavedSlot>,
     cwd: Option<OwnedFd>,
     umask: Option<nix::sys::stat::Mode>,
-    pidfile: steps::PidfileOnAbort<'a>,
+    /// The pidfile this process owns from the second half of step 8: written
+    /// or truncated by it, so a failure must not leave it naming a process
+    /// that never started. Set only with
+    /// [`cleanup_on_drop`](crate::DaemonConfig::cleanup_on_drop), matching the
+    /// drop-time cleanup the [`DaemonContext`] would have done.
+    pidfile: Option<&'a std::path::Path>,
+    lock: Option<Flock<OwnedFd>>,
 }
 
 impl AbortGuard<'_> {
@@ -157,7 +170,8 @@ impl AbortGuard<'_> {
             stdio: Vec::new(),
             cwd: None,
             umask: None,
-            pidfile: steps::PidfileOnAbort::new(),
+            pidfile: None,
+            lock: None,
         }
     }
 
@@ -180,12 +194,13 @@ impl AbortGuard<'_> {
             .chain(self.cwd.as_ref().map(AsRawFd::as_raw_fd))
     }
 
-    /// The sequence finished: keep every change.
-    fn disarm(&mut self) {
+    /// The sequence finished: keep every change, and hand over the lock.
+    fn disarm(&mut self) -> Option<Flock<OwnedFd>> {
         self.stdio.drain(..).for_each(steps::SavedSlot::keep);
         self.cwd = None;
         self.umask = None;
-        self.pidfile.disarm();
+        self.pidfile = None;
+        self.lock.take()
     }
 }
 
@@ -199,7 +214,10 @@ impl Drop for AbortGuard<'_> {
         if let Some(mask) = self.umask.take() {
             nix::sys::stat::umask(mask);
         }
-        // The pidfile guard removes the file as it drops.
+        if let Some(path) = self.pidfile.take() {
+            let _ = std::fs::remove_file(path);
+        }
+        // `lock` drops after this body, so the pidfile is gone first.
     }
 }
 
@@ -251,10 +269,9 @@ unsafe fn run_post_fork<T>(
     // Step 7: Open and lock lockfile (explicit path, or the pidfile itself
     // unless derivation was opted out)
     let lockfile_path = config.effective_lockfile().map(std::path::PathBuf::as_path);
-    let lockfile = match lockfile_path {
-        Some(path) => Some(steps::open_and_lock(path)?),
-        None => None,
-    };
+    if let Some(path) = lockfile_path {
+        abort.lock = Some(steps::open_and_lock(path)?);
+    }
 
     // Step 8: Write pidfile. The debt is owed from the moment this process
     // owns the file on disk — once `open_pidfile` returns, having locked it at
@@ -262,8 +279,7 @@ unsafe fn run_post_fork<T>(
     // write succeeds: a write that fails half way leaves an empty file naming
     // no process at all. Nor any earlier: an `open_pidfile` that fails, or a
     // lock conflict at step 7, leaves a file that belongs to someone else.
-    // The abort guard removes the pidfile from the second half of step 8 on —
-    // see `PidfileOnAbort`.
+    // The abort guard removes the pidfile from the second half of step 8 on.
     // The files the sequence now holds, which step 12 must not redirect into.
     // The pidfile goes first: a derived lockfile is the same file, and the
     // user configured it as the pidfile.
@@ -271,15 +287,15 @@ unsafe fn run_post_fork<T>(
     // A standalone pidfile's descriptor, kept for step 16's chown (R163).
     let mut pidfile_fd = None;
     if let Some(ref pidfile_path) = config.pidfile {
-        let pidfile = steps::open_pidfile(pidfile_path, lockfile_path.zip(lockfile.as_ref()))?;
+        let pidfile = steps::open_pidfile(pidfile_path, lockfile_path.zip(abort.lock.as_ref()))?;
         if config.cleanup_on_drop {
-            abort.pidfile.arm(pidfile_path);
+            abort.pidfile = Some(pidfile_path);
         }
         let (id, fd) = pidfile.write_pid()?;
         owned.push(("pidfile", id));
         pidfile_fd = fd;
     }
-    if let Some(ref lockfile) = lockfile {
+    if let Some(ref lockfile) = abort.lock {
         let id = crate::file_identity::file_id(&**lockfile)
             .map_err(|e| DaemonizeError::LockfileError(format!("fstat: {e}")))?;
         owned.push(("lockfile", id));
@@ -309,7 +325,7 @@ unsafe fn run_post_fork<T>(
     // Step 13: Close inherited fds (if enabled)
     if config.close_fds {
         let mut skip_fds: Vec<i32> = Vec::new();
-        if let Some(ref flock) = lockfile {
+        if let Some(ref flock) = abort.lock {
             skip_fds.push(flock.as_raw_fd());
         }
         if let Some(ref wr) = pipe_wr {
@@ -357,7 +373,7 @@ unsafe fn run_post_fork<T>(
             let lock = config
                 .effective_lockfile()
                 .map(PathBuf::as_path)
-                .zip(lockfile.as_ref().map(|flock| flock.as_fd()));
+                .zip(abort.lock.as_ref().map(|flock| flock.as_fd()));
             let (out, err) = (std::io::stdout(), std::io::stderr());
             let stdout = config.stdout.as_deref().map(|p| (p, out.as_fd()));
             let stderr = config.stderr.as_deref().map(|p| (p, err.as_fd()));
@@ -369,8 +385,9 @@ unsafe fn run_post_fork<T>(
     }
 
     // Step 18: Return DaemonContext (clones the config-derived fields it needs).
-    // The context owns the pidfile from here, so the abort guard stands down.
-    abort.disarm();
+    // The context owns the pidfile and the lock from here, so the abort guard
+    // stands down.
+    let lockfile = abort.disarm();
     Ok((DaemonContext::new(config, lockfile, pipe_wr.take()), value))
 }
 
@@ -800,6 +817,42 @@ mod tests {
             !dir.path().join("app.pid").exists(),
             "pidfile was left behind"
         );
+    }
+
+    // Covers: R164
+    #[test]
+    fn a_failed_start_frees_the_lock_for_the_next_one() {
+        run_in_subprocess(
+            "sequence::tests::a_failed_start_frees_the_lock_for_the_next_one_subprocess",
+        );
+    }
+
+    /// The abort guard removes the pidfile and then releases the lock, so a
+    /// second instance never takes a lock whose pidfile is about to vanish.
+    /// The order is the guard's `Drop`; this checks that both happen.
+    #[test]
+    #[ignore]
+    fn a_failed_start_frees_the_lock_for_the_next_one_subprocess() {
+        if !is_subprocess() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let pidfile = dir.path().join("app.pid");
+        let mut config = DaemonConfig::new();
+        config
+            .foreground(true)
+            .close_fds(false)
+            .pidfile(&pidfile)
+            .lockfile(dir.path().join("app.lock"));
+        let failed: Result<(DaemonContext, ()), _> =
+            run_inner_with(&config, &mut NullForker::new(vec![], Ok(())), || {
+                Err(DaemonizeError::application(75, "init failed"))
+            });
+        assert!(failed.is_err());
+        assert!(!pidfile.exists(), "pidfile was left behind");
+
+        let again = run_inner(&config, &mut NullForker::new(vec![], Ok(())));
+        assert!(again.is_ok(), "lock was left held: {again:?}");
     }
 
     // Covers: R164
