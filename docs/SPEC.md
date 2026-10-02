@@ -1610,8 +1610,9 @@ verification points.
   that still holds the write end cannot keep the launcher waiting for
   EOF after a failure.
 - R161. With no launcher pipe (foreground mode, or after the pipe was
-  used), `report_error` and a failed `exec` print the error to stderr
-  before exiting with its code.
+  used), or with a launcher that is gone so the pipe write fails, every
+  error report (`report_error`, a failed `exec`, a failed step) prints
+  the error to stderr before exiting with its code.
 - R162. The supplementary groups are set (`initgroups`) before `init`
   runs, from the real group database, so an `init` that changes root
   cannot change them.

@@ -95,10 +95,13 @@ impl NotifyPipe {
     }
 
     /// Signal a daemonization failure: write the error's exit-code byte and
-    /// message, then close the pipe. Best-effort — write errors are ignored
-    /// because the process is aborting regardless.
+    /// message, then close the pipe. If the write fails, most likely because
+    /// the launcher is gone, the message goes to stderr instead, so it is not
+    /// lost with the pipe (R161). The process is aborting either way.
     pub(crate) fn signal_error(mut self, err: &DaemonizeError) {
-        let _ = self.write_all(&error_bytes(err));
+        if self.write_all(&error_bytes(err)).is_err() {
+            eprintln!("{err}");
+        }
     }
 
     /// Signal that the daemon exited without ever calling

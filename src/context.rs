@@ -357,6 +357,7 @@ impl DaemonContext {
         if self.notify_pipe.is_none() {
             // No launcher to tell (foreground mode, or the pipe was used):
             // say it on stderr instead of exiting with only a code (R161).
+            // A launcher that is gone is `signal_error`'s to handle.
             eprintln!("{err}");
         }
         self.cleanup_then_signal(|pipe| pipe.signal_error(err));
@@ -507,11 +508,12 @@ mod tests {
         );
     }
 
-    // Covers: R157
+    // Covers: R157, R161
     //
     // A failed exec reports into the pipe after SIGPIPE was restored to its
     // default; with the launcher gone that write must not kill the daemon
-    // before it exits with the exec's code.
+    // before it exits with the exec's code, and the message nobody read goes
+    // to stderr.
     #[test]
     fn exec_failure_exits_with_its_code_when_the_launcher_is_gone() {
         const MARKER: &str = "__BLIVET_EXEC_FAIL_NO_LAUNCHER";
@@ -527,8 +529,12 @@ mod tests {
 
         let output = crate::test_support::rerun_in_subprocess(NAME, MARKER, "1");
         assert_eq!(
-            output.status.code(),
-            Some(66),
+            (
+                output.status.code(),
+                String::from_utf8_lossy(&output.stderr)
+                    .contains("exec /nonexistent_blivet_program")
+            ),
+            (Some(66), true),
             "{}",
             crate::test_support::subprocess_report(NAME, &output)
         );
