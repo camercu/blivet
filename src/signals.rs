@@ -174,14 +174,11 @@ pub(crate) fn ignore_sigpipe() {
 /// unlink. Uses `SA_RESETHAND` so the handler runs once and the re-raise hits
 /// the default action.
 ///
-/// All-or-nothing (R129): if `sigaction` fails for any signal (e.g. EINVAL
-/// for one that cannot be caught, like SIGKILL/SIGSTOP), the dispositions
-/// already replaced for earlier signals in the slice and the prior pidfile
-/// pointer are restored, and the returned error names the failing signal.
-///
-/// Refuses (R149), before changing anything, a signal whose disposition is
-/// neither the default nor this handler, and (R151) one whose default action
-/// does not terminate the process.
+/// Refuses, before changing anything (R129), a signal outside the cleanup
+/// allowlist (R151), and one whose disposition is neither the default nor
+/// this handler (R149). Every signal on the allowlist can be caught, so the
+/// install that follows does not fail on a supported OS; if it ever did, the
+/// error names the signal and the earlier signals keep the handler.
 pub(crate) fn install_pidfile_cleanup_signals(
     pidfile: &std::ffi::CStr,
     signals: &[i32],
@@ -218,22 +215,18 @@ pub(crate) fn install_pidfile_cleanup_signals(
     }
 
     // Leak a stable copy of the path. Repeated installs leak the prior copy,
-    // a small bounded cost for a rarely-repeated setup call. The prior pointer
-    // (null or an earlier leaked path, both valid forever) is kept for rollback.
+    // a small bounded cost for a rarely-repeated setup call.
     //
     // The path is published *before* the install loop so that in the common
     // single-call case a term signal arriving mid-setup still unlinks the
     // intended pidfile (the whole point of the feature). The unavoidable cost:
-    // between this swap and full install, a still-live prior handler would
+    // between this store and full install, a still-live prior handler would
     // unlink the new path. That install-loop window is inherent to non-atomic
     // multi-`sigaction` setup and cannot be closed without weakening the common
     // path (publishing last would leave the pidfile if a term signal lands in
     // the post-install/pre-publish gap).
     let leaked: *mut libc::c_char = pidfile.to_owned().into_raw();
-    let prior_path = CLEANUP_PIDFILE.swap(leaked, Ordering::AcqRel);
-
-    // Dispositions replaced so far, so a failure can restore them.
-    let mut replaced: Vec<(i32, libc::sigaction)> = Vec::with_capacity(signals.len());
+    CLEANUP_PIDFILE.store(leaked, Ordering::Release);
 
     for &sig in signals {
         let mut sa: libc::sigaction = unsafe { std::mem::zeroed() };
@@ -244,26 +237,14 @@ pub(crate) fn install_pidfile_cleanup_signals(
         unsafe { libc::sigemptyset(&mut sa.sa_mask) };
         sa.sa_flags = libc::SA_RESETHAND;
 
-        let mut old: libc::sigaction = unsafe { std::mem::zeroed() };
-        let ret = unsafe { libc::sigaction(sig, &sa, &mut old) };
+        let ret = unsafe { libc::sigaction(sig, &sa, std::ptr::null_mut()) };
         if ret != 0 {
             let err = std::io::Error::last_os_error();
-            // Restore the pointer first, then the dispositions: any handler
-            // still live during the restore loop (a prior install's, or one this
-            // call installed and hasn't reverted yet) then reads the prior path,
-            // matching the pre-call state instead of unlinking the new path.
-            CLEANUP_PIDFILE.store(prior_path, Ordering::Release);
-            for (s, prev) in replaced.iter().rev() {
-                // SAFETY: `prev` is the exact disposition sigaction reported
-                // for `s` moments ago; re-installing it is always valid.
-                unsafe { libc::sigaction(*s, prev, std::ptr::null_mut()) };
-            }
             return Err(std::io::Error::new(
                 err.kind(),
                 format!("signal {sig}: {err}"),
             ));
         }
-        replaced.push((sig, old));
     }
     Ok(())
 }
@@ -420,55 +401,37 @@ mod tests {
 
     // Covers: R129
     #[test]
-    fn failed_install_rolls_back() {
-        run_in_subprocess("signals::tests::failed_install_rolls_back_subprocess");
+    fn a_refused_slice_changes_nothing() {
+        run_in_subprocess("signals::tests::a_refused_slice_changes_nothing_subprocess");
     }
 
-    /// A failing install must leave no trace: handlers installed for signals
-    /// earlier in the slice are restored, the failing signal is named in the
-    /// error, and the handler's pidfile pointer reverts to its prior value.
-    /// Mutates process-global signal state, hence the subprocess isolation.
+    /// Every refusal is decided before the first handler goes in: a slice
+    /// whose last signal is refused leaves the signals before it, and the
+    /// handler's pidfile path, as they were. Mutates process-global signal
+    /// state, hence the subprocess isolation.
     #[test]
     #[ignore]
-    fn failed_install_rolls_back_subprocess() {
+    fn a_refused_slice_changes_nothing_subprocess() {
         if !is_subprocess() {
             return;
         }
 
-        // Establish a prior successful install so pointer rollback is
-        // distinguishable from "still null".
-        install_pidfile_cleanup_signals(c"/a/rollback-prior.pid", &[libc::SIGUSR2])
+        // A prior install, so an unchanged path is distinguishable from null.
+        install_pidfile_cleanup_signals(c"/a/prior.pid", &[libc::SIGUSR2])
             .expect("SIGUSR2 install should succeed");
         let prior_ptr = CLEANUP_PIDFILE.load(Ordering::Acquire);
         let prior_usr1 = current_disposition(libc::SIGUSR1);
 
-        // SIGUSR1 installs, then SIGKILL fails with EINVAL.
-        let err = install_pidfile_cleanup_signals(
-            c"/a/rollback-new.pid",
-            &[libc::SIGUSR1, libc::SIGKILL],
-        )
-        .expect_err("SIGKILL cannot be caught");
+        install_pidfile_cleanup_signals(c"/a/new.pid", &[libc::SIGUSR1, libc::SIGCHLD])
+            .expect_err("SIGCHLD does not end the process, so it is refused");
 
-        assert!(
-            err.to_string()
-                .contains(&format!("signal {}", libc::SIGKILL)),
-            "error should name the failing signal, got: {err}"
-        );
         assert_eq!(
-            current_disposition(libc::SIGUSR1),
-            prior_usr1,
-            "SIGUSR1 disposition should be rolled back after the failed install"
-        );
-        assert_eq!(
-            CLEANUP_PIDFILE.load(Ordering::Acquire),
-            prior_ptr,
-            "pidfile pointer should revert to the prior install's path"
-        );
-        // The prior install must keep working: SIGUSR2 still has the handler.
-        assert_eq!(
-            current_disposition(libc::SIGUSR2),
-            pidfile_cleanup_handler as extern "C" fn(i32) as usize,
-            "earlier successful install should be untouched"
+            (
+                current_disposition(libc::SIGUSR1),
+                CLEANUP_PIDFILE.load(Ordering::Acquire)
+            ),
+            (prior_usr1, prior_ptr),
+            "a refused slice changed SIGUSR1's disposition or the pidfile path"
         );
     }
 }

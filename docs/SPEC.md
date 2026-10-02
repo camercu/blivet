@@ -1199,8 +1199,7 @@ continues; (2) `daemonize_with()` with privileged `init` →
   Library-only — the CLI's `exec` resets handlers. No-op without a
   pidfile; `ValidationError` on a NUL path, an uncatchable/invalid
   signal, or a signal that already has a handler or is ignored (R149).
-  A failed install names the failing signal and rolls back completely
-  (R129).
+  A refused slice changes nothing (R129).
 - `set_cleanup_on_drop()`: runtime override for cleanup-on-drop.
 - `DaemonContext`: drop releases lock, writes failure to pipe if
   `notify_parent()` was not called, removes pidfile if
@@ -1442,11 +1441,14 @@ verification points.
 - R128. `DaemonContext::exec` sets SIGPIPE to `SIG_DFL` immediately
   before `exec`, so
   the target program starts with the conventional default disposition.
-- R129. `cleanup_on_signals()` is all-or-nothing: if installing a
-  handler fails, dispositions already replaced for earlier signals in
-  the slice — and the handler's pidfile path — are restored before the
-  error (which names the failing signal) is returned, so an `Err`
-  leaves the process exactly as it was.
+- R129. `cleanup_on_signals()` is all-or-nothing: it decides every
+  refusal (R149, R151) for every signal in the slice before it installs
+  the first handler, so a refused slice leaves the dispositions and the
+  handler's pidfile path as they were. Every allowlisted signal can be
+  caught, so the install does not fail on a supported OS; it keeps no
+  rollback for that case, and if `sigaction` ever failed, the error
+  would name the signal and the signals before it would keep the
+  handler.
 - R130. Exec failure with `ENOENT` (missing program or script
   interpreter) or `EACCES` (program not executable) is reported as
   `ProgramNotFound` (exit 66), matching the pre-fork path check — so a
