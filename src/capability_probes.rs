@@ -101,7 +101,9 @@ fn lists_own_fd(path: &str, fd: i32) -> bool {
 // Covers: R139, R140
 #[test]
 fn thread_count_is_readable() {
-    let count = crate::thread_count::count().expect("the thread count must be readable");
+    let count = crate::thread_count::ThreadCount::open()
+        .and_then(|source| source.read())
+        .expect("the thread count must be readable");
     assert!(
         count >= 1,
         "a running process has at least the calling thread, got {count}"

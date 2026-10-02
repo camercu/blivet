@@ -1,7 +1,7 @@
 //! The single-threaded checks the checked entry points make, and the thread
 //! count behind them.
 //!
-//! [`count`] returns the number of threads in this process: from
+//! [`ThreadCount`] reads the number of threads in this process: from
 //! `/proc/self/status` where `/proc` has it, otherwise from the kernel's
 //! per-OS query below (the FFI `unsafe` this module allows).
 //! [`assert_single_threaded`] is the check at the entry points (R45), and
@@ -17,10 +17,48 @@
 #[cfg(blivet_thread_count)]
 use crate::{DaemonConfig, DaemonizeError};
 
-/// Number of threads in the current process, via `/proc/self/status`.
+/// This process's thread count, opened once and read as often as needed.
+///
+/// Where the count comes from `/proc/self/status`, the file is opened here and
+/// re-read through its descriptor, so a reading taken after the process
+/// changed root, into a jail with no `/proc`, still works (ADR 0005). The
+/// kernel queries elsewhere need nothing opened.
+#[cfg(blivet_thread_count)]
+pub(crate) struct ThreadCount {
+    #[cfg(blivet_thread_count_procfs)]
+    status: std::fs::File,
+}
+
+#[cfg(blivet_thread_count)]
+impl ThreadCount {
+    pub(crate) fn open() -> std::io::Result<Self> {
+        Ok(Self {
+            #[cfg(blivet_thread_count_procfs)]
+            status: std::fs::File::open("/proc/self/status")?,
+        })
+    }
+
+    /// The count now.
+    #[cfg(blivet_thread_count_procfs)]
+    pub(crate) fn read(&self) -> std::io::Result<usize> {
+        use std::io::{Read, Seek};
+        let mut file = &self.status;
+        file.seek(std::io::SeekFrom::Start(0))?;
+        let mut status = String::new();
+        file.read_to_string(&mut status)?;
+        parse_threads_line(&status)
+    }
+
+    /// The count now.
+    #[cfg(not(blivet_thread_count_procfs))]
+    pub(crate) fn read(&self) -> std::io::Result<usize> {
+        count()
+    }
+}
+
+/// The count on the `Threads:` line of a `/proc/<pid>/status` file.
 #[cfg(blivet_thread_count_procfs)]
-pub(crate) fn count() -> std::io::Result<usize> {
-    let status = std::fs::read_to_string("/proc/self/status")?;
+fn parse_threads_line(status: &str) -> std::io::Result<usize> {
     let line = status
         .lines()
         .find(|line| line.starts_with("Threads:"))
@@ -232,15 +270,17 @@ fn single_threaded_violation(caller: &str, count: usize) -> Option<String> {
 /// checked entry points, [`daemonize`] and [`daemonize_with`], before the fork.
 #[cfg(blivet_thread_count)]
 pub(crate) fn assert_single_threaded(caller: &str) {
-    let count = settled_count(1).unwrap_or_else(|_| {
-        panic!("{caller}: cannot determine thread count to verify single-threadedness")
-    });
+    let count = ThreadCount::open()
+        .and_then(|source| settled_count(&source, 1))
+        .unwrap_or_else(|_| {
+            panic!("{caller}: cannot determine thread count to verify single-threadedness")
+        });
     if let Some(msg) = single_threaded_violation(caller, count) {
         panic!("{msg}");
     }
 }
 
-/// [`count`], once threads already joined have left it.
+/// The count from `source`, once threads already joined have left it.
 ///
 /// The kernel drops an exiting thread from its count some microseconds after
 /// `pthread_join` returns (about 30µs measured on macOS; Linux decrements
@@ -249,10 +289,10 @@ pub(crate) fn assert_single_threaded(caller: &str) {
 /// reported 10ms later, and a joined one is not reported at all. The checks
 /// expect 1.
 #[cfg(blivet_thread_count)]
-fn settled_count(expected: usize) -> std::io::Result<usize> {
+fn settled_count(source: &ThreadCount, expected: usize) -> std::io::Result<usize> {
     let deadline = std::time::Instant::now() + std::time::Duration::from_millis(10);
     loop {
-        let n = count()?;
+        let n = source.read()?;
         if n <= expected || std::time::Instant::now() >= deadline {
             return Ok(n);
         }
@@ -270,11 +310,19 @@ pub(crate) fn checked_init<T>(
 ) -> impl FnOnce() -> Result<T, DaemonizeError> {
     let switches_user = config.user.is_some();
     move || {
+        // Opened before init, which may change root to a jail without /proc.
+        // An error, not a panic: this runs in the daemon, where a panic's
+        // message reaches only its stderr, and the launcher prints an error.
+        let source = if switches_user {
+            Some(ThreadCount::open().map_err(|e| {
+                DaemonizeError::SystemError(format!("thread count before init: {e}"))
+            })?)
+        } else {
+            None
+        };
         let value = init()?;
-        if switches_user {
-            // An error, not a panic: this runs in the daemon, where a panic's
-            // message reaches only its stderr, and the launcher prints an error.
-            let count = settled_count(1).map_err(|e| {
+        if let Some(source) = source {
+            let count = settled_count(&source, 1).map_err(|e| {
                 DaemonizeError::SystemError(format!("thread count after init: {e}"))
             })?;
             if count != 1 {
@@ -342,6 +390,41 @@ mod tests {
 
     use crate::test_support::{is_subprocess, run_in_subprocess};
 
+    // Covers: R126
+    #[test]
+    #[ignore = "needs root to chroot: the privileged tier runs it"]
+    fn the_check_after_init_reads_the_count_inside_a_chroot() {
+        run_in_subprocess(
+            "thread_count::tests::the_check_after_init_reads_the_count_inside_a_chroot_subprocess",
+        );
+    }
+
+    /// An init that chroots into a jail without `/proc` (ADR 0005) must not
+    /// cost the check its count. The harness keeps a second thread, so a
+    /// count that was read reports `InitLeftThreads`; one that could not be
+    /// read reports `SystemError`.
+    #[test]
+    #[ignore]
+    fn the_check_after_init_reads_the_count_inside_a_chroot_subprocess() {
+        if !is_subprocess() {
+            return;
+        }
+        let jail = tempfile::tempdir().unwrap();
+        let root = jail.path().to_path_buf();
+        let mut config = DaemonConfig::new();
+        config.user("nobody");
+        let init = checked_init(&config, move || {
+            nix::unistd::chroot(&root).unwrap();
+            nix::unistd::chdir("/").unwrap();
+            Ok(())
+        });
+
+        match init() {
+            Err(DaemonizeError::InitLeftThreads(n)) => assert!(n > 1, "{n}"),
+            other => panic!("expected the count to be read, got {other:?}"),
+        }
+    }
+
     // Covers: R45, R126
     #[test]
     fn a_joined_thread_has_left_the_settled_count() {
@@ -360,10 +443,11 @@ mod tests {
         if !is_subprocess() {
             return;
         }
-        let base = count().unwrap();
+        let source = ThreadCount::open().unwrap();
+        let base = source.read().unwrap();
         for round in 0..1000 {
             std::thread::spawn(|| {}).join().unwrap();
-            assert_eq!(settled_count(base).unwrap(), base, "round {round}");
+            assert_eq!(settled_count(&source, base).unwrap(), base, "round {round}");
         }
     }
 
@@ -389,7 +473,8 @@ mod tests {
         use std::sync::mpsc;
         use std::sync::{Arc, Barrier};
 
-        let base = count().expect("thread count should be readable");
+        let source = ThreadCount::open().expect("thread count should be readable");
+        let base = source.read().expect("thread count should be readable");
         assert!(
             base >= 1,
             "expected at least the calling thread, got {base}"
@@ -413,7 +498,7 @@ mod tests {
             started_rx.recv().unwrap(); // all N are now running
         }
 
-        let with_threads = count().expect("thread count should be readable");
+        let with_threads = source.read().expect("thread count should be readable");
         assert!(
             with_threads >= base + N,
             "expected >= {} threads with {N} spawned, got {with_threads}",

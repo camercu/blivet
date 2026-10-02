@@ -1436,7 +1436,9 @@ verification points.
 - R126. The checked `daemonize_with()` fails with `InitLeftThreads`
   (exit 70) when a user switch is configured and `init` leaves the
   thread count other than 1, read as R45 reads it, so threads `init`
-  joined do not count (the user-switch path calls `setenv`, which
+  joined do not count. Where the count comes from `/proc`, the file is
+  opened before `init` runs, so an `init` that changes root still gets
+  a reading (the user-switch path calls `setenv`, which
   is not thread-safe). An error, not a panic: in daemon mode the
   launcher prints it. A group-only switch is not checked. The unchecked
   forms skip the check; on targets without a thread-count source the
