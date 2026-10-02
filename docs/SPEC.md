@@ -550,9 +550,12 @@ configured, step 12 still redirects them.
 
 Step failures in foreground mode return `Err` to the caller instead
 of the write-to-pipe-and-`_exit()` behavior described per step below
-(see Error paths, R134). Steps completed before the failure remain in
-effect — the caller resumes in a partially configured process (umask,
-chdir, stdin redirect, and env changes may already have happened).
+(see Error paths, R134). On the way out, the sequence's abort guard
+puts back what it can (R164): stdin, stdout, and stderr, the working
+directory, and the umask, and it removes the pidfile it wrote. What it
+cannot restore stays in effect: inherited descriptors it closed, the
+signal dispositions and mask, environment variables it set, the
+supplementary groups, and whatever `init` did.
 
 ### Steps
 
@@ -1606,3 +1609,8 @@ verification points.
   the lockfile, and stdout and stderr when redirected), not their paths,
   so the chown reaches the files it opened even if `init` changed what
   those paths name.
+- R164. A foreground sequence that fails puts back what it changed in
+  the caller's process and can restore: stdin, stdout, and stderr, the
+  umask, and the working directory, and removes the pidfile it wrote.
+  It cannot restore inherited descriptors it closed, signal dispositions
+  and mask, environment variables it set, or supplementary groups.

@@ -136,6 +136,72 @@ pub(crate) unsafe fn daemonize_inner_with<T>(
     }
 }
 
+/// What a failed sequence undoes (R164), in the reverse of the order it was
+/// done: stdio slots (steps 12 and 6), the working directory (step 5), the
+/// umask (step 4), and the pidfile (step 8).
+///
+/// In foreground mode the process is the caller's, and it gets back the parts
+/// that can be restored. In daemon mode the process exits on failure, so only
+/// the pidfile is removed. What cannot be restored is in R164.
+/// [`disarm`](Self::disarm) at step 18 keeps every change.
+struct AbortGuard<'a> {
+    stdio: Vec<steps::SavedSlot>,
+    cwd: Option<OwnedFd>,
+    umask: Option<nix::sys::stat::Mode>,
+    pidfile: steps::PidfileOnAbort<'a>,
+}
+
+impl AbortGuard<'_> {
+    fn new() -> Self {
+        Self {
+            stdio: Vec::new(),
+            cwd: None,
+            umask: None,
+            pidfile: steps::PidfileOnAbort::new(),
+        }
+    }
+
+    /// Holds a descriptor of the working directory, to `fchdir` back to.
+    fn save_cwd(&mut self) -> Result<(), DaemonizeError> {
+        let saved = std::fs::File::open(".")
+            .map(OwnedFd::from)
+            .and_then(steps::above_stdio)
+            .map_err(|e| DaemonizeError::ChdirFailed(format!("save working directory: {e}")))?;
+        self.cwd = Some(saved);
+        Ok(())
+    }
+
+    /// The descriptors it holds, which the fd sweep must spare.
+    fn held_fds(&self) -> impl Iterator<Item = i32> + '_ {
+        self.stdio
+            .iter()
+            .filter_map(steps::SavedSlot::held_fd)
+            .chain(self.cwd.as_ref().map(AsRawFd::as_raw_fd))
+    }
+
+    /// The sequence finished: keep every change.
+    fn disarm(&mut self) {
+        self.stdio.drain(..).for_each(steps::SavedSlot::keep);
+        self.cwd = None;
+        self.umask = None;
+        self.pidfile.disarm();
+    }
+}
+
+impl Drop for AbortGuard<'_> {
+    fn drop(&mut self) {
+        // Each saved slot puts itself back when dropped; latest first.
+        while self.stdio.pop().is_some() {}
+        if let Some(cwd) = self.cwd.take() {
+            let _ = nix::unistd::fchdir(cwd.as_fd());
+        }
+        if let Some(mask) = self.umask.take() {
+            nix::sys::stat::umask(mask);
+        }
+        // The pidfile guard removes the file as it drops.
+    }
+}
+
 /// Steps 4–18: apply the configuration in the final daemon process.
 ///
 /// Forker-free and fallible: every step returns its error rather than touching
@@ -152,16 +218,34 @@ unsafe fn run_post_fork<T>(
     pipe_wr: &mut Option<NotifyPipe>,
     init: impl FnOnce() -> Result<T, DaemonizeError>,
 ) -> Result<(DaemonContext, T), DaemonizeError> {
+    // What a failure must undo (R164): everything restorable in foreground
+    // mode, where the process is the caller's; only the pidfile in a daemon,
+    // whose process exits on failure.
+    let mut abort = AbortGuard::new();
+    let rollback = if config.foreground {
+        steps::Rollback::PutBack
+    } else {
+        steps::Rollback::Skip
+    };
+
     // Step 4: Set umask
-    steps::set_umask(config.umask);
+    let old_umask = steps::set_umask(config.umask);
+    if config.foreground {
+        abort.umask = Some(old_umask);
+    }
 
     // Step 5: chdir
+    if config.foreground {
+        abort.save_cwd()?;
+    }
     steps::change_dir(&config.chdir)?;
 
     // Step 6: Redirect stdin to /dev/null (always); redirect stdout/stderr
     // to /dev/null only when not in foreground mode (foreground leaves them
     // inherited so output reaches the terminal or supervisor).
-    steps::redirect_to_devnull(!config.foreground)?;
+    abort
+        .stdio
+        .extend(steps::redirect_to_devnull(!config.foreground, rollback)?);
 
     // Step 7: Open and lock lockfile (explicit path, or the pidfile itself
     // unless derivation was opted out)
@@ -177,8 +261,8 @@ unsafe fn run_post_fork<T>(
     // write succeeds: a write that fails half way leaves an empty file naming
     // no process at all. Nor any earlier: an `open_pidfile` that fails, or a
     // lock conflict at step 7, leaves a file that belongs to someone else.
-    // Arm between the two halves, disarm at step 18 — see `PidfileOnAbort`.
-    let mut pidfile_on_abort = steps::PidfileOnAbort::new();
+    // The abort guard removes the pidfile from the second half of step 8 on —
+    // see `PidfileOnAbort`.
     // The files the sequence now holds, which step 12 must not redirect into.
     // The pidfile goes first: a derived lockfile is the same file, and the
     // user configured it as the pidfile.
@@ -188,7 +272,7 @@ unsafe fn run_post_fork<T>(
     if let Some(ref pidfile_path) = config.pidfile {
         let pidfile = steps::open_pidfile(pidfile_path, lockfile_path.zip(lockfile.as_ref()))?;
         if config.cleanup_on_drop {
-            pidfile_on_abort.arm(pidfile_path);
+            abort.pidfile.arm(pidfile_path);
         }
         let (id, fd) = pidfile.write_pid()?;
         owned.push(("pidfile", id));
@@ -212,17 +296,13 @@ unsafe fn run_post_fork<T>(
     // Step 12: Redirect stdout/stderr to configured files. Only a foreground
     // caller sees the slots after a failure, so only it pays for saving them.
     if config.stdout.is_some() || config.stderr.is_some() {
-        steps::redirect_output(
+        abort.stdio.extend(steps::redirect_output(
             config.stdout.as_deref(),
             config.stderr.as_deref(),
             config.append,
             &owned,
-            if config.foreground {
-                steps::Rollback::PutBack
-            } else {
-                steps::Rollback::Skip
-            },
-        )?;
+            rollback,
+        )?);
     }
 
     // Step 13: Close inherited fds (if enabled)
@@ -237,6 +317,7 @@ unsafe fn run_post_fork<T>(
         if let Some(ref fd) = pidfile_fd {
             skip_fds.push(fd.as_raw_fd());
         }
+        skip_fds.extend(abort.held_fds());
         steps::close_inherited_fds(&skip_fds)?;
     }
 
@@ -288,7 +369,7 @@ unsafe fn run_post_fork<T>(
 
     // Step 18: Return DaemonContext (clones the config-derived fields it needs).
     // The context owns the pidfile from here, so the abort guard stands down.
-    pidfile_on_abort.disarm();
+    abort.disarm();
     Ok((DaemonContext::new(config, lockfile, pipe_wr.take()), value))
 }
 
@@ -651,6 +732,72 @@ mod tests {
         assert!(
             groups.contains(&supp.as_raw()),
             "testsupp ({supp}) missing from {groups:?}: groups were read inside the jail"
+        );
+    }
+
+    // Covers: R164
+    #[test]
+    fn a_failed_foreground_sequence_puts_the_callers_process_back() {
+        run_in_subprocess(
+            "sequence::tests::a_failed_foreground_sequence_puts_the_callers_process_back_subprocess",
+        );
+    }
+
+    /// Foreground mode changes the caller's own process. A failure after
+    /// step 12 (here, init's) must leave stdin, stdout, stderr, the umask, and
+    /// the working directory as the caller had them, so the error it prints
+    /// reaches its terminal, not the log file.
+    #[test]
+    #[ignore]
+    fn a_failed_foreground_sequence_puts_the_callers_process_back_subprocess() {
+        use nix::sys::stat::{fstat, umask, Mode};
+        if !is_subprocess() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let work = tempfile::tempdir().unwrap();
+        let id = |fd: std::os::fd::BorrowedFd<'_>| {
+            let st = fstat(fd).unwrap();
+            (st.st_dev, st.st_ino)
+        };
+        let stdio = || {
+            (
+                id(std::io::stdin().as_fd()),
+                id(std::io::stdout().as_fd()),
+                id(std::io::stderr().as_fd()),
+            )
+        };
+        let before = stdio();
+        let cwd_before = std::env::current_dir().unwrap();
+        let umask_before = umask(Mode::from_bits_truncate(0o022));
+        umask(umask_before);
+
+        let mut config = DaemonConfig::new();
+        config
+            .foreground(true)
+            .close_fds(false)
+            .umask(0o077)
+            .chdir(work.path())
+            .pidfile(dir.path().join("app.pid"))
+            .stdout(dir.path().join("out.log"))
+            .stderr(dir.path().join("err.log"));
+        let result: Result<(DaemonContext, ()), _> =
+            run_inner_with(&config, &mut NullForker::new(vec![], Ok(())), || {
+                Err(DaemonizeError::application(75, "init failed"))
+            });
+
+        let umask_after = umask(umask_before);
+        assert!(result.is_err());
+        assert_eq!(stdio(), before, "stdio was left redirected");
+        assert_eq!(
+            std::env::current_dir().unwrap(),
+            cwd_before,
+            "cwd was left changed"
+        );
+        assert_eq!(umask_after, umask_before, "umask was left changed");
+        assert!(
+            !dir.path().join("app.pid").exists(),
+            "pidfile was left behind"
         );
     }
 

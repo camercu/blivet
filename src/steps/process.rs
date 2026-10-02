@@ -12,10 +12,11 @@ use crate::error::DaemonizeError;
 /// `mode` is an octal permission value (validated `<= 0o7777` by
 /// [`DaemonConfig::validate`](crate::DaemonConfig::validate)); the cast to
 /// `mode_t` is therefore lossless.
-pub(crate) fn set_umask(mode: u32) {
+/// Returns the umask it replaced, for a foreground failure to put back.
+pub(crate) fn set_umask(mode: u32) -> Mode {
     #[cfg(test)]
     crate::test_support::assert_isolated("set_umask");
-    nix::sys::stat::umask(Mode::from_bits_truncate(mode as libc::mode_t));
+    nix::sys::stat::umask(Mode::from_bits_truncate(mode as libc::mode_t))
 }
 
 /// Step 5: Change working directory.
