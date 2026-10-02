@@ -5,7 +5,7 @@
 //! The entry points in `lib.rs` validate and check the thread count, then
 //! call [`daemonize_inner_with`]; the individual steps live in `steps/`.
 
-use std::os::fd::{AsRawFd, OwnedFd};
+use std::os::fd::{AsFd, AsRawFd, OwnedFd};
 use std::path::PathBuf;
 
 use nix::unistd::ForkResult;
@@ -183,12 +183,16 @@ unsafe fn run_post_fork<T>(
     // The pidfile goes first: a derived lockfile is the same file, and the
     // user configured it as the pidfile.
     let mut owned = Vec::new();
+    // A standalone pidfile's descriptor, kept for step 16's chown (R163).
+    let mut pidfile_fd = None;
     if let Some(ref pidfile_path) = config.pidfile {
         let pidfile = steps::open_pidfile(pidfile_path, lockfile_path.zip(lockfile.as_ref()))?;
         if config.cleanup_on_drop {
             pidfile_on_abort.arm(pidfile_path);
         }
-        owned.push(("pidfile", pidfile.write_pid()?));
+        let (id, fd) = pidfile.write_pid()?;
+        owned.push(("pidfile", id));
+        pidfile_fd = fd;
     }
     if let Some(ref lockfile) = lockfile {
         let id = crate::file_identity::file_id(&**lockfile)
@@ -230,6 +234,9 @@ unsafe fn run_post_fork<T>(
         if let Some(ref wr) = pipe_wr {
             skip_fds.push(wr.as_fd().as_raw_fd());
         }
+        if let Some(ref fd) = pidfile_fd {
+            skip_fds.push(fd.as_raw_fd());
+        }
         steps::close_inherited_fds(&skip_fds)?;
     }
 
@@ -259,17 +266,20 @@ unsafe fn run_post_fork<T>(
     // privileged, then switch to it (R155).
     if let Some(identity) = identity {
         if config.chown_paths {
-            identity.chown_paths(
-                [
-                    config.pidfile.as_ref(),
-                    config.effective_lockfile(),
-                    config.stdout.as_ref(),
-                    config.stderr.as_ref(),
-                ]
-                .into_iter()
-                .flatten()
-                .map(PathBuf::as_path),
-            )?;
+            // The files as opened, by descriptor (R163): stdout and stderr
+            // sit on fds 1 and 2 once step 12 redirected them.
+            let pidfile = config
+                .pidfile
+                .as_deref()
+                .zip(pidfile_fd.as_ref().map(|fd| fd.as_fd()));
+            let lock = config
+                .effective_lockfile()
+                .map(PathBuf::as_path)
+                .zip(lockfile.as_ref().map(|flock| flock.as_fd()));
+            let (out, err) = (std::io::stdout(), std::io::stderr());
+            let stdout = config.stdout.as_deref().map(|p| (p, out.as_fd()));
+            let stderr = config.stderr.as_deref().map(|p| (p, err.as_fd()));
+            identity.chown_files([pidfile, lock, stdout, stderr].into_iter().flatten())?;
         }
         // SAFETY: this function's contract requires a single thread, and the
         // checked entry points verify it again after init (R126).
@@ -528,6 +538,45 @@ mod tests {
             "{result:?}"
         );
         assert!(!ran, "init ran for a user that does not exist");
+    }
+
+    // Covers: R163
+    #[test]
+    fn the_chown_follows_the_opened_pidfile_not_its_path() {
+        run_in_subprocess(
+            "sequence::tests::the_chown_follows_the_opened_pidfile_not_its_path_subprocess",
+        );
+    }
+
+    /// An init that takes the pidfile's path away (a chroot does, in effect)
+    /// must not make the chown skip it: the chown reaches the file the
+    /// sequence opened. Unprivileged, that chown fails, which shows it ran.
+    #[test]
+    #[ignore]
+    fn the_chown_follows_the_opened_pidfile_not_its_path_subprocess() {
+        if !is_subprocess() {
+            return;
+        }
+        crate::test_support::shed_root();
+        let dir = tempfile::tempdir().unwrap();
+        let pidfile = dir.path().join("app.pid");
+        let mut config = DaemonConfig::new();
+        config
+            .foreground(true)
+            .close_fds(true)
+            .pidfile(&pidfile)
+            .no_lockfile()
+            .group(crate::test_support::foreign_gid().to_string());
+
+        let result = run_inner_with(&config, &mut NullForker::new(vec![], Ok(())), || {
+            std::fs::remove_file(&pidfile).unwrap();
+            Ok(())
+        });
+
+        assert!(
+            matches!(&result, Err(DaemonizeError::ChownError(m)) if m.contains("app.pid")),
+            "the opened pidfile was not chowned: {result:?}"
+        );
     }
 
     // Covers: R162

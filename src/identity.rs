@@ -83,28 +83,27 @@ impl ResolvedIdentity {
         (self.user.as_ref().map(|u| u.uid), self.effective_gid())
     }
 
-    /// Chown each of `paths` that exists to this identity, while the process
-    /// is still privileged.
+    /// Chown each open file to this identity, while the process is still
+    /// privileged (R163). `path` names the file in the error.
     ///
-    /// Follows symlinks, like the opens that created these files, so a
-    /// symlinked log path chowns the file the daemon writes. That is safe only
-    /// for paths in directories untrusted users cannot write, since a planted
-    /// symlink would redirect the chown.
+    /// By descriptor, not path: the chown reaches the file the sequence opened,
+    /// even if `init` has since changed what the path names, by a `chroot` or
+    /// a rename. A symlink planted before the open still redirects the open
+    /// itself, so these paths belong in directories untrusted users cannot
+    /// write.
     ///
     /// # Errors
     ///
-    /// Returns `DaemonizeError::ChownError` naming the first path that fails.
-    /// Paths already chowned stay chowned; the operation is idempotent.
-    pub(crate) fn chown_paths<'p>(
+    /// Returns `DaemonizeError::ChownError` naming the first file that fails.
+    /// Files already chowned stay chowned; the operation is idempotent.
+    pub(crate) fn chown_files<'p>(
         &self,
-        paths: impl IntoIterator<Item = &'p Path>,
+        files: impl IntoIterator<Item = (&'p Path, std::os::fd::BorrowedFd<'p>)>,
     ) -> Result<(), DaemonizeError> {
         let (owner, group) = self.chown_ids();
-        for path in paths {
-            if path.exists() {
-                nix::unistd::chown(path, owner, group)
-                    .map_err(|e| DaemonizeError::ChownError(format!("{}: {e}", path.display())))?;
-            }
+        for (path, fd) in files {
+            nix::unistd::fchown(fd, owner, group)
+                .map_err(|e| DaemonizeError::ChownError(format!("{}: {e}", path.display())))?;
         }
         Ok(())
     }
@@ -204,13 +203,6 @@ fn resolve_group_gid(spec: &str) -> Result<Gid, DaemonizeError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn chown_paths_skips_paths_that_do_not_exist() {
-        let identity = ResolvedIdentity::resolve(Some("0"), None).unwrap();
-        let missing = Path::new("/nonexistent_daemonize_test_xyz/test.pid");
-        assert!(identity.chown_paths([missing]).is_ok());
-    }
 
     // Covers: R63
     #[test]

@@ -83,8 +83,10 @@ impl Pidfile<'_> {
     /// Step 8, second half: write this process's PID, replacing any content.
     ///
     /// Returns the identity of the file written, so step 12 can refuse a
-    /// stream that is this file under another name (R146).
-    pub(crate) fn write_pid(self) -> Result<FileId, DaemonizeError> {
+    /// stream that is this file under another name (R146), and a standalone
+    /// pidfile's descriptor, which step 16 chowns (R163). A pidfile that is
+    /// the lockfile has none: the lockfile's descriptor serves.
+    pub(crate) fn write_pid(self) -> Result<(FileId, Option<OwnedFd>), DaemonizeError> {
         let content = format!("{}\n", std::process::id());
         match self {
             Pidfile::Locked(flock) => {
@@ -95,17 +97,19 @@ impl Pidfile<'_> {
                 inject_pidfile_write_failure()?;
                 write_all_fd(flock.as_fd(), content.as_bytes())
                     .map_err(|e| DaemonizeError::PidfileError(format!("write: {e}")))?;
-                file_id(flock.as_fd())
-                    .map_err(|e| DaemonizeError::PidfileError(format!("fstat: {e}")))
+                let id = file_id(flock.as_fd())
+                    .map_err(|e| DaemonizeError::PidfileError(format!("fstat: {e}")))?;
+                Ok((id, None))
             }
             Pidfile::Opened { fd, path } => {
                 inject_pidfile_write_failure()?;
                 write_all_fd(&fd, content.as_bytes()).map_err(|e| {
                     DaemonizeError::PidfileError(format!("write {}: {e}", path.display()))
                 })?;
-                file_id(&fd).map_err(|e| {
+                let id = file_id(&fd).map_err(|e| {
                     DaemonizeError::PidfileError(format!("fstat {}: {e}", path.display()))
-                })
+                })?;
+                Ok((id, Some(fd)))
             }
         }
     }

@@ -809,18 +809,22 @@ policy); the pidfile the sequence wrote is removed when
 ### Path ownership (step 16)
 
 Before switching, the sequence changes ownership of the configured
-path-based resources (pidfile, lockfile, stdout, stderr) that exist to
-the resolved target user and group, while still privileged. Disabled by
+path-based resources (pidfile, lockfile, stdout, stderr) to the resolved
+target user and group, while still privileged. Disabled by
 `config.chown_paths(false)`, for hardening (keep files owned by the
 original privileged user) or custom ownership.
 
-`chown()` failure returns `ChownError` naming the path and aborts the
-sequence before any `setgid`/`setuid`. Paths already processed stay
-chowned; the chown is idempotent. It follows symlinks (`chown(2)`, not
-`lchown`), matching how these files are opened, so configured paths
-must live in directories not writable by untrusted users: a planted
-symlink would otherwise redirect the privileged chown onto an arbitrary
-file.
+The chown goes through the descriptors the sequence holds (`fchown`),
+not the paths (R163): the standalone pidfile's descriptor (kept from
+step 8), the lockfile's, and fds 1 and 2 once step 12 redirected them.
+It reaches the files that were opened even if `init` has since changed
+what the paths name, by a `chroot` or a rename. A symlink planted before
+step 7 or 8 opens the file still redirects that open, so configured
+paths must live in directories not writable by untrusted users.
+
+`fchown()` failure returns `ChownError` naming the path and aborts the
+sequence before any `setgid`/`setuid`. Files already processed stay
+chowned; the chown is idempotent.
 
 ### Mode and umask interaction
 
@@ -1584,3 +1588,7 @@ verification points.
 - R162. The supplementary groups are set (`initgroups`) before `init`
   runs, from the real group database, so an `init` that changes root
   cannot change them.
+- R163. Step 16 chowns the descriptors the sequence holds (the pidfile,
+  the lockfile, and stdout and stderr when redirected), not their paths,
+  so the chown reaches the files it opened even if `init` changed what
+  those paths name.
