@@ -1,3 +1,6 @@
+// The CLI prints its own diagnostics; a panic on a failed write is fine here.
+#![allow(clippy::disallowed_macros)]
+
 use std::ffi::CString;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;

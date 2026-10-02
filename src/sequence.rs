@@ -409,7 +409,7 @@ fn parent_pipe_reader(rd: OwnedFd, forker: &impl Forker) -> ! {
     match notify::read_outcome(&mut std::fs::File::from(rd)) {
         notify::Outcome::Success => forker.exit(0),
         notify::Outcome::Failure { code, message } => {
-            eprintln!("{message}");
+            notify::print_on_stderr(message);
             forker.exit(code);
         }
     }

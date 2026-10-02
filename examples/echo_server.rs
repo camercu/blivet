@@ -19,6 +19,9 @@
 //! cargo run --example echo_server -- --foreground
 //! ```
 
+// Printing that may panic is fine here: an example program, not the library.
+#![allow(clippy::disallowed_macros)]
+
 use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};

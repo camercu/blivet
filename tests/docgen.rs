@@ -20,6 +20,9 @@
 //! and a shipped source cannot: it would fail for anyone testing the packaged
 //! crate, which `just package-test` does.
 
+// Printing that may panic is fine here: test output.
+#![allow(clippy::disallowed_macros)]
+
 use std::path::{Path, PathBuf};
 
 /// The documents with machine-owned cells in them.

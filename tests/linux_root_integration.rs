@@ -3,6 +3,9 @@
 //! These tests are `#[ignore]` by default and run via `--include-ignored`
 //! inside the Docker container (which runs as root on Linux).
 
+// Printing that may panic is fine here: test output.
+#![allow(clippy::disallowed_macros)]
+
 mod helpers;
 
 use helpers::*;

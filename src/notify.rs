@@ -100,7 +100,7 @@ impl NotifyPipe {
     /// lost with the pipe (R161). The process is aborting either way.
     pub(crate) fn signal_error(mut self, err: &DaemonizeError) {
         if self.write_all(&error_bytes(err)).is_err() {
-            eprintln!("{err}");
+            print_on_stderr(err);
         }
     }
 
@@ -135,6 +135,15 @@ impl Write for BorrowedWriter<'_> {
     fn flush(&mut self) -> io::Result<()> {
         Ok(())
     }
+}
+
+/// Print `message` on stderr, best-effort.
+///
+/// `eprintln!` panics when the write fails (a pipe nobody reads, a full
+/// disk), and on a library error path that panic unwinds into the caller's
+/// code, inside the daemon, instead of exiting with the error's code.
+pub(crate) fn print_on_stderr(message: impl std::fmt::Display) {
+    let _ = writeln!(io::stderr(), "{message}");
 }
 
 impl Drop for NotifyPipe {
@@ -570,6 +579,37 @@ mod tests {
         written.unwrap();
         pipe.close();
         assert_eq!(read_pipe(rd), EXEC_PENDING);
+    }
+
+    // Covers: R161
+    #[test]
+    fn an_error_report_with_nowhere_to_go_does_not_panic() {
+        crate::test_support::run_in_subprocess(
+            "notify::tests::an_error_report_with_nowhere_to_go_does_not_panic_subprocess",
+        );
+    }
+
+    /// The launcher is gone and stderr is a pipe nobody reads (or a full
+    /// disk): the report is lost, but a panic here would unwind into the
+    /// caller's code inside the daemon instead of exiting.
+    #[test]
+    #[ignore]
+    fn an_error_report_with_nowhere_to_go_does_not_panic_subprocess() {
+        if !crate::test_support::is_subprocess() {
+            return;
+        }
+        let (rd, wr) = make_pipe();
+        drop(rd);
+        let (err_rd, err_wr) = make_pipe();
+        drop(err_rd);
+        #[allow(clippy::disallowed_methods)] // the test's own process
+        nix::unistd::dup2_stderr(err_wr).unwrap();
+
+        let reported = std::panic::catch_unwind(|| {
+            NotifyPipe::new(wr).signal_error(&DaemonizeError::ForkFailed("boom".into()));
+        });
+
+        assert!(reported.is_ok());
     }
 
     #[test]

@@ -16,6 +16,9 @@
 //! Supported row of the tier tables in `README.md` and `docs/SPEC.md` is
 //! written from `BLIVET_PLATFORMS` by `tests/docgen.rs`.
 
+// Printing that may panic is fine here: a build script reports through cargo:: lines on stdout.
+#![allow(clippy::disallowed_macros)]
+
 /// Where a platform's live thread count is read from.
 ///
 /// The payload on `KernelQuery` is how the documentation names the call, so the

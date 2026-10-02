@@ -20,6 +20,9 @@
 //! The uncovered set is printed by `report_uncovered_requirements` (run with
 //! `--ignored --nocapture`) so closing gaps is a visible, deliberate act.
 
+// Printing that may panic is fine here: test output.
+#![allow(clippy::disallowed_macros)]
+
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 

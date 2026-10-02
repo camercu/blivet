@@ -358,7 +358,7 @@ impl DaemonContext {
             // No launcher to tell (foreground mode, or the pipe was used):
             // say it on stderr instead of exiting with only a code (R161).
             // A launcher that is gone is `signal_error`'s to handle.
-            eprintln!("{err}");
+            crate::notify::print_on_stderr(err);
         }
         self.cleanup_then_signal(|pipe| pipe.signal_error(err));
         err.exit_code()

@@ -1190,6 +1190,7 @@ mod tests {
     ///
     /// Root-only and process-global, hence `#[ignore]` and the subprocess: the
     /// root/Linux container tier is what passes `--include-ignored`.
+    #[allow(clippy::disallowed_macros)] // test output
     #[test]
     #[ignore = "drops the process's effective UID; needs root"]
     fn writability_is_probed_against_the_effective_identity() {
