@@ -317,11 +317,16 @@ pub fn daemonize(config: &DaemonConfig) -> Result<DaemonContext, DaemonizeError>
 ///
 /// Use it for work that needs the privileges the process started with, or
 /// that must happen only once per running daemon: binding a port below 1024,
-/// opening root-only files, `chroot`. `init` runs in the daemon process after
+/// opening root-only files, setting rlimits. `init` runs in the daemon process after
 /// the pidfile lock is taken, so a second instance fails with
 /// [`LockConflict`](DaemonizeError::LockConflict) before its `init` runs. It
 /// runs after inherited descriptors are closed, so what it opens stays open.
-/// Whatever it returns comes back beside the [`DaemonContext`]:
+/// Whatever it returns comes back beside the [`DaemonContext`].
+///
+/// A `chroot` in `init` is not supported (ADR 0005). The chown and the
+/// supplementary groups still come out right, but the `chdir` into the jail
+/// is yours, and pidfile cleanup removes by path, which then names a file
+/// inside the jail.
 ///
 /// ```no_run
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {

@@ -39,8 +39,8 @@ fn main() -> Result<(), DaemonizeError> {
   that the process is single-threaded before the steps that need it. Inside
   the crate, `#![deny(unsafe_code)]` makes each `unsafe` block opt in.
 - **Privileged init, once.** `daemonize_with()` runs your init after the
-  pidfile lock and while still root, so you can bind port 80 or `chroot`, and a
-  second instance fails before its init runs. Then it drops to the configured
+  pidfile lock and while still root, so you can bind port 80 or open root-only
+  files, and a second instance fails before its init runs. Then it drops to the configured
   user.
 - **Library and CLI.** A builder with infallible setters and deferred
   validation, or the `daemonize` binary, which wraps any program.
@@ -122,8 +122,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 **Privileged init.** With `user()` or `group()` set, the daemon switches to
 them before `daemonize()` returns. Pass work that needs root (bind port 80,
-`chroot`, set rlimits) to `daemonize_with()`. It runs after the lock, so only
-one instance runs it, and its value comes back beside the context:
+open root-only files, set rlimits) to `daemonize_with()`. It runs after the
+lock, so only one instance runs it, and its value comes back beside the
+context:
 
 ```rust,no_run
 use blivet::{daemonize_with, DaemonConfig, WithExitCode};
@@ -146,7 +147,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ```
 
 An error from `init` reaches the launcher with its exit code, and the pidfile
-is removed (unless `cleanup_on_drop(false)`). `with_exit_code(code)` gives any failed `Result` that code.
+is removed (unless `cleanup_on_drop(false)`). `with_exit_code(code)` gives any
+failed `Result` that code.
+
+A `chroot` in `init` is not supported (see `docs/adr/0005`): blivet still
+chowns the right files and sets the right groups, but the `chdir` into the
+jail and the pidfile, which cleanup can no longer reach by path, are yours.
 
 **Foreground mode.** For systemd, containers, or debugging: skip forking while
 applying all other setup (umask, chdir, signal reset, …). Stdout/stderr stay
