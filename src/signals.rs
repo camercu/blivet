@@ -118,10 +118,12 @@ pub(crate) extern "C" fn pidfile_cleanup_handler(signum: i32) {
 ///
 /// [`pidfile_cleanup_handler`] re-raises into the default action, so `sig`'s
 /// default must end the process: otherwise the daemon keeps running without
-/// its pidfile. The accepted signals are the ones POSIX defines as
+/// its pidfile. The accepted signals are the catchable ones POSIX defines as
 /// terminating (some with a core dump) on every system, plus the real-time
-/// range where the capability table knows it. Anything else, platform-specific
-/// signals included (SIGIO, SIGINFO, SIGPWR differ by OS), is refused.
+/// range where the capability table knows it. SIGPIPE terminates too, but
+/// the daemon keeps it ignored (R127), so it is left off. Anything else,
+/// platform-specific signals included (SIGIO, SIGINFO, SIGPWR differ by OS),
+/// is refused.
 pub(crate) fn may_clean_up_on(sig: i32) -> bool {
     #[cfg(blivet_rt_signals_reserved)]
     if (libc::SIGRTMIN()..=libc::SIGRTMAX()).contains(&sig) {
@@ -191,8 +193,8 @@ pub(crate) fn install_pidfile_cleanup_signals(
     // someone chose: another library's handler (signal-hook's, say) would be
     // silently replaced, and an ignored signal would start killing the
     // process. Step 9 reset every disposition but SIGPIPE's to the default,
-    // so anything else was installed since. SIGPIPE keeps the Rust runtime's
-    // SIG_IGN and is refused like any ignored signal. This call's own handler, from an earlier call,
+    // so anything else was installed since. SIGPIPE, which keeps the Rust
+    // runtime's SIG_IGN, is not on the allowlist. This call's own handler, from an earlier call,
     // may be replaced. A query that fails is left to the install loop, which
     // names the signal.
     let ours = pidfile_cleanup_handler as extern "C" fn(i32) as usize;
@@ -200,7 +202,7 @@ pub(crate) fn install_pidfile_cleanup_signals(
         if !may_clean_up_on(sig) {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
-                format!("signal {sig} is not one whose default action POSIX defines as terminating, so its cleanup could remove a running daemon's pidfile"),
+                format!("signal {sig} is not one cleanup_on_signals accepts: it takes only catchable signals whose default action ends the process, SIGPIPE aside"),
             ));
         }
         let mut current: libc::sigaction = unsafe { std::mem::zeroed() };
@@ -365,8 +367,14 @@ mod tests {
             );
         }
         // Ignored, stopping, or continuing everywhere, and SIGIO, which the
-        // BSDs and macOS ignore by default while Linux terminates.
+        // BSDs and macOS ignore by default while Linux terminates. SIGKILL
+        // and SIGSTOP cannot be caught. SIGPIPE terminates by default, but
+        // the daemon keeps it ignored (R127), and a handler would turn a
+        // write to a closed pipe from EPIPE into the end of the daemon.
         for sig in [
+            libc::SIGKILL,
+            libc::SIGSTOP,
+            libc::SIGPIPE,
             libc::SIGCHLD,
             libc::SIGURG,
             libc::SIGWINCH,

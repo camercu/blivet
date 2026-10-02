@@ -1197,8 +1197,9 @@ continues; (2) `daemonize_with()` with privileged `init` →
   install async-signal-safe handlers that `unlink` the pidfile and
   re-raise (SA_RESETHAND) so the default termination action still runs.
   Library-only — the CLI's `exec` resets handlers. No-op without a
-  pidfile; `ValidationError` on a NUL path, an uncatchable/invalid
-  signal, or a signal that already has a handler or is ignored (R149).
+  pidfile; `ValidationError` on a NUL path, a signal outside the
+  allowlist (R151, which also covers uncatchable and invalid signals),
+  or a signal that already has a handler or is ignored (R149).
   A refused slice changes nothing (R129).
 - `set_cleanup_on_drop()`: runtime override for cleanup-on-drop.
 - `DaemonContext`: drop releases lock, writes failure to pipe if
@@ -1552,9 +1553,8 @@ verification points.
   another library's handler (signal-hook's, say) is not silently
   replaced, and an ignored signal does not start killing the process.
   The error names the signal. Step 9 resets every disposition except
-  SIGPIPE's, so any other was installed since. SIGPIPE keeps its
-  disposition, usually the Rust runtime's `SIG_IGN`, which is refused
-  like any other ignored signal.
+  SIGPIPE's, so any other was installed since. SIGPIPE, which keeps
+  its disposition, is not on R151's allowlist.
 - R150. The launcher reads the notification pipe closing as success
   only after the exec-pending marker, which `DaemonContext::exec`
   writes just before `execvp`: a successful exec closes the pipe, and
@@ -1562,8 +1562,9 @@ verification points.
   failure (exit 1), so a daemon killed by a signal, or ended by
   `std::process::exit`, before it notifies is not reported as started.
 - R151. `cleanup_on_signals()` refuses, before changing anything, any
-  signal outside an allowlist: the signals POSIX defines as terminating
-  the process by default on every system (SIGHUP, SIGINT, SIGQUIT,
+  signal outside an allowlist: the catchable signals POSIX defines as
+  terminating the process by default on every system, except SIGPIPE,
+  which the daemon keeps ignored (R127) (SIGHUP, SIGINT, SIGQUIT,
   SIGTERM, SIGUSR1, SIGUSR2, SIGALRM, SIGVTALRM, SIGPROF, SIGXCPU,
   SIGXFSZ, and the crash signals SIGABRT, SIGBUS, SIGFPE, SIGILL,
   SIGSEGV, SIGSYS, SIGTRAP), plus the real-time signals where the

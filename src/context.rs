@@ -183,7 +183,8 @@ impl DaemonContext {
     /// One approach per signal: this replaces the signal's disposition, so it
     /// refuses a signal that already has a handler (one registered with
     /// [`signal_hook`](https://docs.rs/signal-hook), say) or is ignored. It also
-    /// accepts only the signals POSIX defines as terminating by default:
+    /// accepts only the catchable signals POSIX defines as terminating by
+    /// default, except `SIGPIPE`, which the daemon keeps ignored:
     /// `SIGHUP`, `SIGINT`, `SIGQUIT`, `SIGTERM`, `SIGUSR1`, `SIGUSR2`,
     /// `SIGALRM`, `SIGVTALRM`, `SIGPROF`, `SIGXCPU`, `SIGXFSZ`, the crash
     /// signals (`SIGABRT`, `SIGBUS`, `SIGFPE`, `SIGILL`, `SIGSEGV`, `SIGSYS`,
