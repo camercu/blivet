@@ -21,7 +21,7 @@
 //! drop-without-notify) and the single reader from drifting out of sync.
 
 use std::io::{self, Read, Write};
-use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
+use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd};
 
 use crate::error::DaemonizeError;
 
@@ -92,7 +92,7 @@ impl NotifyPipe {
             .expect("exec marker written after the pipe was consumed");
         // Through the borrowed fd: a `dup` to get a `File` would need a free
         // descriptor, and a daemon at its limit must still be able to exec.
-        BorrowedWriter(fd.as_fd()).write_all(&EXEC_PENDING)
+        ChannelWriter(fd.as_fd()).write_all(&EXEC_PENDING)
     }
 
     /// Signal a daemonization failure: write the error's exit-code byte and
@@ -122,19 +122,63 @@ impl NotifyPipe {
         let Some(fd) = self.0.take() else {
             return Ok(());
         };
-        let mut file = io::BufWriter::new(std::fs::File::from(fd));
-        file.write_all(bytes)?;
-        file.flush()
+        ChannelWriter(fd.as_fd()).write_all(bytes)
     }
 }
 
-/// `Write` over a descriptor it does not own, so `write_all` brings its
-/// retry on `EINTR` and on a short write.
-struct BorrowedWriter<'a>(BorrowedFd<'a>);
+/// The notification channel: a connected `AF_UNIX` stream pair, returned as
+/// `(launcher's end, daemon's end)` and made one-way, so the launcher cannot
+/// write and the daemon cannot read (ADR 0006).
+///
+/// A socket pair rather than a pipe because a socket can be written with
+/// `MSG_NOSIGNAL` (see [`ChannelWriter`]). The caller sets close-on-exec and
+/// moves the ends above stdio.
+#[allow(unsafe_code)]
+pub(crate) fn channel() -> io::Result<(OwnedFd, OwnedFd)> {
+    let mut fds = [0; 2];
+    // SAFETY: on success socketpair writes two new descriptors into `fds`.
+    let ret = unsafe { libc::socketpair(libc::AF_UNIX, libc::SOCK_STREAM, 0, fds.as_mut_ptr()) };
+    nix::errno::Errno::result(ret)?;
+    // SAFETY: both descriptors are new, open, and owned by nothing else.
+    let (launcher, daemon) =
+        unsafe { (OwnedFd::from_raw_fd(fds[0]), OwnedFd::from_raw_fd(fds[1])) };
+    // In this order: macOS fails a shutdown with ENOTCONN once the peer has
+    // shut down its writing side.
+    shutdown(daemon.as_fd(), libc::SHUT_RD)?;
+    shutdown(launcher.as_fd(), libc::SHUT_WR)?;
+    Ok((launcher, daemon))
+}
 
-impl Write for BorrowedWriter<'_> {
+#[allow(unsafe_code)]
+fn shutdown(fd: BorrowedFd<'_>, how: libc::c_int) -> io::Result<()> {
+    // SAFETY: `fd` is a live descriptor for the borrow's lifetime.
+    let ret = unsafe { libc::shutdown(fd.as_raw_fd(), how) };
+    nix::errno::Errno::result(ret)?;
+    Ok(())
+}
+
+/// `Write` over the daemon's end of the channel, which it does not own, so
+/// `write_all` brings its retry on `EINTR` and on a short write.
+///
+/// Sends with `MSG_NOSIGNAL`: a launcher that is gone makes the send fail with
+/// `EPIPE` and raises no SIGPIPE, whatever disposition the caller kept (ADR
+/// 0006). Every message the daemon sends goes through here.
+struct ChannelWriter<'a>(BorrowedFd<'a>);
+
+impl Write for ChannelWriter<'_> {
+    #[allow(unsafe_code)]
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        Ok(nix::unistd::write(self.0, buf)?)
+        // SAFETY: `buf` is valid for `buf.len()` bytes, and the descriptor
+        // is live for the borrow's lifetime.
+        let sent = unsafe {
+            libc::send(
+                self.0.as_raw_fd(),
+                buf.as_ptr().cast(),
+                buf.len(),
+                libc::MSG_NOSIGNAL,
+            )
+        };
+        Ok(nix::errno::Errno::result(sent)? as usize)
     }
 
     fn flush(&mut self) -> io::Result<()> {
@@ -616,6 +660,36 @@ mod tests {
         });
 
         assert!(reported.is_ok());
+    }
+
+    // Covers: R165
+    #[test]
+    fn the_launcher_cannot_send_on_the_channel() {
+        let (launcher, _daemon) = channel().unwrap();
+        let sent = ChannelWriter(launcher.as_fd()).write(b"x");
+        assert_eq!(
+            sent.map_err(|e| e.kind()).err(),
+            Some(io::ErrorKind::BrokenPipe)
+        );
+    }
+
+    // Covers: R165
+    #[test]
+    #[allow(unsafe_code)]
+    fn the_daemon_cannot_receive_on_the_channel() {
+        let (_launcher, daemon) = channel().unwrap();
+        let mut byte = 0u8;
+        // SAFETY: one writable byte; MSG_DONTWAIT so an open receive side
+        // answers EAGAIN instead of blocking.
+        let got = unsafe {
+            libc::recv(
+                daemon.as_raw_fd(),
+                (&mut byte as *mut u8).cast(),
+                1,
+                libc::MSG_DONTWAIT,
+            )
+        };
+        assert_eq!(got, 0, "the daemon's end still receives");
     }
 
     #[test]

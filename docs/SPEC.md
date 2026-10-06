@@ -641,6 +641,9 @@ Individual `close()` errors in step 13 are silently ignored.
 
 ### Notification pipe protocol
 
+The notification pipe is a socket pair, not a `pipe(2)`, so the daemon
+can send with `MSG_NOSIGNAL` (R165, ADR 0006). The name stays.
+
 The parent-side reader (in step 1's parent branch) reads from the pipe.
 Every message starts with a byte; the two-byte messages go out in one
 `write`, well under `PIPE_BUF`, so the reader never waits for their
@@ -1642,3 +1645,8 @@ verification points.
   and mask, environment variables it set, supplementary groups, or a
   saved gid that differed from the real one (the group restore sets the
   real and effective gid, and the saved gid follows the real one).
+- R165. The notification pipe is a connected `AF_UNIX` stream socket
+  pair, one-way: the launcher's end cannot send and the daemon's end
+  cannot receive. The daemon writes to it only with `send` and
+  `MSG_NOSIGNAL`, so a launcher that is gone costs `EPIPE` and never
+  SIGPIPE, whatever disposition the caller kept (R127, ADR 0006).

@@ -248,9 +248,9 @@ impl DaemonContext {
     ///
     /// Returns [`DaemonizeError::NotifyFailed`] (exit code 71, `EX_OSERR`) if
     /// writing to the pipe fails — e.g. the parent was killed before the
-    /// daemon signalled (this error is observable because daemonization
-    /// preserves the Rust runtime's ignored SIGPIPE; see
-    /// [Signals](crate#signals)). Returning `DaemonizeError` — rather than a
+    /// daemon signalled. The write cannot raise SIGPIPE, whatever disposition
+    /// the process has, so this is an error and not a death by signal.
+    /// Returning `DaemonizeError` — rather than a
     /// bare `io::Error` — lets a `fn run() -> Result<(), DaemonizeError>` use
     /// `?` here without wrapping, and preserves the exit code via
     /// [`exit_code`](DaemonizeError::exit_code).
@@ -537,6 +537,35 @@ mod tests {
         );
     }
 
+    // Covers: R127, R165
+    //
+    // The daemon keeps running after notify_parent, so the caller's SIGPIPE
+    // disposition must stay as it was, and a gone launcher must still cost
+    // only an error (ADR 0006).
+    #[test]
+    fn notify_parent_reports_a_gone_launcher_when_sigpipe_is_default() {
+        const MARKER: &str = "__BLIVET_NOTIFY_NO_LAUNCHER_DFL";
+        const NAME: &str =
+            "context::tests::notify_parent_reports_a_gone_launcher_when_sigpipe_is_default";
+
+        if std::env::var(MARKER).is_ok() {
+            crate::signals::restore_default_sigpipe();
+            let (rd, wr) = make_pipe();
+            drop(rd);
+            let mut ctx = ctx(&DaemonConfig::new(), None, Some(NotifyPipe::new(wr)));
+            let reported = matches!(ctx.notify_parent(), Err(DaemonizeError::NotifyFailed(_)));
+            std::process::exit(if reported { 0 } else { 3 });
+        }
+
+        let output = crate::test_support::rerun_in_subprocess(NAME, MARKER, "1");
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{}",
+            crate::test_support::subprocess_report(NAME, &output)
+        );
+    }
+
     // Covers: R161
     #[test]
     fn report_error_reaches_stderr_when_the_launcher_is_gone_and_sigpipe_is_default() {
@@ -576,9 +605,13 @@ mod tests {
         const NAME: &str = "context::tests::exec_stops_when_the_marker_cannot_be_written";
 
         if std::env::var(MARKER).is_ok() {
-            // The read end: a write to it fails with EBADF, not EPIPE.
-            let (rd, _wr) = make_pipe();
-            let ctx = ctx(&DaemonConfig::new(), None, Some(NotifyPipe::new(rd)));
+            // Not a socket: the send fails with ENOTSOCK, not EPIPE.
+            let not_a_socket = std::fs::File::open("/dev/null").unwrap().into();
+            let ctx = ctx(
+                &DaemonConfig::new(),
+                None,
+                Some(NotifyPipe::new(not_a_socket)),
+            );
             ctx.exec(c"sh", &[c"sh", c"-c", c"exit 7"]);
         }
 

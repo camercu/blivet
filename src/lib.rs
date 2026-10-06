@@ -100,6 +100,8 @@
 //! killing the process, and that guarantee survives [`daemonize`]. (The
 //! `daemonize` CLI restores the default disposition just before `exec`, so
 //! spawned programs still start with conventional signal state.)
+//! Whatever disposition you keep, blivet's own messages to the launcher
+//! cannot raise SIGPIPE: they go over a socket sent with `MSG_NOSIGNAL`.
 //!
 //! # Pidfile cleanup on signals
 //!

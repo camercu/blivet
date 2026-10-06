@@ -38,11 +38,11 @@ impl Forker for RealForker {
         use nix::fcntl::{fcntl, FcntlArg, FdFlag};
 
         let failed = |e| DaemonizeError::SystemError(format!("notification pipe: {e}"));
-        #[allow(clippy::disallowed_methods)] // the one place close-on-exec is set
-        let (rd, wr) = nix::unistd::pipe().map_err(failed)?;
+        let (rd, wr) = crate::notify::channel()
+            .map_err(|e| DaemonizeError::SystemError(format!("notification pipe: {e}")))?;
         // Keep each end above descriptor 2 (R152), so step 6's redirect to
         // /dev/null cannot replace one, and make it close-on-exec (R107).
-        // pipe2(O_CLOEXEC) would set the flag atomically, but macOS lacks it;
+        // SOCK_CLOEXEC would set the flag atomically, but macOS lacks it;
         // the separate step is safe because daemonize() requires
         // single-threaded execution.
         let prepare = |end: OwnedFd| -> Result<OwnedFd, DaemonizeError> {
