@@ -8,8 +8,9 @@
 //! - `0x00 0x01` ([`EXEC_PENDING`]) — the daemon is about to `exec`. A
 //!   successful `exec` closes the `O_CLOEXEC` write end, so EOF after this
 //!   marker is success; a failed one is followed by an error message.
-//! - non-zero `code` + UTF-8 message — failure; the parent prints `message`
-//!   to stderr and exits with `code`.
+//! - non-zero `code`, the message's length as two big-endian bytes, then the
+//!   UTF-8 message — failure; the parent prints `message` to stderr and exits
+//!   with `code` (R160).
 //! - EOF with no marker — the daemon ended without notifying (a signal killed
 //!   it, or it exited without dropping its context): failure (R150).
 //!
@@ -219,9 +220,9 @@ pub(crate) enum Outcome {
 /// Returns on [`SUCCESS`] without reading on. A process the daemon forked
 /// before notifying holds a copy of the write end, so the pipe reaches EOF only
 /// when that process exits too: waiting for EOF would hold the launcher until
-/// then. A failure, or what follows [`EXEC_PENDING`], reads to EOF: the
-/// writer sends an error message and closes in one step, and a successful
-/// `exec` closes the pipe.
+/// then. A failure reads only its length-framed message (R160), for the same
+/// reason. After [`EXEC_PENDING`] the read waits for the exec: a successful
+/// one closes the pipe (EOF), a failed one sends its error.
 pub(crate) fn read_outcome(pipe: &mut impl io::Read) -> Outcome {
     let mut buf = Vec::new();
     let Some(first) = read_byte(pipe) else {
