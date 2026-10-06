@@ -697,8 +697,8 @@ are open, compared and in place. So a failed step 12 leaves the previous
 run's logs, and a foreground caller's stdout and stderr, as they were.
 Two things stay: a stream file it created, empty, and — after an I/O
 error truncating stderr once stdout's truncation succeeded — an emptied
-stdout log. This covers step 12 only; a later step that fails does not
-undo it.
+stdout log. A later step that fails puts the slots back too, through
+the abort guard (R164).
 
 Daemon mode moves the slots without saving them: the child exits on any
 failure, so no one sees them. Saving needs a free descriptor, and a
