@@ -99,6 +99,10 @@ impl NotifyPipe {
     /// the launcher is gone, the message goes to stderr instead, so it is not
     /// lost with the pipe (R161). The process is aborting either way.
     pub(crate) fn signal_error(mut self, err: &DaemonizeError) {
+        // The process exits or returns an error next, so the caller's SIGPIPE
+        // disposition (R127) no longer matters, and with SIG_DFL a gone
+        // launcher would kill it before it could print.
+        crate::signals::ignore_sigpipe();
         if self.write_all(&error_bytes(err)).is_err() {
             print_on_stderr(err);
         }

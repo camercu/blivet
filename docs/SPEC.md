@@ -1603,8 +1603,8 @@ verification points.
   with that code and the error's text, so `?` works on `io::Error` and
   friends inside `init`.
 - R157. `DaemonContext::exec` runs the program even when the launcher
-  is gone: it writes the exec marker while SIGPIPE is still ignored,
-  ignores a broken pipe there, and only then restores the default
+  is gone: it ignores SIGPIPE first, whatever disposition the caller
+  kept (R127), writes the exec marker, ignores a broken pipe there, and only then restores the default
   SIGPIPE. If the exec fails, it ignores SIGPIPE again before reporting,
   so the daemon exits with the exec's code (66 or 71), not by SIGPIPE.
 - R158. The launcher retries a pipe read that a signal interrupts
@@ -1620,7 +1620,9 @@ verification points.
 - R161. With no launcher pipe (foreground mode, or after the pipe was
   used), or with a launcher that is gone so the pipe write fails, every
   error report (`report_error`, a failed `exec`, a failed step) prints
-  the error to stderr before exiting with its code.
+  the error to stderr before exiting with its code. A report ignores
+  SIGPIPE before it writes, so a caller's `SIG_DFL` cannot turn the
+  failed write into death by signal.
 - R162. The supplementary groups are set (`initgroups`) before `init`
   runs, from the real group database, so an `init` that changes root
   cannot change them.

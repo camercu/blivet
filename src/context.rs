@@ -303,9 +303,11 @@ impl DaemonContext {
                 )));
             }
         }
-        // The marker goes out while SIGPIPE is still ignored, and a broken pipe
-        // there means only that the launcher is gone: run the program anyway
-        // (R157). Restoring the default first would let that write kill us.
+        // The marker goes out with SIGPIPE ignored, whatever disposition the
+        // caller kept (R127), and a broken pipe there means only that the
+        // launcher is gone: run the program anyway (R157). The default comes
+        // back just before execvp (R128).
+        crate::signals::ignore_sigpipe();
         if let Some(pipe) = self.notify_pipe.as_mut() {
             match pipe.signal_exec_pending() {
                 Err(e) if e.kind() != std::io::ErrorKind::BrokenPipe => {
@@ -504,6 +506,60 @@ mod tests {
             output.status.code(),
             Some(7),
             "the program did not run: {}",
+            crate::test_support::subprocess_report(NAME, &output)
+        );
+    }
+
+    // Covers: R157
+    //
+    // R127 keeps whatever SIGPIPE disposition the caller had, and a caller
+    // may have restored the default. The marker write must still fail, not
+    // kill the daemon, when the launcher is gone.
+    #[test]
+    fn exec_runs_the_program_when_the_launcher_is_gone_and_sigpipe_is_default() {
+        const MARKER: &str = "__BLIVET_EXEC_NO_LAUNCHER_DFL";
+        const NAME: &str = "context::tests::exec_runs_the_program_when_the_launcher_is_gone_and_sigpipe_is_default";
+
+        if std::env::var(MARKER).is_ok() {
+            crate::signals::restore_default_sigpipe();
+            let (rd, wr) = make_pipe();
+            drop(rd);
+            let ctx = ctx(&DaemonConfig::new(), None, Some(NotifyPipe::new(wr)));
+            ctx.exec(c"sh", &[c"sh", c"-c", c"exit 7"]);
+        }
+
+        let output = crate::test_support::rerun_in_subprocess(NAME, MARKER, "1");
+        assert_eq!(
+            output.status.code(),
+            Some(7),
+            "the program did not run: {}",
+            crate::test_support::subprocess_report(NAME, &output)
+        );
+    }
+
+    // Covers: R161
+    #[test]
+    fn report_error_reaches_stderr_when_the_launcher_is_gone_and_sigpipe_is_default() {
+        const MARKER: &str = "__BLIVET_REPORT_NO_LAUNCHER_DFL";
+        const NAME: &str = "context::tests::report_error_reaches_stderr_when_the_launcher_is_gone_and_sigpipe_is_default";
+
+        if std::env::var(MARKER).is_ok() {
+            crate::signals::restore_default_sigpipe();
+            let (rd, wr) = make_pipe();
+            drop(rd);
+            let mut ctx = ctx(&DaemonConfig::new(), None, Some(NotifyPipe::new(wr)));
+            ctx.report_error(&DaemonizeError::application(75, "database unreachable"));
+        }
+
+        let output = crate::test_support::rerun_in_subprocess(NAME, MARKER, "1");
+        assert_eq!(
+            (
+                output.status.code(),
+                String::from_utf8_lossy(&output.stderr)
+                    .contains("application error: database unreachable")
+            ),
+            (Some(75), true),
+            "{}",
             crate::test_support::subprocess_report(NAME, &output)
         );
     }
