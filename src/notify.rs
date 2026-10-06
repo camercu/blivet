@@ -154,9 +154,10 @@ pub(crate) fn print_on_stderr(message: impl std::fmt::Display) {
 impl Drop for NotifyPipe {
     /// Safety net: a `NotifyPipe` still holding its fd at drop means the daemon
     /// process is going away without having reported an outcome — e.g. a panic
-    /// unwound past the signalling seam. Report a failure so the closed pipe is
-    /// not decoded as EOF = success, which would tell the parent that a crashed
-    /// daemon started cleanly. The intended exits (`signal_*`, `close`) take the
+    /// unwound past the signalling seam. Report a failure that names the cause:
+    /// a bare EOF already reads as failure (R150), but after the exec marker it
+    /// reads as success, which would tell the parent that a crashed daemon
+    /// started cleanly. The intended exits (`signal_*`, `close`) take the
     /// fd first, leaving this a no-op. Never panics, so it is safe during an
     /// unwind.
     fn drop(&mut self) {
@@ -351,7 +352,7 @@ mod tests {
     fn drop_without_signal_reports_unnotified_failure() {
         // Safety net: a NotifyPipe that is dropped without any signal_* call
         // (e.g. a panic unwinding past the signalling seam) must report a
-        // failure, not let the closed pipe decode as EOF = success.
+        // failure that names the cause, not leave a bare EOF.
         let (rd, wr) = make_pipe();
         drop(NotifyPipe::new(wr));
         assert_eq!(
