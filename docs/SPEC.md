@@ -993,8 +993,8 @@ argv[0] is the program as the user gave it (R111), and the trailing
 arguments follow in order. `DaemonContext::exec`:
 
 1. Clears `CLOEXEC` on the lockfile fd (so the lock survives exec).
-2. Restores `SIGPIPE` to `SIG_DFL` (R128).
-3. Writes the exec-pending marker to the notification pipe.
+2. Writes the exec-pending marker to the notification pipe.
+3. Restores `SIGPIPE` to `SIG_DFL` (R128).
 4. Execs via `execvp`.
 
 The CLI does **not** call `notify_parent()`. A successful `execvp`
