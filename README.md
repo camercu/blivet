@@ -52,7 +52,8 @@ terminal, and returns a `DaemonContext` in the grandchild, which is your
 daemon. The launcher does not return. It blocks on a pipe until the daemon
 reports in. Inside the call, in the daemon, blivet takes the pidfile lock, runs
 your privileged init if you passed one to `daemonize_with()`, then chowns the
-pidfile, lockfile, and logs to the configured user and switches to it. Your
+pidfile, lockfile, and log files (regular files only, never `/dev/null`) to the
+configured user and switches to it. Your
 daemon then calls `notify_parent()`, which writes a readiness message down the
 pipe.
 

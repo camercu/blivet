@@ -619,6 +619,68 @@ mod tests {
         );
     }
 
+    // Covers: R163
+    #[test]
+    fn output_to_a_device_is_not_chowned() {
+        run_in_subprocess("sequence::tests::output_to_a_device_is_not_chowned_subprocess");
+    }
+
+    /// `-o /dev/null` is a common way to drop output. The device is not the
+    /// daemon's file: chowning it would hand `/dev/null` to the daemon's user
+    /// as root, and as anyone else it fails the start with `ChownError`. The
+    /// unprivileged run sees the second; the switch then fails on its own.
+    #[test]
+    #[ignore]
+    fn output_to_a_device_is_not_chowned_subprocess() {
+        if !is_subprocess() {
+            return;
+        }
+        crate::test_support::shed_root();
+        let mut config = DaemonConfig::new();
+        config
+            .foreground(true)
+            .close_fds(false)
+            .stdout("/dev/null")
+            .stderr("/dev/null")
+            .group(crate::test_support::foreign_gid().to_string());
+
+        let result = run_inner_with(&config, &mut NullForker::new(vec![], Ok(())), || Ok(()));
+
+        assert!(
+            matches!(&result, Err(DaemonizeError::PermissionDenied(m)) if m.contains("setgid")),
+            "the device was chowned: {result:?}"
+        );
+    }
+
+    // Covers: R163
+    #[test]
+    #[ignore = "needs root: the privileged tier runs it"]
+    fn root_leaves_a_device_output_with_its_owner() {
+        run_in_subprocess("sequence::tests::root_leaves_a_device_output_with_its_owner_subprocess");
+    }
+
+    #[test]
+    #[ignore]
+    fn root_leaves_a_device_output_with_its_owner_subprocess() {
+        use std::os::unix::fs::MetadataExt;
+        if !is_subprocess() {
+            return;
+        }
+        let owner = |m: std::fs::Metadata| (m.uid(), m.gid());
+        let before = owner(std::fs::metadata("/dev/null").unwrap());
+        let mut config = DaemonConfig::new();
+        config
+            .foreground(true)
+            .close_fds(false)
+            .stdout("/dev/null")
+            .stderr("/dev/null")
+            .user("nobody");
+
+        let _ = run_inner_with(&config, &mut NullForker::new(vec![], Ok(())), || Ok(()));
+
+        assert_eq!(owner(std::fs::metadata("/dev/null").unwrap()), before);
+    }
+
     /// Ignored for the reason the `identity::tests` lookups of missing names
     /// are: NSS can block on a networked source. The glibc container tier runs
     /// it with `--include-ignored`.

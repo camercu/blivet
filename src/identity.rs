@@ -83,8 +83,8 @@ impl ResolvedIdentity {
         (self.user.as_ref().map(|u| u.uid), self.effective_gid())
     }
 
-    /// Chown each open file to this identity, while the process is still
-    /// privileged (R163). `path` names the file in the error.
+    /// Chown each open regular file to this identity, while the process is
+    /// still privileged (R163). `path` names the file in the error.
     ///
     /// By descriptor, not path: the chown reaches the file the sequence opened,
     /// even if `init` has since changed what the path names, by a `chroot` or
@@ -101,9 +101,19 @@ impl ResolvedIdentity {
         files: impl IntoIterator<Item = (&'p Path, std::os::fd::BorrowedFd<'p>)>,
     ) -> Result<(), DaemonizeError> {
         let (owner, group) = self.chown_ids();
+        let failed =
+            |path: &Path, e| DaemonizeError::ChownError(format!("{}: {e}", path.display()));
         for (path, fd) in files {
-            nix::unistd::fchown(fd, owner, group)
-                .map_err(|e| DaemonizeError::ChownError(format!("{}: {e}", path.display())))?;
+            // Only a regular file is the daemon's own. A device, FIFO, or
+            // socket (`-o /dev/null`, a tty) belongs to the system; the
+            // daemon writes through the descriptor it holds either way.
+            let kind = nix::sys::stat::fstat(fd)
+                .map_err(|e| failed(path, e))?
+                .st_mode
+                & libc::S_IFMT;
+            if kind == libc::S_IFREG {
+                nix::unistd::fchown(fd, owner, group).map_err(|e| failed(path, e))?;
+            }
         }
         Ok(())
     }

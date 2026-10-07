@@ -1631,7 +1631,8 @@ verification points.
 - R163. Step 16 chowns the descriptors the sequence holds (the pidfile,
   the lockfile, and stdout and stderr when redirected), not their paths,
   so the chown reaches the files it opened even if `init` changed what
-  those paths name.
+  those paths name. It chowns regular files only: a device, FIFO, or
+  socket (`-o /dev/null`, a tty) keeps its owner.
 - R164. A foreground sequence that fails puts back what it changed in
   the caller's process and can restore: stdin, stdout, and stderr, the
   umask, the primary group when `setuid` failed after `setgid`, and

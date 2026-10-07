@@ -262,7 +262,9 @@ impl DaemonConfig {
 
     /// Sets whether the daemonize call chowns the configured path-based
     /// resources (pidfile, lockfile, stdout, stderr) to the target user/group
-    /// before switching to it. Default: `true`.
+    /// before switching to it. Default: `true`. Only regular files are
+    /// chowned: an output sent to a device such as `/dev/null` keeps its
+    /// owner.
     ///
     /// Disable to keep those files owned by the original (privileged) user —
     /// e.g. so a compromised daemon cannot rewrite its own pidfile or truncate
