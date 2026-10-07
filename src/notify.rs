@@ -100,10 +100,6 @@ impl NotifyPipe {
     /// the launcher is gone, the message goes to stderr instead, so it is not
     /// lost with the pipe (R161). The process is aborting either way.
     pub(crate) fn signal_error(mut self, err: &DaemonizeError) {
-        // The process exits or returns an error next, so the caller's SIGPIPE
-        // disposition (R127) no longer matters, and with SIG_DFL a gone
-        // launcher would kill it before it could print.
-        crate::signals::ignore_sigpipe();
         if self.write_all(&error_bytes(err)).is_err() {
             print_on_stderr(err);
         }
@@ -670,6 +666,52 @@ mod tests {
         assert_eq!(
             sent.map_err(|e| e.kind()).err(),
             Some(io::ErrorKind::BrokenPipe)
+        );
+    }
+
+    // Covers: R165
+    #[test]
+    fn a_send_to_a_gone_launcher_raises_no_sigpipe() {
+        crate::test_support::run_in_subprocess(
+            "notify::tests::a_send_to_a_gone_launcher_raises_no_sigpipe_subprocess",
+        );
+    }
+
+    /// A handler records any SIGPIPE, whichever thread the kernel delivers
+    /// it to. A raised one arrives within microseconds; the wait only gives a
+    /// regression time to show, so a correct send can never fail this test.
+    #[test]
+    #[ignore]
+    #[allow(unsafe_code)]
+    fn a_send_to_a_gone_launcher_raises_no_sigpipe_subprocess() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        static RAISED: AtomicBool = AtomicBool::new(false);
+        extern "C" fn record(_: libc::c_int) {
+            RAISED.store(true, Ordering::SeqCst);
+        }
+        if !crate::test_support::is_subprocess() {
+            return;
+        }
+        let (launcher, daemon) = channel().unwrap();
+        drop(launcher);
+        // SAFETY: the handler only stores to an atomic, which is
+        // async-signal-safe.
+        unsafe {
+            libc::signal(
+                libc::SIGPIPE,
+                record as extern "C" fn(libc::c_int) as libc::sighandler_t,
+            )
+        };
+
+        let sent = ChannelWriter(daemon.as_fd()).write(b"x");
+        std::thread::sleep(std::time::Duration::from_millis(50));
+
+        assert_eq!(
+            (
+                sent.map_err(|e| e.kind()).err(),
+                RAISED.load(Ordering::SeqCst)
+            ),
+            (Some(io::ErrorKind::BrokenPipe), false)
         );
     }
 

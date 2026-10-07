@@ -1451,8 +1451,9 @@ verification points.
   reset), so the Rust runtime's `SIG_IGN` — and with it `EPIPE`-on-write
   semantics — survives `daemonize()`.
 - R128. `DaemonContext::exec` sets SIGPIPE to `SIG_DFL` immediately
-  before `exec`, so
-  the target program starts with the conventional default disposition.
+  before `exec`, so the target program starts with the conventional
+  default disposition. If the exec fails, it puts the caller's
+  disposition back before it reports (R127).
 - R129. `cleanup_on_signals()` is all-or-nothing: it decides every
   refusal (R149, R151) for every signal in the slice before it installs
   the first handler, so a refused slice leaves the dispositions and the
@@ -1606,10 +1607,9 @@ verification points.
   with that code and the error's text, so `?` works on `io::Error` and
   friends inside `init`.
 - R157. `DaemonContext::exec` runs the program even when the launcher
-  is gone: it ignores SIGPIPE first, whatever disposition the caller
-  kept (R127), writes the exec marker, ignores a broken pipe there, and only then restores the default
-  SIGPIPE. If the exec fails, it ignores SIGPIPE again before reporting,
-  so the daemon exits with the exec's code (66 or 71), not by SIGPIPE.
+  is gone: a broken pipe when it writes the exec marker does not stop
+  it. If the exec fails, the daemon exits with the exec's code (66 or
+  71). The writes cannot raise SIGPIPE (R165).
 - R158. The launcher retries a pipe read that a signal interrupts
   (`EINTR`), so a signal it receives while waiting cannot turn a
   healthy start into a failure, or an exec still pending into success.
@@ -1623,9 +1623,8 @@ verification points.
 - R161. With no launcher pipe (foreground mode, or after the pipe was
   used), or with a launcher that is gone so the pipe write fails, every
   error report (`report_error`, a failed `exec`, a failed step) prints
-  the error to stderr before exiting with its code. A report ignores
-  SIGPIPE before it writes, so a caller's `SIG_DFL` cannot turn the
-  failed write into death by signal.
+  the error to stderr before exiting with its code. The pipe write
+  cannot raise SIGPIPE (R165).
 - R162. The supplementary groups are set (`initgroups`) before `init`
   runs, from the real group database, so an `init` that changes root
   cannot change them.

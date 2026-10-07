@@ -152,22 +152,35 @@ pub(crate) fn may_clean_up_on(sig: i32) -> bool {
     .contains(&sig)
 }
 
-/// Restore `SIGPIPE`'s default disposition, before an `exec`.
+/// Set `SIGPIPE`'s default disposition, before an `exec`, and return the one
+/// it replaced.
 ///
-/// Daemonizing keeps the Rust runtime's ignored `SIGPIPE` (R127), and an
-/// ignored disposition survives `exec(2)`; the exec'd program expects the
-/// default (R128).
-pub(crate) fn restore_default_sigpipe() {
-    // SAFETY: SIG_DFL is a valid disposition for SIGPIPE.
-    unsafe { libc::signal(libc::SIGPIPE, libc::SIG_DFL) };
+/// Daemonizing keeps the caller's `SIGPIPE` disposition (R127), usually the
+/// Rust runtime's `SIG_IGN`, and an ignored disposition survives `exec(2)`;
+/// the exec'd program expects the default (R128). If the exec fails,
+/// [`CallerSigpipe::restore`] puts the caller's disposition back.
+pub(crate) fn restore_default_sigpipe() -> CallerSigpipe {
+    let mut sa: libc::sigaction = unsafe { std::mem::zeroed() };
+    sa.sa_sigaction = libc::SIG_DFL;
+    let mut old: libc::sigaction = unsafe { std::mem::zeroed() };
+    // SAFETY: SIG_DFL with an empty mask is a valid disposition for SIGPIPE,
+    // and `old` receives the one it replaces.
+    unsafe {
+        libc::sigemptyset(&mut sa.sa_mask);
+        libc::sigaction(libc::SIGPIPE, &sa, &mut old);
+    }
+    CallerSigpipe(old)
 }
 
-/// Ignore `SIGPIPE` again, after an `exec` that [`restore_default_sigpipe`]
-/// prepared for has failed: the error report goes into a pipe whose reader
-/// may be gone, and a write there must fail, not kill the process (R157).
-pub(crate) fn ignore_sigpipe() {
-    // SAFETY: SIG_IGN is a valid disposition for SIGPIPE.
-    unsafe { libc::signal(libc::SIGPIPE, libc::SIG_IGN) };
+/// The `SIGPIPE` disposition the caller had before an `exec` set the default.
+pub(crate) struct CallerSigpipe(libc::sigaction);
+
+impl CallerSigpipe {
+    /// Put the caller's disposition back, after an `exec` that failed.
+    pub(crate) fn restore(self) {
+        // SAFETY: `self.0` is the disposition sigaction reported moments ago.
+        unsafe { libc::sigaction(libc::SIGPIPE, &self.0, std::ptr::null_mut()) };
+    }
 }
 
 /// Install [`pidfile_cleanup_handler`] for each signal in `signals`.

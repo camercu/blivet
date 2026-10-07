@@ -295,32 +295,39 @@ impl DaemonContext {
     /// [`ProgramNotFound`](DaemonizeError::ProgramNotFound) (exit 66), any
     /// other errno as [`ExecFailed`](DaemonizeError::ExecFailed) (exit 71).
     pub fn exec<S: AsRef<CStr>>(mut self, program: &CStr, args: &[S]) -> ! {
+        let err = self.try_exec(program, args);
+        self.report_error(&err)
+    }
+
+    /// Everything [`exec`](Self::exec) does short of reporting: returns only
+    /// if the exec did not happen, with the error to report.
+    fn try_exec<S: AsRef<CStr>>(&mut self, program: &CStr, args: &[S]) -> DaemonizeError {
         if let Some(lockfile) = self.lockfile_fd() {
             use nix::fcntl::{fcntl, FcntlArg, FdFlag};
             if let Err(e) = fcntl(lockfile, FcntlArg::F_SETFD(FdFlag::empty())) {
-                self.report_error(&DaemonizeError::ExecFailed(format!(
+                return DaemonizeError::ExecFailed(format!(
                     "clear close-on-exec on the lockfile: {e}"
-                )));
+                ));
             }
         }
-        // The marker goes out with SIGPIPE ignored, whatever disposition the
-        // caller kept (R127), and a broken pipe there means only that the
-        // launcher is gone: run the program anyway (R157). The default comes
-        // back just before execvp (R128).
-        crate::signals::ignore_sigpipe();
+        // A broken pipe here means only that the launcher is gone: run the
+        // program anyway (R157). The send cannot raise SIGPIPE (R165).
         if let Some(pipe) = self.notify_pipe.as_mut() {
             match pipe.signal_exec_pending() {
                 Err(e) if e.kind() != std::io::ErrorKind::BrokenPipe => {
-                    self.report_error(&DaemonizeError::NotifyFailed(e));
+                    return DaemonizeError::NotifyFailed(e);
                 }
                 _ => {}
             }
         }
-        crate::signals::restore_default_sigpipe();
+        let caller_sigpipe = crate::signals::restore_default_sigpipe();
         let Err(errno) = nix::unistd::execvp(program, args);
-        crate::signals::ignore_sigpipe();
+        // The daemon reports instead of becoming the program: its own
+        // disposition again (R127), not the default the program would have
+        // had.
+        caller_sigpipe.restore();
         let message = format!("exec {}: {errno}", program.to_string_lossy());
-        self.report_error(&exec_error(errno, message))
+        exec_error(errno, message)
     }
 
     /// Reports an error to the parent process and exits.
@@ -534,6 +541,39 @@ mod tests {
             Some(7),
             "the program did not run: {}",
             crate::test_support::subprocess_report(NAME, &output)
+        );
+    }
+
+    // Covers: R127, R128
+    #[test]
+    fn a_failed_exec_puts_the_callers_sigpipe_back() {
+        crate::test_support::run_in_subprocess(
+            "context::tests::a_failed_exec_puts_the_callers_sigpipe_back_subprocess",
+        );
+    }
+
+    /// R128 sets the default SIGPIPE just before execvp. The daemon that goes
+    /// on to report a failed exec runs with the caller's disposition again,
+    /// here the Rust runtime's SIG_IGN.
+    #[test]
+    #[ignore]
+    #[allow(unsafe_code)]
+    fn a_failed_exec_puts_the_callers_sigpipe_back_subprocess() {
+        if !crate::test_support::is_subprocess() {
+            return;
+        }
+        let mut ctx = ctx(&DaemonConfig::new(), None, None);
+
+        let err = ctx.try_exec(c"/nonexistent_blivet_program", &[c"x"]);
+
+        let mut now: libc::sigaction = unsafe { std::mem::zeroed() };
+        // SAFETY: a null new action only reads the disposition into `now`.
+        unsafe { libc::sigaction(libc::SIGPIPE, std::ptr::null(), &mut now) };
+        assert!(matches!(err, DaemonizeError::ProgramNotFound(_)), "{err:?}");
+        assert_eq!(
+            now.sa_sigaction,
+            libc::SIG_IGN,
+            "the default was left in place"
         );
     }
 

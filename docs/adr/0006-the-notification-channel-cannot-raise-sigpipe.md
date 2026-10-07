@@ -69,10 +69,12 @@ fails to compile, which names the problem at once.
 ## Consequences
 
 - C1's `ignore_sigpipe` calls before the exec marker and in `signal_error`
-  go away. So does the `ignore_sigpipe` after a failed `execvp`: the error
-  report that follows sends with `MSG_NOSIGNAL`. R128 stays. `exec` still
-  sets SIGPIPE to `SIG_DFL` just before `execvp`, so the program starts with
-  the default disposition.
+  go away. R128 stays. `exec` still sets SIGPIPE to `SIG_DFL` just before
+  `execvp`, so the program starts with the default disposition. The
+  `ignore_sigpipe` after a failed `execvp` becomes a restore of the
+  caller's disposition. The report that follows sends with `MSG_NOSIGNAL`,
+  but it may also print on stderr, and that write follows the caller's
+  disposition like any other.
 - `notify_parent` returns `NotifyFailed` when the launcher is gone, for every
   caller. R127 then holds as written: the daemon runs with the caller's
   disposition until `exec` hands the process to another program.
