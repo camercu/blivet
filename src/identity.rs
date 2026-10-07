@@ -122,8 +122,10 @@ impl ResolvedIdentity {
     /// (`initgroups`). A no-op without a user.
     ///
     /// The sequence calls this before the caller's `init`, so an `init` that
-    /// changes root cannot change which group database is read (R162). Root's
-    /// permission checks ignore supplementary groups, so `init` is unaffected.
+    /// changes root cannot change which group database is read (R162). `init`
+    /// then runs with the user's groups in place of the caller's: a full
+    /// root's checks pass either way, but a root bounded by capabilities (no
+    /// `CAP_DAC_OVERRIDE`) has the group access of the user, not its own.
     ///
     /// # Errors
     ///
