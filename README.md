@@ -33,8 +33,9 @@ fn main() -> Result<(), DaemonizeError> {
 
 - **Correct by default.** Double-fork, `setsid`, reset signal dispositions
   (real-time signals too, on Linux and Android), a cleared signal mask, closed
-  fds, and `/dev/null` on stdio. `SIGPIPE` stays ignored, so a write to a
-  closed pipe returns an error instead of killing the daemon.
+  fds, and `/dev/null` on stdio. `SIGPIPE` keeps the caller's disposition:
+  ignored in a normal Rust binary, so a write to a closed pipe returns an error
+  instead of killing the daemon.
 - **No `unsafe` in your code.** `daemonize()` and `daemonize_with()` check
   that the process is single-threaded before the steps that need it. Inside
   the crate, `#![deny(unsafe_code)]` makes each `unsafe` block opt in.
