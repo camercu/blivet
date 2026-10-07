@@ -626,7 +626,11 @@ failures return `Err` (see Foreground mode). Every fallible step maps
 its failure to a named `DaemonizeError` variant: system-call failures
 without a more specific variant — opening `/dev/null`, `sigaction`,
 `sigprocmask`, `getrlimit` — map to `SystemError` (exit 71).
-Individual `close()` errors in step 13 are silently ignored.
+Individual `close()` errors in step 13 are silently ignored. A panic in
+steps 4–17, `init`'s included, is caught and reported the same way, as
+exit 70 with the panic text (R166): unwinding on would run the caller's
+frames, and any recovery they hold, in a detached daemon whose launcher
+has already read a failure.
 
 > The `_exit()` code is not observable (the parent reads its exit code
 > from the pipe), but uses the mapped code for consistency in process
@@ -1654,3 +1658,6 @@ verification points.
   cannot receive. The daemon writes to it only with `send` and
   `MSG_NOSIGNAL`, so a launcher that is gone costs `EPIPE` and never
   SIGPIPE, whatever disposition the caller kept (R127, ADR 0006).
+- R166. A panic in the daemon process's sequence, `init`'s included,
+  does not unwind into the caller's frames: the daemon reports it as a
+  failure with exit code 70 and the panic text, then exits.

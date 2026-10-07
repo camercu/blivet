@@ -125,7 +125,17 @@ pub(crate) unsafe fn daemonize_inner_with<T>(
     // parent and exit. `pipe_wr` stays available so the error path can still
     // signal it.
     // SAFETY: this function's own contract requires a single thread.
-    match unsafe { run_post_fork(config, &mut pipe_wr, init) } {
+    let run = || unsafe { run_post_fork(config, &mut pipe_wr, init) };
+    let result = if foreground {
+        run()
+    } else {
+        // A panic (in practice, init's) ends the daemon as an error does:
+        // unwinding on would run the caller's frames in a detached process
+        // whose launcher has already read a failure (R166).
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(run))
+            .unwrap_or_else(|panic| Err(panicked(&*panic)))
+    };
+    match result {
         Ok(done) => Ok(done),
         Err(e) if foreground => Err(e),
         Err(e) => {
@@ -135,6 +145,17 @@ pub(crate) unsafe fn daemonize_inner_with<T>(
             forker.exit(e.exit_code() as i32);
         }
     }
+}
+
+/// The error a daemon reports for a panic in the sequence: exit 70
+/// (`EX_SOFTWARE`), with the panic's text when it has one.
+fn panicked(payload: &(dyn std::any::Any + Send)) -> DaemonizeError {
+    let text = payload
+        .downcast_ref::<&str>()
+        .copied()
+        .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+        .unwrap_or("no message");
+    DaemonizeError::application(70, format!("daemon panicked during startup: {text}"))
 }
 
 /// What a failed sequence undoes (R164), in the reverse of the order it was
@@ -1314,6 +1335,54 @@ mod tests {
             panic_msg.contains("NullForker::exit(71)"),
             "must exit with ChdirFailed's EX_OSERR code 71, got: {panic_msg}"
         );
+    }
+
+    // Covers: R166
+    #[test]
+    fn daemon_init_panic_exits_and_reports_its_text() {
+        crate::test_support::run_in_subprocess(
+            "sequence::tests::daemon_init_panic_exits_and_reports_its_text_subprocess",
+        );
+    }
+
+    /// In the daemon, unwinding out of the sequence would run the caller's
+    /// frames, and any `catch_unwind` recovery in them, in a detached process
+    /// whose launcher has already reported failure. The panic must end the
+    /// daemon like an error does, with its text on the pipe.
+    #[test]
+    #[ignore]
+    fn daemon_init_panic_exits_and_reports_its_text_subprocess() {
+        if !crate::test_support::is_subprocess() {
+            return;
+        }
+        let mut config = DaemonConfig::new();
+        config.close_fds(false);
+        let mut forker = NullForker::both_child_with_reader();
+        let result = catch_unwind(std::panic::AssertUnwindSafe(|| {
+            run_inner_with(&config, &mut forker, || -> Result<(), _> {
+                panic!("database schema too new")
+            })
+        }));
+
+        let panic_msg = result
+            .expect_err("a daemon must exit after a panic, not return")
+            .downcast_ref::<String>()
+            .cloned()
+            .unwrap_or_default();
+        assert!(
+            panic_msg.contains("NullForker::exit(70)"),
+            "the daemon unwound instead of exiting: {panic_msg}"
+        );
+        let rd = forker
+            .take_pipe_reader()
+            .expect("NullForker stores a reader");
+        match notify::decode(&crate::test_support::read_pipe(rd)) {
+            notify::Outcome::Failure { code: 70, message } => assert!(
+                message.contains("database schema too new"),
+                "the panic text was lost: {message}"
+            ),
+            _ => panic!("the launcher did not read a failure with code 70"),
+        }
     }
 
     // Covers: R66, R68, R121

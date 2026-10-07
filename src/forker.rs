@@ -144,6 +144,16 @@ pub(crate) mod null_forker {
             Self::new(vec![Ok(ForkResult::Child), Ok(ForkResult::Child)], Ok(()))
         }
 
+        /// Both forks return Child, keeping a reader for
+        /// [`take_pipe_reader`](Self::take_pipe_reader). The sequence must
+        /// skip step 13 (`close_fds(false)`), which would close that copy.
+        pub(crate) fn both_child_with_reader() -> Self {
+            Self::stopping_before_step_13(
+                vec![Ok(ForkResult::Child), Ok(ForkResult::Child)],
+                Ok(()),
+            )
+        }
+
         /// First fork returns Parent.
         pub(crate) fn first_parent() -> Self {
             Self::stopping_before_step_13(
