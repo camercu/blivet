@@ -565,8 +565,8 @@ supplementary groups, and whatever `init` did.
 ### Steps
 
 1. **Create notification pipe, first fork.** *(Skipped in foreground
-   mode.)* Create a pipe with `O_CLOEXEC` on both ends (`pipe_rd`,
-   `pipe_wr`). If the pipe cannot be created — no descriptor free, say
+   mode.)* Create the notification pipe, a socket pair (R165),
+   close-on-exec on both ends (`pipe_rd`, `pipe_wr`). If the pipe cannot be created — no descriptor free, say
    — return `Err(SystemError)` to the caller. Fork. If fork fails,
    close both pipe ends and return `Err(ForkFailed)` to the caller —
    no pipe protocol is involved.
@@ -614,7 +614,7 @@ supplementary groups, and whatever `init` did.
     identity, unless `chown_paths(false)`. See path ownership.
 17. **Switch identity.** See user/group switching.
 18. **Return `DaemonContext`** owning lockfile `Option<Flock>`,
-    `pipe_wr` as `Option<OwnedFd>`, and the cloned config, beside
+    `pipe_wr` as `Option<NotifyPipe>`, and the cloned config, beside
     `init`'s value.
 
 ### Post-fork error policy
@@ -650,8 +650,8 @@ can send with `MSG_NOSIGNAL` (R165, ADR 0006). The name stays.
 
 The parent-side reader (in step 1's parent branch) reads from the pipe.
 Every message starts with a byte; the two-byte messages go out in one
-`write`, well under `PIPE_BUF`, so the reader never waits for their
-second byte:
+`send`, which an `AF_UNIX` stream socket queues whole before it
+returns, so the reader never waits for their second byte:
 
 - **`0x00 0x00` (ready):** the daemon called `notify_parent()`. The
   parent calls `_exit(0)` at once, without reading on: a process the
@@ -659,7 +659,7 @@ second byte:
   could be far off.
 - **`0x00 0x01` (exec pending):** the daemon is in
   `DaemonContext::exec`. The parent reads on. EOF means the exec
-  succeeded and `O_CLOEXEC` closed the write end: `_exit(0)`. An error
+  succeeded and close-on-exec closed the daemon's end: `_exit(0)`. An error
   message means the exec failed (R150).
 - **Error byte (nonzero):** value is the `exit_code()` of the error.
   The next two bytes are the message's length (big-endian), then the
@@ -998,7 +998,7 @@ arguments follow in order. `DaemonContext::exec`:
 4. Execs via `execvp`.
 
 The CLI does **not** call `notify_parent()`. A successful `execvp`
-replaces the process, `O_CLOEXEC` closes the pipe write end, and the
+replaces the process, close-on-exec closes the pipe write end, and the
 parent reads EOF after the marker (success per the notification
 protocol).
 
@@ -1410,7 +1410,8 @@ verification points.
 - R104. Fd closing skips lockfile fd and notification pipe fd.
 - R105. `getrlimit` failure (fd-close fallback) reports `SystemError`.
 - R106. Individual `close()` errors silently ignored.
-- R107. Notification pipe both ends created with `O_CLOEXEC`.
+- R107. Notification pipe both ends are close-on-exec: from creation
+  (`SOCK_CLOEXEC`) where the platform has it, else set just after.
 - R108. CLI does not call `notify_parent()`; relies on CLOEXEC + exec.
 - R109. CLI calls `report_error()` on exec failure.
 - R110. `DaemonContext::exec`, which the CLI uses, clears CLOEXEC on the
