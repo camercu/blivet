@@ -1011,6 +1011,10 @@ the pre-fork path check, so a missing-or-unusable program is exit 66 in
 both path and bare form; any other exec error is `ExecFailed` (exit 71).
 (R130)
 
+An empty `args` is refused before step 1 with `ExecFailed` (exit 71,
+R167): a program run with no `argv[0]` can take its first argument for
+it. The CLI always passes the program's name there.
+
 If clearing `CLOEXEC` on the lockfile fd fails, `exec` likewise calls
 `report_error` with `ExecFailed` (exit 71); if writing the marker fails,
 with `NotifyFailed` (exit 71).
@@ -1661,3 +1665,6 @@ verification points.
 - R166. A panic in the daemon process's sequence, `init`'s included,
   does not unwind into the caller's frames: the daemon reports it as a
   failure with exit code 70 and the panic text, then exits.
+- R167. `DaemonContext::exec` refuses an empty `args` with
+  `ExecFailed` before it changes anything, so no program runs with
+  argc 0.

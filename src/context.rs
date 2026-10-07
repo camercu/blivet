@@ -295,6 +295,8 @@ impl DaemonContext {
     /// [`report_error`](Self::report_error): `ENOENT` and `EACCES` as
     /// [`ProgramNotFound`](DaemonizeError::ProgramNotFound) (exit 66), any
     /// other errno as [`ExecFailed`](DaemonizeError::ExecFailed) (exit 71).
+    /// An empty `args` is refused before anything changes, as `ExecFailed`:
+    /// a program run with no `argv[0]` can misread its arguments.
     pub fn exec<S: AsRef<CStr>>(mut self, program: &CStr, args: &[S]) -> ! {
         let err = self.try_exec(program, args);
         self.report_error(&err)
@@ -303,6 +305,12 @@ impl DaemonContext {
     /// Everything [`exec`](Self::exec) does short of reporting: returns only
     /// if the exec did not happen, with the error to report.
     fn try_exec<S: AsRef<CStr>>(&mut self, program: &CStr, args: &[S]) -> DaemonizeError {
+        if args.is_empty() {
+            return DaemonizeError::ExecFailed(format!(
+                "exec {}: args is empty; it must hold args[0] (R167)",
+                program.to_string_lossy()
+            ));
+        }
         if let Some(lockfile) = self.lockfile_fd() {
             use nix::fcntl::{fcntl, FcntlArg, FdFlag};
             if let Err(e) = fcntl(lockfile, FcntlArg::F_SETFD(FdFlag::empty())) {
@@ -629,6 +637,33 @@ mod tests {
                     .contains("application error: database unreachable")
             ),
             (Some(75), true),
+            "{}",
+            crate::test_support::subprocess_report(NAME, &output)
+        );
+    }
+
+    // Covers: R167
+    //
+    // A program run with argc 0 sees no argv[0]; some read argv[1] as their
+    // first argument, or worse (CVE-2021-4034). The empty argv is refused
+    // before anything changes, as a failed exec.
+    #[test]
+    fn exec_refuses_an_empty_argv() {
+        const MARKER: &str = "__BLIVET_EXEC_EMPTY_ARGV";
+        const NAME: &str = "context::tests::exec_refuses_an_empty_argv";
+
+        if std::env::var(MARKER).is_ok() {
+            let ctx = ctx(&DaemonConfig::new(), None, None);
+            ctx.exec::<&CStr>(c"true", &[]);
+        }
+
+        let output = crate::test_support::rerun_in_subprocess(NAME, MARKER, "1");
+        assert_eq!(
+            (
+                output.status.code(),
+                String::from_utf8_lossy(&output.stderr).contains("args[0]")
+            ),
+            (Some(71), true),
             "{}",
             crate::test_support::subprocess_report(NAME, &output)
         );
