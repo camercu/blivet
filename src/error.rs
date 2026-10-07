@@ -63,12 +63,14 @@ pub enum DaemonizeError {
     /// A required system call with no more specific variant failed: creating
     /// the notification pipe, opening `/dev/null` or `dup2` onto it,
     /// `sigaction` (resetting signal dispositions), `sigprocmask` (clearing the
-    /// signal mask), or `getrlimit` (querying the fd limit before closing
-    /// inherited descriptors).
+    /// signal mask), `getrlimit` (querying the fd limit before closing
+    /// inherited descriptors), or reading the thread count around a
+    /// `daemonize_with` init.
     #[error("system error: {0}")]
     SystemError(String),
 
-    /// Non-root caller with user switch, or setuid/setgid failure.
+    /// Non-root caller with user switch, or an `initgroups`, `setgid`, or
+    /// `setuid` failure.
     #[error("permission denied: {0}")]
     PermissionDenied(String),
 
@@ -94,7 +96,9 @@ pub enum DaemonizeError {
     /// Writing the readiness message to the parent notification pipe failed.
     ///
     /// Produced by [`notify_parent`](crate::DaemonContext::notify_parent) when
-    /// the pipe write returns an `io::Error`.
+    /// the pipe write returns an `io::Error`, and by
+    /// [`exec`](crate::DaemonContext::exec) when writing the exec marker fails
+    /// for a reason other than a launcher that is gone.
     #[error("failed to notify parent: {0}")]
     NotifyFailed(#[source] std::io::Error),
 

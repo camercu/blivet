@@ -34,7 +34,7 @@ pub(crate) unsafe fn daemonize_inner(
     unsafe { daemonize_inner_with(config, forker, || Ok(())) }.map(|(ctx, ())| ctx)
 }
 
-/// [`daemonize_inner`], running `init` in the final process after step 13.
+/// [`daemonize_inner`], running `init` in the final process at step 15.
 ///
 /// # Safety
 ///
@@ -249,7 +249,7 @@ impl Drop for AbortGuard<'_> {
 ///
 /// Forker-free and fallible: every step returns its error rather than touching
 /// the notification pipe, leaving the single error-to-parent seam in
-/// [`daemonize_inner`]. On success the notification pipe write end is moved into
+/// [`daemonize_inner_with`]. On success the notification pipe write end is moved into
 /// the returned [`DaemonContext`]; `pipe_wr` is left `None`.
 ///
 /// # Safety

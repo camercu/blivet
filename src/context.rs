@@ -104,8 +104,8 @@ impl DaemonContext {
     /// lock is held (no lockfile configured or derived, or locking disabled
     /// via [`DaemonConfig::no_lockfile`](crate::DaemonConfig::no_lockfile)).
     ///
-    /// The returned fd has `O_CLOEXEC` set. If you intend to `exec` and want
-    /// the lock to survive, clear `CLOEXEC` before calling `exec`.
+    /// The returned fd has `O_CLOEXEC` set. [`exec`](Self::exec) clears it so
+    /// the program keeps the lock; an `exec` of your own must clear it too.
     pub fn lockfile_fd(&self) -> Option<BorrowedFd<'_>> {
         self.lockfile.as_ref().map(|flock| flock.as_fd())
     }
@@ -184,7 +184,8 @@ impl DaemonContext {
     /// refuses a signal that already has a handler (one registered with
     /// [`signal_hook`](https://docs.rs/signal-hook), say) or is ignored. It also
     /// accepts only the catchable signals POSIX defines as terminating by
-    /// default, except `SIGPIPE`, which the daemon keeps ignored:
+    /// default, except `SIGPIPE`, which reports a broken write rather than a
+    /// request to stop:
     /// `SIGHUP`, `SIGINT`, `SIGQUIT`, `SIGTERM`, `SIGUSR1`, `SIGUSR2`,
     /// `SIGALRM`, `SIGVTALRM`, `SIGPROF`, `SIGXCPU`, `SIGXFSZ`, the crash
     /// signals (`SIGABRT`, `SIGBUS`, `SIGFPE`, `SIGILL`, `SIGSEGV`, `SIGSYS`,

@@ -70,7 +70,7 @@ launcher
 exits 0, or the error's code
 ```
 
-That byte releases the launcher, which exits 0. If the daemon calls
+That message releases the launcher, which exits 0. If the daemon calls
 `report_error()`, the launcher exits with that error's `sysexits.h` code. If the
 daemon ends any other way before notifying, the launcher exits 1. That covers an
 early return, a panic, a kill by a signal, and a call to `std::process::exit`.
@@ -212,8 +212,8 @@ the shell with a meaningful status:
 | `ForkFailed`       | 71          | `fork()` error                           |
 | `SetsidFailed`     | 71          | `setsid()` error                         |
 | `ChdirFailed`      | 71          | `chdir()` error                          |
-| `SystemError`      | 71          | Syscall failed (notification pipe, `/dev/null` open or `dup2`, `sigaction`, `sigprocmask`, `getrlimit`) |
-| `PermissionDenied` | 77          | Not root, or setuid/setgid failed        |
+| `SystemError`      | 71          | Syscall failed (notification pipe, `/dev/null` open or `dup2`, `sigaction`, `sigprocmask`, `getrlimit`, thread count around init) |
+| `PermissionDenied` | 77          | Not root, or initgroups/setgid/setuid failed |
 | `ExecFailed`       | 71          | `exec` failed (other than `ENOENT`/`EACCES`) |
 | `NotifyFailed`     | 71          | Can't write readiness to launcher        |
 | `InitLeftThreads`  | 70          | `daemonize_with` init left threads running before a user switch |

@@ -89,8 +89,8 @@ pub(crate) mod null_forker {
     /// What [`NullForker`]'s
     /// [`create_notification_pipe`](Forker::create_notification_pipe) does.
     enum Pipe {
-        /// Returns a real pipe, and with `keep_reader` keeps a copy of its
-        /// read end for [`NullForker::take_pipe_reader`].
+        /// Returns a real notification channel, and with `keep_reader` keeps a
+        /// copy of its reading end for [`NullForker::take_pipe_reader`].
         Real { keep_reader: bool },
         /// Fails, as a full descriptor table does.
         Fails,

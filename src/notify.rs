@@ -14,8 +14,8 @@
 //! - EOF with no marker — the daemon ended without notifying (a signal killed
 //!   it, or it exited without dropping its context): failure (R150).
 //!
-//! Both two-byte messages go out in one `write` well under `PIPE_BUF`, so the
-//! reader never waits for the second byte.
+//! Each two-byte message goes out in one `send`, so its second byte is already
+//! there when the reader reads the first.
 //!
 //! Centralizing the byte layout here keeps the three writers (success, error,
 //! drop-without-notify) and the single reader from drifting out of sync.
@@ -407,7 +407,7 @@ mod tests {
     #[test]
     fn close_writes_nothing() {
         // The intermediate fork processes close their write-end copy silently;
-        // the pipe must hit EOF (decoded as success), not the Drop safety net.
+        // the reader sees a bare EOF, not the Drop safety net's report.
         let (rd, wr) = make_pipe();
         NotifyPipe::new(wr).close();
         assert_eq!(read_pipe(rd), Vec::<u8>::new());

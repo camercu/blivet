@@ -16,12 +16,11 @@
 /// SIGKILL and SIGSTOP are always skipped (cannot be caught/reset).
 ///
 /// SIGPIPE is also skipped, preserving the caller's disposition (R127): the
-/// Rust runtime installs SIG_IGN so writes to a closed pipe/socket return
-/// `EPIPE` instead of killing the process, and resetting it would silently
-/// revoke that for the entire daemon — including the library's own
-/// `notify_parent` write, whose documented `NotifyFailed` error could then
-/// never be observed. The CLI restores SIG_DFL just before `exec` (R128), so
-/// exec'd programs still start with the conventional disposition.
+/// Rust runtime installs SIG_IGN so writes to a closed pipe or socket return
+/// `EPIPE` instead of killing the process, and resetting it would revoke
+/// that for every write the daemon makes. `DaemonContext::exec` sets SIG_DFL
+/// just before `execvp` (R128), so exec'd programs still start with the
+/// conventional disposition.
 ///
 /// Returns [`SystemError`](crate::error::DaemonizeError::SystemError) on a
 /// non-`EINVAL` `sigaction` failure (POSIX documents only `EINVAL` for these
@@ -120,8 +119,9 @@ pub(crate) extern "C" fn pidfile_cleanup_handler(signum: i32) {
 /// default must end the process: otherwise the daemon keeps running without
 /// its pidfile. The accepted signals are the catchable ones POSIX defines as
 /// terminating (some with a core dump) on every system, plus the real-time
-/// range where the capability table knows it. SIGPIPE terminates too, but
-/// the daemon keeps it ignored (R127), so it is left off. Anything else,
+/// range where the capability table knows it. SIGPIPE terminates too, but it
+/// reports a write to a closed pipe, not a request to stop, and a Rust
+/// process usually ignores it (R127), so it is left off. Anything else,
 /// platform-specific signals included (SIGIO, SIGINFO, SIGPWR differ by OS),
 /// is refused.
 pub(crate) fn may_clean_up_on(sig: i32) -> bool {

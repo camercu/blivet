@@ -1577,7 +1577,8 @@ verification points.
 - R151. `cleanup_on_signals()` refuses, before changing anything, any
   signal outside an allowlist: the catchable signals POSIX defines as
   terminating the process by default on every system, except SIGPIPE,
-  which the daemon keeps ignored (R127) (SIGHUP, SIGINT, SIGQUIT,
+  which reports a write to a closed pipe rather than a request to stop
+  and which a Rust process usually ignores (R127) (SIGHUP, SIGINT, SIGQUIT,
   SIGTERM, SIGUSR1, SIGUSR2, SIGALRM, SIGVTALRM, SIGPROF, SIGXCPU,
   SIGXFSZ, and the crash signals SIGABRT, SIGBUS, SIGFPE, SIGILL,
   SIGSEGV, SIGSYS, SIGTRAP), plus the real-time signals where the
