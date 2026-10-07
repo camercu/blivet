@@ -37,17 +37,17 @@ impl Forker for RealForker {
     fn create_notification_pipe(&mut self) -> Result<(OwnedFd, OwnedFd), DaemonizeError> {
         use nix::fcntl::{fcntl, FcntlArg, FdFlag};
 
-        let failed = |e| DaemonizeError::SystemError(format!("notification pipe: {e}"));
-        let (rd, wr) = crate::notify::channel()
-            .map_err(|e| DaemonizeError::SystemError(format!("notification pipe: {e}")))?;
+        fn failed(e: impl std::fmt::Display) -> DaemonizeError {
+            DaemonizeError::SystemError(format!("notification pipe: {e}"))
+        }
+        let (rd, wr) = crate::notify::channel().map_err(failed)?;
         // Keep each end above descriptor 2 (R152), so step 6's redirect to
         // /dev/null cannot replace one, and make it close-on-exec (R107).
         // SOCK_CLOEXEC would set the flag atomically, but macOS lacks it;
         // the separate step is safe because daemonize() requires
         // single-threaded execution.
         let prepare = |end: OwnedFd| -> Result<OwnedFd, DaemonizeError> {
-            let end = crate::steps::above_stdio(end)
-                .map_err(|e| DaemonizeError::SystemError(format!("notification pipe: {e}")))?;
+            let end = crate::steps::above_stdio(end).map_err(failed)?;
             fcntl(end.as_fd(), FcntlArg::F_SETFD(FdFlag::FD_CLOEXEC)).map_err(failed)?;
             Ok(end)
         };
