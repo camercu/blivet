@@ -276,38 +276,50 @@ pub(crate) enum Outcome {
 /// reason. After [`EXEC_PENDING`] the read waits for the exec: a successful
 /// one closes the pipe (EOF), a failed one sends its error.
 pub(crate) fn read_outcome(pipe: &mut impl io::Read) -> Outcome {
-    let mut buf = Vec::new();
-    let Some(first) = read_byte(pipe) else {
-        return decode(&buf);
-    };
-    buf.push(first);
-    if first == 0 {
-        // Sent in the same write as the first byte, so it is already here.
-        let Some(second) = read_byte(pipe) else {
-            return decode(&buf);
-        };
-        buf.push(second);
-        if buf != EXEC_PENDING {
-            return decode(&buf);
+    let code = match read_byte(pipe) {
+        None => {
+            return Outcome::Failure {
+                code: UNNOTIFIED_CODE as i32,
+                message: EOF_UNNOTIFIED_MSG.into(),
+            }
         }
-        // After the exec marker: EOF when the exec closes the pipe, or the
-        // exec's error.
-        let Some(code) = read_byte(pipe) else {
-            return decode(&buf);
-        };
-        buf.push(code);
-    }
+        // Only SUCCESS and EXEC_PENDING start with 0x00 (R159). The second
+        // byte went out in the same send, so it is already here.
+        Some(0x00) => match read_byte(pipe) {
+            Some(second) if [0x00, second] == SUCCESS => return Outcome::Success,
+            Some(second) if [0x00, second] == EXEC_PENDING => match read_byte(pipe) {
+                // EOF: the exec closed the pipe.
+                None => return Outcome::Success,
+                Some(0x00) => return malformed(&[0x00, second, 0x00]),
+                Some(code) => code,
+            },
+            Some(second) => return malformed(&[0x00, second]),
+            None => return malformed(&[0x00]),
+        },
+        Some(code) => code,
+    };
     // An error message: its length, then that many bytes, and no further.
-    let mut len = Vec::new();
-    let _ = pipe.by_ref().take(2).read_to_end(&mut len);
-    buf.extend_from_slice(&len);
-    if let Ok(len) = <[u8; 2]>::try_from(len.as_slice()) {
+    let mut message = Vec::new();
+    let _ = pipe.by_ref().take(2).read_to_end(&mut message);
+    if let Ok(len) = <[u8; 2]>::try_from(message.as_slice()) {
+        message.clear();
         let _ = pipe
             .by_ref()
             .take(u64::from(u16::from_be_bytes(len)))
-            .read_to_end(&mut buf);
+            .read_to_end(&mut message);
     }
-    decode(&buf)
+    Outcome::Failure {
+        code: i32::from(code),
+        message: String::from_utf8_lossy(&message).into_owned(),
+    }
+}
+
+/// The failure for a message that starts as neither readiness nor an error.
+fn malformed(header: &[u8]) -> Outcome {
+    Outcome::Failure {
+        code: UNNOTIFIED_CODE as i32,
+        message: format!("daemon sent the launcher a malformed message: {header:02x?}"),
+    }
 }
 
 /// One byte from the pipe, or `None` at EOF or on an error. A read a signal
@@ -323,46 +335,10 @@ fn read_byte(pipe: &mut impl io::Read) -> Option<u8> {
     }
 }
 
-/// Decode a whole message read from the notification pipe.
+/// [`read_outcome`] over bytes already read, for tests.
+#[cfg(test)]
 pub(crate) fn decode(buf: &[u8]) -> Outcome {
-    if buf == SUCCESS {
-        return Outcome::Success;
-    }
-    if let Some(rest) = buf.strip_prefix(&EXEC_PENDING[..]) {
-        // The exec marker, then EOF (the exec closed the pipe) or its error.
-        return if rest.is_empty() {
-            Outcome::Success
-        } else {
-            decode(rest)
-        };
-    }
-    match buf.first() {
-        None => Outcome::Failure {
-            code: UNNOTIFIED_CODE as i32,
-            message: EOF_UNNOTIFIED_MSG.into(),
-        },
-        // Only SUCCESS and EXEC_PENDING start with 0x00 (R159).
-        Some(&0x00) => Outcome::Failure {
-            code: UNNOTIFIED_CODE as i32,
-            message: format!(
-                "daemon sent the launcher a malformed message: {:02x?}",
-                &buf[..buf.len().min(8)]
-            ),
-        },
-        Some(&code) => {
-            let framed = buf
-                .get(1..3)
-                .map(|len| u16::from_be_bytes([len[0], len[1]]) as usize);
-            let message = match framed {
-                Some(len) => &buf[3..buf.len().min(3 + len)],
-                None => &buf[1..],
-            };
-            Outcome::Failure {
-                code: code as i32,
-                message: String::from_utf8_lossy(message).into_owned(),
-            }
-        }
-    }
+    read_outcome(&mut &buf[..])
 }
 
 #[cfg(test)]
@@ -561,7 +537,12 @@ mod tests {
     // Covers: R159
     #[test]
     fn a_malformed_header_is_a_failure_that_says_so() {
-        for bytes in [&[0x00][..], &[0x00, 0x07][..], &[0x00, 0x07, b'x'][..]] {
+        for bytes in [
+            &[0x00][..],
+            &[0x00, 0x07][..],
+            &[0x00, 0x07, b'x'][..],
+            &[0x00, 0x01, 0x00][..],
+        ] {
             match read_outcome(&mut &bytes[..]) {
                 Outcome::Failure { code, message } => {
                     assert_eq!(code, UNNOTIFIED_CODE as i32, "{bytes:?}");
