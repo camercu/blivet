@@ -383,8 +383,9 @@ On a best-effort target, `daemonize()` and `daemonize_with()` are
 `#[deprecated]` stubs that panic. Call `daemonize_unchecked()` and
 `daemonize_with_unchecked()` instead. A crate that also builds there can gate
 the checked call on `target_os`, as the [crate front page](https://docs.rs/blivet)
-and `examples/echo_server.rs` do. Solaris (`x86_64-pc-solaris`) does not
-compile, because `nix` lacks `Flock` there. A non-Unix target fails with one
+and `examples/echo_server.rs` do. Two Unix targets `nix` supports do not
+compile: Solaris (`x86_64-pc-solaris`), because `nix` lacks `Flock` there, and
+Redox (`x86_64-unknown-redox`), which also lacks `initgroups` and `faccessat`. A non-Unix target fails with one
 `compile_error!` that names it.
 
 Android needs API level 24 (Android 7.0) or later. There, the pre-fork check
