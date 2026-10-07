@@ -327,14 +327,18 @@ unsafe fn run_post_fork<T>(
 
     // Step 12: Redirect stdout/stderr to configured files. Only a foreground
     // caller sees the slots after a failure, so only it pays for saving them.
+    // The files it opened stay held for step 16's chown (R163).
+    let mut streams = Vec::new();
     if config.stdout.is_some() || config.stderr.is_some() {
-        abort.stdio.extend(steps::redirect_output(
+        let redirected = steps::redirect_output(
             config.stdout.as_deref(),
             config.stderr.as_deref(),
             config.append,
             &owned,
             abort.rollback(),
-        )?);
+        )?;
+        abort.stdio.extend(redirected.slots);
+        streams = redirected.files;
     }
 
     // Step 13: Close inherited fds (if enabled)
@@ -350,6 +354,7 @@ unsafe fn run_post_fork<T>(
             skip_fds.push(fd.as_raw_fd());
         }
         skip_fds.extend(abort.held_fds());
+        skip_fds.extend(streams.iter().map(|(_, fd)| fd.as_raw_fd()));
         steps::close_inherited_fds(&skip_fds)?;
     }
 
@@ -379,8 +384,8 @@ unsafe fn run_post_fork<T>(
     // privileged, then switch to it (R155).
     if let Some(identity) = identity {
         if config.chown_paths {
-            // The files as opened, by descriptor (R163): stdout and stderr
-            // sit on fds 1 and 2 once step 12 redirected them.
+            // The files as opened, by descriptor (R163); for stdout and
+            // stderr, step 12's, as init may have moved fds 1 and 2.
             let pidfile = config
                 .pidfile
                 .as_deref()
@@ -389,10 +394,8 @@ unsafe fn run_post_fork<T>(
                 .effective_lockfile()
                 .map(PathBuf::as_path)
                 .zip(abort.lock.as_ref().map(|flock| flock.as_fd()));
-            let (out, err) = (std::io::stdout(), std::io::stderr());
-            let stdout = config.stdout.as_deref().map(|p| (p, out.as_fd()));
-            let stderr = config.stderr.as_deref().map(|p| (p, err.as_fd()));
-            identity.chown_files([pidfile, lock, stdout, stderr].into_iter().flatten())?;
+            let streams = streams.iter().map(|(path, fd)| (*path, fd.as_fd()));
+            identity.chown_files([pidfile, lock].into_iter().flatten().chain(streams))?;
         }
         // SAFETY: this function's contract requires a single thread, and the
         // checked entry points verify it again after init (R126).
@@ -679,6 +682,89 @@ mod tests {
         let _ = run_inner_with(&config, &mut NullForker::new(vec![], Ok(())), || Ok(()));
 
         assert_eq!(owner(std::fs::metadata("/dev/null").unwrap()), before);
+    }
+
+    // Covers: R163
+    #[test]
+    fn the_chown_follows_the_opened_output_not_fd_1() {
+        run_in_subprocess(
+            "sequence::tests::the_chown_follows_the_opened_output_not_fd_1_subprocess",
+        );
+    }
+
+    /// An init that puts another file on fd 1 must not have that file
+    /// chowned: the chown reaches the stream step 12 opened. Here that is a
+    /// device, which is skipped, so the unprivileged failure is setgid's; a
+    /// chown through fd 1 would fail on the regular file first.
+    #[test]
+    #[ignore]
+    #[allow(clippy::disallowed_methods)] // init moves fd 1, in a subprocess of its own
+    fn the_chown_follows_the_opened_output_not_fd_1_subprocess() {
+        if !is_subprocess() {
+            return;
+        }
+        crate::test_support::shed_root();
+        let other = tempfile::tempfile().unwrap();
+        let mut config = DaemonConfig::new();
+        config
+            .foreground(true)
+            .close_fds(false)
+            .stdout("/dev/null")
+            .stderr("/dev/null")
+            .group(crate::test_support::foreign_gid().to_string());
+
+        let result = run_inner_with(&config, &mut NullForker::new(vec![], Ok(())), || {
+            nix::unistd::dup2_stdout(&other).unwrap();
+            nix::unistd::dup2_stderr(&other).unwrap();
+            Ok(())
+        });
+
+        assert!(
+            matches!(&result, Err(DaemonizeError::PermissionDenied(m)) if m.contains("setgid")),
+            "the file init put on fd 1 was chowned: {result:?}"
+        );
+    }
+
+    // Covers: R163
+    #[test]
+    #[ignore = "needs root: the privileged tier runs it"]
+    fn root_chowns_the_opened_output_not_what_init_put_on_fd_1() {
+        run_in_subprocess(
+            "sequence::tests::root_chowns_the_opened_output_not_what_init_put_on_fd_1_subprocess",
+        );
+    }
+
+    #[test]
+    #[ignore]
+    #[allow(clippy::disallowed_methods)] // init moves fd 1, in a subprocess of its own
+    fn root_chowns_the_opened_output_not_what_init_put_on_fd_1_subprocess() {
+        use std::os::unix::fs::MetadataExt;
+        if !is_subprocess() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let (log, secret) = (dir.path().join("app.log"), dir.path().join("secret"));
+        let secret_file = std::fs::File::create(&secret).unwrap();
+        let mut config = DaemonConfig::new();
+        config
+            .foreground(true)
+            .close_fds(false)
+            .stdout(&log)
+            .user("nobody");
+
+        let result = run_inner_with(&config, &mut NullForker::new(vec![], Ok(())), || {
+            nix::unistd::dup2_stdout(&secret_file).unwrap();
+            Ok(())
+        });
+
+        result.expect("the start succeeds");
+        let nobody = nix::unistd::User::from_name("nobody").unwrap().unwrap();
+        assert_eq!(std::fs::metadata(&log).unwrap().uid(), nobody.uid.as_raw());
+        assert_eq!(
+            std::fs::metadata(&secret).unwrap().uid(),
+            0,
+            "init's file was chowned"
+        );
     }
 
     /// Ignored for the reason the `identity::tests` lookups of missing names

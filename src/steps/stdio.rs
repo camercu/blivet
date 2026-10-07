@@ -158,18 +158,20 @@ fn truncate(stream: &OpenStream) -> Result<(), DaemonizeError> {
 ///
 /// With [`Rollback::PutBack`], a failure undoes what this did (R147), and on
 /// success the saved slots are returned, so a later failure in the sequence
-/// can put them back too (R164). Each stdio slot is saved before it moves; the
+/// can put them back too (R164). The opened files come back too: step 16
+/// chowns them by these descriptors, not by whatever `init` left on fds 1
+/// and 2 (R163). Each stdio slot is saved before it moves; the
 /// truncations, which cannot be undone, come last. A stream file it created
 /// stays, empty, and an I/O error truncating stderr after stdout's truncation
 /// succeeded leaves stdout emptied.
 #[must_use = "the saved slots put stdio back when dropped; keep() them to leave it redirected"]
-pub(crate) fn redirect_output(
-    stdout: Option<&Path>,
-    stderr: Option<&Path>,
+pub(crate) fn redirect_output<'a>(
+    stdout: Option<&'a Path>,
+    stderr: Option<&'a Path>,
     append: bool,
     owned: &[(&'static str, FileId)],
     rollback: Rollback,
-) -> Result<Vec<SavedSlot>, DaemonizeError> {
+) -> Result<Redirected<'a>, DaemonizeError> {
     #[cfg(test)]
     crate::test_support::assert_isolated("redirect_output");
     let mut moved = Vec::new();
@@ -207,7 +209,27 @@ pub(crate) fn redirect_output(
             truncate(err)?;
         }
     }
-    Ok(moved)
+    let files = err
+        .and_then(|err| match err {
+            Stderr::Own(err) => Some((err.path, err.fd)),
+            Stderr::SharesStdout(_) => None,
+        })
+        .into_iter()
+        .chain(out.map(|out| (out.path, out.fd)))
+        .collect();
+    Ok(Redirected {
+        slots: moved,
+        files,
+    })
+}
+
+/// What step 12 did: the stdio slots it moved, and the files it opened.
+#[must_use = "the saved slots put stdio back when dropped; keep() them to leave it redirected"]
+pub(crate) struct Redirected<'a> {
+    pub(crate) slots: Vec<SavedSlot>,
+    /// Each stream's file by the path that names it, once: stderr sharing
+    /// stdout's file is not repeated. Close-on-exec, above fd 2.
+    pub(crate) files: Vec<(&'a Path, OwnedFd)>,
 }
 
 /// Whether a stdio step saves the slots it moves, so a failure can put them
@@ -408,9 +430,9 @@ mod tests {
     /// `redirect_output`, leaving the redirect in place when it succeeds, as
     /// the sequence does at step 18.
     fn kept(
-        result: Result<Vec<super::SavedSlot>, crate::DaemonizeError>,
+        result: Result<super::Redirected<'_>, crate::DaemonizeError>,
     ) -> Result<(), crate::DaemonizeError> {
-        result.map(|saved| saved.into_iter().for_each(super::SavedSlot::keep))
+        result.map(|done| done.slots.into_iter().for_each(super::SavedSlot::keep))
     }
 
     use crate::file_identity::file_id;

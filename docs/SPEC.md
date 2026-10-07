@@ -599,8 +599,8 @@ supplementary groups, and whatever `init` did.
 13. **Close inherited fds** (if `close_fds` is true). Close the
     enumerated open fds (or iterate 3..`rlim_cur` where enumeration
     is unavailable), skipping the lockfile fd, the notification pipe
-    fd, a standalone pidfile's fd (kept for step 16's chown, R163), and
-    the descriptors the abort guard holds to undo a foreground failure
+    fd, a standalone pidfile's fd and step 12's stream files (kept for
+    step 16's chown, R163), and the descriptors the abort guard holds to undo a foreground failure
     (R164). See fd closing.
 14. **Resolve the target identity** if a user or group is configured,
     so a missing one fails before `init` runs (R155), and with a user,
@@ -843,9 +843,10 @@ original privileged user) or custom ownership.
 
 The chown goes through the descriptors the sequence holds (`fchown`),
 not the paths (R163): the standalone pidfile's descriptor (kept from
-step 8), the lockfile's, and fds 1 and 2 once step 12 redirected them.
-It reaches the files that were opened even if `init` has since changed
-what the paths name, by a `chroot` or a rename. A symlink planted before
+step 8), the lockfile's, and the stream files step 12 opened (kept, not
+read back from fds 1 and 2). It reaches the files that were opened even
+if `init` has since changed what the paths name, by a `chroot` or a
+rename, or put another file on fd 1 or 2. A symlink planted before
 step 7 or 8 opens the file still redirects that open, so configured
 paths must live in directories not writable by untrusted users.
 
@@ -864,7 +865,8 @@ temporarily override umask.
 When `close_fds` is true (the default), close every open fd except
 0-2, the lockfile fd (from step 7, identified via
 `AsRawFd::as_raw_fd()` on the `Flock`), the notification pipe write
-fd, a standalone pidfile's fd (R163), and the descriptors the abort
+fd, a standalone pidfile's fd and step 12's stream files (R163), and
+the descriptors the abort
 guard holds for a foreground undo (R164). Open fds are enumerated via the platform fd directory —
 `/proc/self/fd` on Linux and Android, `/dev/fd` on macOS — when
 available; where
@@ -1633,7 +1635,7 @@ verification points.
 - R163. Step 16 chowns the descriptors the sequence holds (the pidfile,
   the lockfile, and stdout and stderr when redirected), not their paths,
   so the chown reaches the files it opened even if `init` changed what
-  those paths name. It chowns regular files only: a device, FIFO, or
+  those paths name or what fds 1 and 2 hold. It chowns regular files only: a device, FIFO, or
   socket (`-o /dev/null`, a tty) keeps its owner.
 - R164. A foreground sequence that fails puts back what it changed in
   the caller's process and can restore: stdin, stdout, and stderr, the
