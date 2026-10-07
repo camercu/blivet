@@ -288,8 +288,10 @@ impl DaemonContext {
     /// keeps the lock, restores the default `SIGPIPE` disposition (daemonizing
     /// keeps the Rust runtime's ignored one, which would survive the exec),
     /// and tells the launcher an exec is pending. A successful exec closes the
-    /// notification pipe and the launcher exits 0. `args` is the full argv,
-    /// `args[0]` included; `execvp` searches `PATH` for a bare `program`.
+    /// notification pipe and the launcher exits 0. A process the daemon forked
+    /// earlier, and that has not exec'd, holds the pipe open too: the launcher
+    /// then waits for it to exit. `args` is the full argv, `args[0]` included;
+    /// `execvp` searches `PATH` for a bare `program`.
     ///
     /// Never returns. If the exec fails, this reports the error like
     /// [`report_error`](Self::report_error): `ENOENT` and `EACCES` as
