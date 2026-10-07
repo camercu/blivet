@@ -217,20 +217,17 @@ fn main() -> ExitCode {
             "program path contains null byte".into(),
         ));
     });
+    // argv[0] as the user gave it, not the resolved path: a multi-call binary
+    // reached through a symlink picks its applet by that name (R111).
     let c_args: Vec<CString> = args
         .program
         .iter()
-        .enumerate()
-        .map(|(i, a)| {
-            if i == 0 {
-                c_program.clone()
-            } else {
-                CString::new(a.as_str()).unwrap_or_else(|_| {
-                    ctx.report_error(&DaemonizeError::ExecFailed(format!(
-                        "argument contains null byte: {a}"
-                    )));
-                })
-            }
+        .map(|a| {
+            CString::new(a.as_str()).unwrap_or_else(|_| {
+                ctx.report_error(&DaemonizeError::ExecFailed(format!(
+                    "argument contains null byte: {a}"
+                )));
+            })
         })
         .collect();
 

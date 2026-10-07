@@ -982,9 +982,9 @@ This is a CLI-only convenience; the library requires explicit
 
 The CLI calls `unsafe { daemonize_unchecked(&config) }`, which also
 chowns the configured paths and switches to the configured user and
-group, then `ctx.exec(program, argv)`. argv[0] is the (possibly
-canonicalized) program path; subsequent elements are trailing arguments
-in order. `DaemonContext::exec`:
+group, then `ctx.exec(program, argv)`. `program` is the resolved path;
+argv[0] is the program as the user gave it (R111), and the trailing
+arguments follow in order. `DaemonContext::exec`:
 
 1. Clears `CLOEXEC` on the lockfile fd (so the lock survives exec).
 2. Restores `SIGPIPE` to `SIG_DFL` (R128).
@@ -1405,8 +1405,9 @@ verification points.
 - R109. CLI calls `report_error()` on exec failure.
 - R110. `DaemonContext::exec`, which the CLI uses, clears CLOEXEC on the
   lockfile fd before exec, so the program keeps the lock.
-- R111. `execvp` argv[0] is the program path as provided by user
-  (possibly canonicalized).
+- R111. `execvp` runs the resolved program path, and argv[0] is the
+  program exactly as the user gave it, so a multi-call binary reached
+  through a symlink sees the symlink's name.
 - R112. Trailing args parsed with `trailing_var_arg` +
   `allow_hyphen_values`.
 - R113. All CLI validation occurs before daemonization.

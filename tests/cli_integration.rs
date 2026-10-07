@@ -1285,6 +1285,35 @@ fn no_lock_conflicts_with_explicit_lockfile() {
 
 // --- Hyphen arguments pass through to program ---
 
+// Covers: R111
+//
+// A multi-call binary (busybox, say) picks its applet from argv[0], so a
+// symlink must reach it under the symlink's name, not the target's.
+#[test]
+fn argv0_is_the_program_as_given() {
+    let dir = tempfile::tempdir().unwrap();
+    let applet = dir.path().join("applet");
+    std::os::unix::fs::symlink("/bin/sh", &applet).unwrap();
+    let out = dir.path().join("argv0");
+
+    let output = daemonize_cmd()
+        .args(["-f", "--"])
+        .arg(&applet)
+        .args(["-c", &format!("printf %s \"$0\" > {}", out.display())])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        std::fs::read_to_string(&out).unwrap(),
+        applet.to_str().unwrap()
+    );
+}
+
 // Covers: R111, R112
 #[test]
 fn hyphen_arguments_pass_through() {
