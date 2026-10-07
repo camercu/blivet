@@ -32,7 +32,9 @@
 //!
 //! # Choosing an entry point
 //!
-//! There are two entry points:
+//! There are two entry points, each with a `_with` form that also runs a
+//! privileged `init` closure inside the call, after the fork and before the
+//! user switch ([`daemonize_with`], [`daemonize_with_unchecked`]):
 //!
 //! - [`daemonize`] is the safe default: it verifies the process is
 //!   single-threaded for you, so no `unsafe` is needed. It exists wherever the
