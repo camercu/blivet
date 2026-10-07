@@ -36,6 +36,9 @@
 //!   coverage, not about the platforms: `libc` does define `SIGRTMIN` for the
 //!   solarish targets, which have a real-time range and are not listed here.
 //!   Adding one of them to the table means writing this probe.
+//! - `blivet_sock_cloexec`: macOS, the one listed platform answering "no",
+//!   has no `SOCK_CLOEXEC` in `libc` either, so the absent case cannot name
+//!   the flag it would pass.
 
 /// The highest descriptor number a directory of *static* device nodes is
 /// likely to cover. NetBSD's `MAKEDEV` creates `/dev/fd/0` through
@@ -221,4 +224,25 @@ fn faccessat_rejects_at_eaccess() {
         "an effective-UID check that fails for any other reason is a different \
          bug than the one this claim is about"
     );
+}
+
+/// `blivet_sock_cloexec` claims `socketpair` takes `SOCK_CLOEXEC`. Pass it.
+#[cfg(blivet_sock_cloexec)]
+// Covers: R139
+#[test]
+#[allow(unsafe_code)]
+fn socketpair_takes_sock_cloexec() {
+    use nix::fcntl::{fcntl, FcntlArg, FdFlag};
+    use std::os::fd::{FromRawFd, OwnedFd};
+    let mut fds = [0; 2];
+    let kind = libc::SOCK_STREAM | libc::SOCK_CLOEXEC;
+    // SAFETY: on success socketpair writes two new descriptors into `fds`.
+    let ret = unsafe { libc::socketpair(libc::AF_UNIX, kind, 0, fds.as_mut_ptr()) };
+    nix::errno::Errno::result(ret).expect("socketpair with SOCK_CLOEXEC");
+    for fd in fds {
+        // SAFETY: a new descriptor, owned by nothing else.
+        let end = unsafe { OwnedFd::from_raw_fd(fd) };
+        let flags = fcntl(&end, FcntlArg::F_GETFD).unwrap();
+        assert!(FdFlag::from_bits_truncate(flags).contains(FdFlag::FD_CLOEXEC));
+    }
 }

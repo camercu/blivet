@@ -100,6 +100,11 @@ struct Platform {
     /// capability's default does — declines to assume anything the platform
     /// has not earned. Android is the only listed platform that rejects it.
     faccessat_lacks_eaccess: bool,
+    /// Does `socketpair` take `SOCK_CLOEXEC`, so the notification channel is
+    /// close-on-exec from the moment it exists? Without it a separate `fcntl`
+    /// follows, and a subprocess another thread spawns in between inherits
+    /// the ends. macOS is the only listed platform without it.
+    sock_cloexec: bool,
 }
 
 /// Every platform the crate claims to support, and what each one can do.
@@ -115,6 +120,7 @@ const PLATFORMS: &[Platform] = &[
         fd_dir: Some("/proc/self/fd"),
         rt_signals_reserved: true,
         faccessat_lacks_eaccess: false,
+        sock_cloexec: true,
     },
     Platform {
         // Android is Linux-like in libc but a distinct `target_os`, and it
@@ -128,6 +134,7 @@ const PLATFORMS: &[Platform] = &[
         fd_dir: Some("/proc/self/fd"),
         rt_signals_reserved: true,
         faccessat_lacks_eaccess: true,
+        sock_cloexec: true,
     },
     Platform {
         target_os: "macos",
@@ -136,6 +143,7 @@ const PLATFORMS: &[Platform] = &[
         fd_dir: Some("/dev/fd"),
         rt_signals_reserved: false,
         faccessat_lacks_eaccess: false,
+        sock_cloexec: false,
     },
     Platform {
         target_os: "freebsd",
@@ -144,6 +152,7 @@ const PLATFORMS: &[Platform] = &[
         fd_dir: None,
         rt_signals_reserved: false,
         faccessat_lacks_eaccess: false,
+        sock_cloexec: true,
     },
     Platform {
         target_os: "netbsd",
@@ -152,6 +161,7 @@ const PLATFORMS: &[Platform] = &[
         fd_dir: None,
         rt_signals_reserved: false,
         faccessat_lacks_eaccess: false,
+        sock_cloexec: true,
     },
     Platform {
         target_os: "openbsd",
@@ -160,6 +170,7 @@ const PLATFORMS: &[Platform] = &[
         fd_dir: None,
         rt_signals_reserved: false,
         faccessat_lacks_eaccess: false,
+        sock_cloexec: true,
     },
 ];
 
@@ -207,6 +218,10 @@ fn main() {
         (
             "blivet_faccessat_lacks_eaccess",
             platform.is_some_and(|p| p.faccessat_lacks_eaccess),
+        ),
+        (
+            "blivet_sock_cloexec",
+            platform.is_some_and(|p| p.sock_cloexec),
         ),
     ];
 

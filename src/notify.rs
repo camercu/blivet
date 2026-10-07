@@ -127,17 +127,28 @@ impl NotifyPipe {
 /// write and the daemon cannot read (ADR 0006).
 ///
 /// A socket pair rather than a pipe because a socket can be written with
-/// `MSG_NOSIGNAL` (see [`ChannelWriter`]). The caller sets close-on-exec and
-/// moves the ends above stdio.
+/// `MSG_NOSIGNAL` (see [`ChannelWriter`]). Both ends are close-on-exec
+/// (R107): from creation where `socketpair` takes `SOCK_CLOEXEC`, else by a
+/// second step that a subprocess spawned on another thread in between can
+/// beat. The caller moves the ends above stdio.
 #[allow(unsafe_code)]
 pub(crate) fn channel() -> io::Result<(OwnedFd, OwnedFd)> {
+    #[cfg(blivet_sock_cloexec)]
+    let kind = libc::SOCK_STREAM | libc::SOCK_CLOEXEC;
+    #[cfg(not(blivet_sock_cloexec))]
+    let kind = libc::SOCK_STREAM;
     let mut fds = [0; 2];
     // SAFETY: on success socketpair writes two new descriptors into `fds`.
-    let ret = unsafe { libc::socketpair(libc::AF_UNIX, libc::SOCK_STREAM, 0, fds.as_mut_ptr()) };
+    let ret = unsafe { libc::socketpair(libc::AF_UNIX, kind, 0, fds.as_mut_ptr()) };
     nix::errno::Errno::result(ret)?;
     // SAFETY: both descriptors are new, open, and owned by nothing else.
     let (launcher, daemon) =
         unsafe { (OwnedFd::from_raw_fd(fds[0]), OwnedFd::from_raw_fd(fds[1])) };
+    #[cfg(not(blivet_sock_cloexec))]
+    for end in [&launcher, &daemon] {
+        use nix::fcntl::{fcntl, FcntlArg, FdFlag};
+        fcntl(end, FcntlArg::F_SETFD(FdFlag::FD_CLOEXEC))?;
+    }
     // In this order: macOS fails a shutdown with ENOTCONN once the peer has
     // shut down its writing side.
     shutdown(daemon.as_fd(), libc::SHUT_RD)?;
