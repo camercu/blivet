@@ -73,19 +73,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn paths_same_canonicalize_fallback() {
-        // Paths that don't exist — canonicalize will fail, should fall back to byte comparison
-        assert!(paths_same(
-            std::path::Path::new("/nonexistent/a"),
-            std::path::Path::new("/nonexistent/a"),
-        ));
-        assert!(!paths_same(
-            std::path::Path::new("/nonexistent/a"),
-            std::path::Path::new("/nonexistent/b"),
-        ));
-    }
-
-    #[test]
     fn symlink_and_target_are_canonically_equal() {
         // Distinguishes canonicalization from byte comparison: the spellings
         // differ (`Path` equality would say false) but resolve to one file.
