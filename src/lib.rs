@@ -154,6 +154,10 @@
 //! ```
 
 #![deny(unsafe_code)]
+// `exit` skips every pending `Drop`, the abort guard's among them (R150),
+// and `mem::forget` leaks a guard without running its `Drop`. The library
+// calls neither; tests may, from subprocesses of their own.
+#![cfg_attr(not(test), deny(clippy::exit, clippy::mem_forget))]
 
 // Daemonizing is fork, setsid, signals, and file descriptors — there is no
 // non-Unix fallback to take, and without this the failure is a wall of type
