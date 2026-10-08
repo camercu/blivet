@@ -28,6 +28,22 @@ fmt-check:
 lint:
     {{cargo}} clippy {{locked}} --all-targets -- -D warnings
 
+# Lint everything that is not Rust: spelling, TOML layout, and the GitHub
+# workflows (actionlint runs shellcheck over
+# each `run:` block). Its own recipe, not part of `check`: CI's `ci` job runs
+# `check` on hosts that do not carry these tools, and the `lint-text` job runs
+# this in the nix shell, at the versions shell.nix pins.
+lint-text: lint-typos lint-taplo lint-actions
+
+lint-typos:
+    typos
+
+lint-taplo:
+    taplo format --check
+
+lint-actions:
+    actionlint
+
 # Run cargo-deny checks (advisories, licenses, bans)
 lint-deny:
     cargo deny check
@@ -410,7 +426,7 @@ ci-rtk:
     RTK_CARGO="rtk cargo" just ci
 
 # Run the full CI suite including both container tiers and the node checks
-ci-full: check test package-test docker-test termux-test node-deps check-attribution check-release-config
+ci-full: check lint-text test package-test docker-test termux-test node-deps check-attribution check-release-config
 
 # Install the node packages check-release-config imports, as CI's jobs do.
 [private]

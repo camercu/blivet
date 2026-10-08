@@ -167,6 +167,16 @@ jobs:
             exit 1
           }
 
+  # Spelling, TOML layout, Markdown and the workflows themselves, with the
+  # versions shell.nix pins, so a local `just lint-text` and CI agree.
+  lint-text:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: cachix/install-nix-action@v31
+      - name: Lint everything that is not Rust
+        run: nix-shell --run 'just lint-text'
+
   # nix-shell pins cargo-public-api (shell.nix) and the justfile pins the
   # nightly that renders rustdoc JSON, so CI diffs the snapshot with the
   # exact toolchain that blessed it — either drifting would cause false

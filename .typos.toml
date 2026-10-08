@@ -1,0 +1,14 @@
+# typos configuration. Run via `just lint-typos`.
+# Reference: https://github.com/crate-ci/typos
+
+[default]
+# Auto-generated CHANGELOG.md commit links embed git SHAs whose hex
+# can read as misspellings (e.g. `c159afe` -> `safe`). Ignore the whole
+# `[short](.../commit/long)` link span so semantic-release's changelog
+# regeneration never re-trips the typos lint on a hash.
+extend-ignore-re = ['\[[0-9a-f]{7,}\]\(https?://[^)]*?/commit/[0-9a-f]+\)']
+
+[default.extend-words]
+
+[files]
+extend-exclude = ["target/", "node_modules/", "Cargo.lock", "package-lock.json"]

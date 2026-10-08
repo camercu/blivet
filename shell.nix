@@ -17,5 +17,10 @@ pkgs.mkShell {
     cargo-nextest
     cargo-public-api
     cargo-semver-checks
+    typos
+    taplo
+    markdownlint-cli2
+    actionlint
+    shellcheck
   ];
 }

@@ -1,0 +1,17 @@
+# Taplo config. Reference: https://taplo.tamasfe.dev/configuration/file.html
+#
+# `just lint-taplo` runs `taplo format --check` from the repo root, which walks
+# every `*.toml` it can reach unless excluded: the third-party files under
+# `node_modules/`, build output, and agent worktrees and scratch trees, which
+# hold copies of this repository's own files.
+exclude = [
+    "node_modules/**",
+    "target/**",
+    ".claude/**",
+    ".spike-workspace/**",
+    "mutants.out*/**",
+]
+
+# The repository's existing style: four-space indents, as cargo writes them.
+[formatting]
+indent_string = "    "

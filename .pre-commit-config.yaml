@@ -21,6 +21,12 @@ repos:
         language: system
         pass_filenames: false
         stages: [pre-commit]
+      - id: lint-text
+        name: just lint-text
+        entry: nix-shell --run 'just lint-text'
+        language: system
+        pass_filenames: false
+        stages: [pre-commit]
       - id: commitlint
         name: commitlint
         entry: npx commitlint --edit

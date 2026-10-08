@@ -55,7 +55,13 @@ targets = [
 ]
 
 [dependencies]
-nix = { version = "0.31", features = ["fs", "signal", "process", "user", "resource"] }
+nix = { version = "0.31", features = [
+    "fs",
+    "signal",
+    "process",
+    "user",
+    "resource",
+] }
 clap = { version = "4", features = ["derive"], optional = true }
 thiserror = "2"
 libc = "0.2"
