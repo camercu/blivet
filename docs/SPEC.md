@@ -101,20 +101,18 @@ real-time signal iteration.
 The crate root uses `#![deny(unsafe_code)]`; modules opt back in with
 `#[allow(unsafe_code)]` only where required. Raw libc/syscall FFI whose
 invariants can be upheld internally is encapsulated as safe `pub(crate)`
-wrappers in the module of its concept, which allows `unsafe` at module
-level: `signals.rs`, `thread_count.rs`, and `sys.rs` for the few with no
-concept of their own. The remaining `unsafe` is for operations
-whose safety is *context-dependent* — they require single-threadedness the
-caller establishes — so they live at the call site that owns that contract
+wrappers in the module of its concept: signal handling in `signals.rs`,
+thread counts in `thread_count.rs`, the notification socket in
+`notify.rs`, and `sys.rs` for the few with no concept of their own. The
+remaining `unsafe` is for operations whose safety is
+*context-dependent* — they require single-threadedness the caller
+establishes — so they live at the call site that owns that contract
 rather than behind a fake-safe wrapper.
 
-`unsafe` appears in these places:
+`grep -rn 'allow(unsafe_code)' src` lists every opt-in, test code
+included; that command, not a list here, is the audit's starting point.
+The context-dependent sites, each carrying the single-threaded contract:
 
-- `signals.rs`: signal reset (`libc::sigaction()`, incl. the real-time
-  range via `SIGRTMIN()`/`SIGRTMAX()`), the pidfile cleanup handler
-  (`unlink()`, `raise()`), and the `SIGPIPE` restore before exec.
-- `thread_count.rs`: the per-OS thread-count queries.
-- `sys.rs`: `close()`, `initgroups()`, `_exit()`, `AT_FDCWD`.
 - `forker.rs` / `sequence.rs`: `RealForker::fork` is an `unsafe fn` wrapping
   `nix::unistd::fork()` (`unsafe` since nix 0.24). `daemonize_inner` is itself
   an `unsafe fn` that invokes it as `unsafe { forker.fork() }`, forwarding the
@@ -126,12 +124,11 @@ rather than behind a fake-safe wrapper.
 - `identity.rs`: `ResolvedIdentity::switch_to()` is a crate-private
   `unsafe fn` that calls `setenv` (`USER`/`HOME`/`LOGNAME`); the
   post-fork sequence calls it under `daemonize_inner`'s contract.
-- `steps/process.rs`: `set_env_vars` calls `setenv` in the post-fork sequence — sound
-  because the child is single-threaded by `fork` (or, in foreground mode, the
-  entry point required single-threadedness).
-
-Test code additionally uses `nix::sys::signal::sigaction`. An auditor who
-reads these sites sees every `unsafe` in the crate.
+- `steps/process.rs`: `set_env_vars` calls `setenv` in the post-fork
+  sequence, sound because the child is single-threaded by `fork` (or, in
+  foreground mode, the entry point required single-threadedness).
+  `restore_env_vars` calls `setenv` and `unsetenv` when a foreground start
+  fails, and only before `init`, so the same contract holds (R164).
 
 ---
 
@@ -826,7 +823,7 @@ step 11.
 which is not thread-safe. The checked `daemonize()` and
 `daemonize_with()` check the thread count at entry, and
 `daemonize_with()` checks again after `init` returns, **only when a
-user switch is configured** (the sole `setenv` path; a group-only
+user switch is configured** (the sole `setenv` after `init`; a group-only
 switch performs no `setenv`). An `init` may start threads only if it
 joins them before it returns. The unchecked forms skip both checks.
 
