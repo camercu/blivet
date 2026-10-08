@@ -232,9 +232,8 @@ impl DaemonContext {
         let c_path = CString::new(pidfile.as_os_str().as_bytes()).map_err(|_| {
             DaemonizeError::ValidationError("pidfile path contains NUL byte".into())
         })?;
-        crate::signals::install_pidfile_cleanup_signals(&c_path, signals).map_err(|e| {
-            DaemonizeError::ValidationError(format!("failed to install signal handler: {e}"))
-        })
+        crate::signals::install_pidfile_cleanup_signals(&c_path, signals)
+            .map_err(|e| DaemonizeError::ValidationError(format!("cleanup_on_signals: {e}")))
     }
 
     /// Signals the parent that the daemon is ready.
@@ -809,11 +808,14 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut cfg = DaemonConfig::new();
         cfg.pidfile(dir.path().join("x.pid"));
-        // SIGKILL cannot be caught -> sigaction EINVAL -> ValidationError.
-        assert!(matches!(
-            ctx(&cfg, None, None).cleanup_on_signals(&[libc::SIGKILL]),
-            Err(DaemonizeError::ValidationError(_))
-        ));
+        // SIGKILL cannot be caught, so the allowlist refuses it before any
+        // sigaction: a refusal, not a failed install.
+        let result = ctx(&cfg, None, None).cleanup_on_signals(&[libc::SIGKILL]);
+        assert!(
+            matches!(&result, Err(DaemonizeError::ValidationError(m))
+                if m.starts_with("cleanup_on_signals: signal 9 ")),
+            "{result:?}"
+        );
     }
 
     // Covers: R149
