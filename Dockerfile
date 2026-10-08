@@ -2,7 +2,16 @@
 # `just docker-test`, so this tier and `msrv-check` read one number. No
 # default: a build that does not pass it fails here instead of guessing.
 ARG RUST_VERSION
-FROM rust:${RUST_VERSION}-slim-bookworm
+
+# cargo-mutants for the `mutants` stage, built in a stage of its own so a source
+# change does not rebuild it. Built from source: its releases carry no aarch64
+# Linux binary. Pinned to the version the nixpkgs revision in nix/pinned.nix
+# provides (shell.nix), as NEXTEST_VERSION below is. Bump both together.
+FROM rust:${RUST_VERSION}-slim-bookworm AS cargo-mutants
+ARG CARGO_MUTANTS_VERSION=26.0.0
+RUN cargo install --locked cargo-mutants --version "${CARGO_MUTANTS_VERSION}"
+
+FROM rust:${RUST_VERSION}-slim-bookworm AS test
 
 # Install tools used by integration test helpers
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -53,3 +62,9 @@ RUN cargo build --locked --tests
 # ignored test actually requested — are asserted inside it, next to the flags
 # that satisfy them, so neither can be dropped while the other stays.
 CMD ["sh", "scripts/privileged-test.sh"]
+
+# `just mutants-docker`: the test image plus cargo-mutants, so mutants meet the
+# root tests that kill them.
+FROM test AS mutants
+COPY --from=cargo-mutants /usr/local/cargo/bin/cargo-mutants /usr/local/cargo/bin/
+CMD ["sh", "scripts/privileged-mutants.sh"]

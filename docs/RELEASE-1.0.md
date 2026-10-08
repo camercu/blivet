@@ -35,7 +35,9 @@ non-breaking-able must land first.
 
 - [x] **Full `cargo mutants` sweep** over the whole crate with zero
       missed mutants (or each miss triaged and either tested or
-      documented as unreachable). Done 2026-07-10 on macOS (host) plus
+      documented as unreachable). Run `just mutants-docker` (Linux, as
+      root, ignored tests included) and `just mutants` (the host, for
+      macOS-only code). Done 2026-07-10 on macOS (host) plus
       Linux-with-root (Docker, `--run-ignored all`); equivalent and
       cfg-dead mutants are excluded in `.cargo/mutants.toml`. Residual
       known misses, accepted as documented:

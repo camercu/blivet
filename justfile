@@ -219,39 +219,59 @@ mutants *args:
 
 # Mutation-test only the lines changed since `base`, so the cost follows the
 # size of the change. Work not yet committed counts, new files included, so
-# this runs before a commit as well as in CI.
+# this runs before a commit as well as in CI. Root-only code needs
+# `mutants-docker`: its tests skip here, so its mutants show as missed.
 mutants-diff base="origin/main":
     #!/usr/bin/env bash
     set -euo pipefail
     diff=$(mktemp)
     trap 'rm -f "$diff"' EXIT
+    {{just_executable()}} --justfile {{justfile()}} rust-diff {{base}} > "$diff"
+    {{just_executable()}} --justfile {{justfile()}} cargo-mutants --in-diff "$diff"
+
+# Mutation-test in the privileged container, as root with the ignored tests,
+# so root-only code meets the tests that can kill its mutants. With `base`,
+# only the lines changed since it, as `mutants-diff` selects them; without,
+# the whole crate. `mutants.out` comes back to the host either way.
+mutants-docker base="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    just build-context | docker build --build-arg RUST_VERSION={{docker_rust}} \
+        --target mutants -t blivet-mutants -
+    diff=$(mktemp)
+    name="blivet-mutants-$$"
+    trap 'rm -f "$diff"; docker rm -f "$name" >/dev/null 2>&1 || true' EXIT
+    mode=""
+    if [ -n "{{base}}" ]; then
+        {{just_executable()}} --justfile {{justfile()}} rust-diff {{base}} > "$diff"
+        mode="--in-diff"
+    fi
+    rc=0
+    docker run -i --name "$name" --init --privileged blivet-mutants \
+        sh scripts/privileged-mutants.sh $mode < "$diff" || rc=$?
+    rm -rf mutants.out
+    docker cp "$name:/src/mutants.out" mutants.out || true
+    exit "$rc"
+
+# The Rust lines changed since `base`, as a diff on stdout, for cargo-mutants'
+# `--in-diff`. Uncommitted and untracked files count.
+[private]
+rust-diff base:
+    #!/usr/bin/env bash
+    set -euo pipefail
     # Rust sources only: cargo-mutants mutates nothing else, and its diff parser
     # takes a removed line that starts with "-- " for a file header and panics.
     # Markdown has such lines; Rust source has none outside a string literal.
-    git diff "$(git merge-base {{base}} HEAD)" -- '*.rs' > "$diff"
+    git diff "$(git merge-base {{base}} HEAD)" -- '*.rs'
     # `git diff` leaves out files git does not track yet; add each as new.
     git ls-files -z --others --exclude-standard -- '*.rs' | while IFS= read -r -d '' f; do
-        git diff --no-index -- /dev/null "$f" >> "$diff" || true
+        git diff --no-index -- /dev/null "$f" || true
     done
-    {{just_executable()}} --justfile {{justfile()}} cargo-mutants --in-diff "$diff"
 
-# cargo-mutants, with a timed-out mutant counted as caught: its tests did not
-# pass. Exit 3 cannot say that alone, because cargo-mutants returns it whenever
-# any mutant timed out, ahead of the 2 for a missed one; so 3 passes only when
-# `mutants.out/missed.txt` exists and is empty. An earlier run's file is removed
-# first, so a run that writes elsewhere (`-o DIR`) finds none and 3 fails.
+# cargo-mutants, a timed-out mutant counted as caught (scripts/cargo-mutants.sh).
 [private]
 cargo-mutants *args:
-    #!/usr/bin/env bash
-    set -uo pipefail
-    rm -f mutants.out/missed.txt
-    cargo mutants ${CARGO_LOCKED:+--cargo-arg=$CARGO_LOCKED} {{args}} && exit 0
-    rc=$?
-    if [ "$rc" -eq 3 ] && [ -f mutants.out/missed.txt ] && [ ! -s mutants.out/missed.txt ]; then
-        echo "cargo-mutants: some mutants timed out and none were missed; a timeout counts as caught" >&2
-        exit 0
-    fi
-    exit "$rc"
+    sh scripts/cargo-mutants.sh {{args}}
 
 # The build context both container tiers get, as a tar stream on stdout: the
 # files git tracks, plus untracked files `.gitignore` does not exclude — what
@@ -269,7 +289,7 @@ build-context:
 
 # Build and run Docker container for root + Linux-specific tests
 docker-test:
-    just build-context | docker build --build-arg RUST_VERSION={{docker_rust}} -t blivet-test -
+    just build-context | docker build --build-arg RUST_VERSION={{docker_rust}} --target test -t blivet-test -
     docker run --rm --init --privileged blivet-test
 
 # Run the library tests against bionic, Android's libc, in a Termux container.
