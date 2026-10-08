@@ -950,13 +950,12 @@ Before daemonization, the CLI resolves the program path to ensure it
 remains valid after `chdir` changes the working directory:
 
 - **Path contains `/`** (e.g., `./my-app`, `../bin/foo`,
-  `subdir/foo`): canonicalize via `std::fs::canonicalize()`. If
+  `/usr/bin/foo`): canonicalize via `std::fs::canonicalize()`. If
   canonicalization fails, exit with `ProgramNotFound` (code 66). If
   the canonicalized path is not executable by the current euid, also
   exit `ProgramNotFound`. Store the canonicalized absolute path for
-  exec.
-- **Absolute path** (e.g., `/usr/bin/foo`): validate existence and
-  executability. No canonicalization needed.
+  exec, and for argv[0] the path made absolute against the current
+  directory without resolving symlinks (`std::path::absolute`, R111).
 - **Bare name without `/`** (e.g., `my-app`): leave as-is. `execvp`
   searches PATH, which works regardless of CWD. A bare name that is
   missing or not executable is therefore only discovered at exec time;
@@ -989,7 +988,8 @@ This is a CLI-only convenience; the library requires explicit
 The CLI calls `unsafe { daemonize_unchecked(&config) }`, which also
 chowns the configured paths and switches to the configured user and
 group, then `ctx.exec(program, argv)`. `program` is the resolved path;
-argv[0] is the program as the user gave it (R111), and the trailing
+argv[0] is the program as the user gave it, made absolute if it is a
+relative path (R111), and the trailing
 arguments follow in order. `DaemonContext::exec`:
 
 1. Clears `CLOEXEC` on the lockfile fd (so the lock survives exec).
@@ -1417,8 +1417,11 @@ verification points.
 - R110. `DaemonContext::exec`, which the CLI uses, clears CLOEXEC on the
   lockfile fd before exec, so the program keeps the lock.
 - R111. `execvp` runs the resolved program path, and argv[0] is the
-  program exactly as the user gave it, so a multi-call binary reached
-  through a symlink sees the symlink's name.
+  program as the user gave it, with symlinks unresolved, so a
+  multi-call binary reached through a symlink sees the symlink's name.
+  A relative path is made absolute against the launch directory, so
+  argv[0] still names the program from the daemon's `/`; a bare name
+  stays bare.
 - R112. Trailing args parsed with `trailing_var_arg` +
   `allow_hyphen_values`.
 - R113. All CLI validation occurs before daemonization.

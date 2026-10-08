@@ -144,8 +144,11 @@ fn main() -> ExitCode {
     config.foreground(args.foreground);
 
     // Resolve program path before daemonization
-    let program_path = resolve_program_path(&args.program[0]);
-    let program_path = match program_path {
+    let program = resolve_program(&args.program[0]);
+    let Program {
+        path: program_path,
+        argv0,
+    } = match program {
         Ok(p) => p,
         Err(e) => {
             eprintln!("{e}");
@@ -217,11 +220,8 @@ fn main() -> ExitCode {
             "program path contains null byte".into(),
         ));
     });
-    // argv[0] as the user gave it, not the resolved path: a multi-call binary
-    // reached through a symlink picks its applet by that name (R111).
-    let c_args: Vec<CString> = args
-        .program
-        .iter()
+    let c_args: Vec<CString> = std::iter::once(&argv0)
+        .chain(&args.program[1..])
         .map(|a| {
             CString::new(a.as_str()).unwrap_or_else(|_| {
                 ctx.report_error(&DaemonizeError::ExecFailed(format!(
@@ -236,26 +236,43 @@ fn main() -> ExitCode {
     ctx.exec(&c_program, &c_args)
 }
 
-fn resolve_program_path(program: &str) -> Result<String, DaemonizeError> {
-    if program.contains('/') {
-        // Relative or absolute path with /: canonicalize
-        let canonical = std::fs::canonicalize(program).map_err(|e| {
-            DaemonizeError::ProgramNotFound(format!("cannot resolve {program}: {e}"))
-        })?;
-        let path_str = canonical
-            .to_str()
-            .ok_or_else(|| DaemonizeError::ProgramNotFound("path is not valid UTF-8".into()))?;
-        // Check executable
-        if nix::unistd::access(&canonical, nix::unistd::AccessFlags::X_OK).is_err() {
-            return Err(DaemonizeError::ProgramNotFound(format!(
-                "not executable: {path_str}"
-            )));
-        }
-        Ok(path_str.to_string())
-    } else {
-        // Bare name: execvp will search PATH
-        Ok(program.to_string())
+/// The program to exec, worked out before the daemon changes directory.
+struct Program {
+    /// What `execvp` runs: canonical for a path, a bare name for `PATH`.
+    path: String,
+    /// `argv[0]` (R111). Not the canonical path: a multi-call binary reached
+    /// through a symlink picks its applet by the link's name. A relative path
+    /// is made absolute, as the daemon runs from `/`.
+    argv0: String,
+}
+
+fn resolve_program(program: &str) -> Result<Program, DaemonizeError> {
+    if !program.contains('/') {
+        // Bare name: execvp searches PATH, which means the same from `/`.
+        return Ok(Program {
+            path: program.to_string(),
+            argv0: program.to_string(),
+        });
     }
+    let not_found = |e: std::io::Error| {
+        DaemonizeError::ProgramNotFound(format!("cannot resolve {program}: {e}"))
+    };
+    let utf8 = |p: PathBuf| {
+        p.into_os_string()
+            .into_string()
+            .map_err(|_| DaemonizeError::ProgramNotFound("path is not valid UTF-8".into()))
+    };
+    let canonical = std::fs::canonicalize(program).map_err(not_found)?;
+    if nix::unistd::access(&canonical, nix::unistd::AccessFlags::X_OK).is_err() {
+        return Err(DaemonizeError::ProgramNotFound(format!(
+            "not executable: {}",
+            canonical.display()
+        )));
+    }
+    Ok(Program {
+        path: utf8(canonical)?,
+        argv0: utf8(std::path::absolute(program).map_err(not_found)?)?,
+    })
 }
 
 /// Derive a stderr path from a stdout path.

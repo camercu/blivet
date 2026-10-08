@@ -1314,6 +1314,58 @@ fn argv0_is_the_program_as_given() {
     );
 }
 
+// Covers: R111
+//
+// The daemon runs from `/`, so a relative argv[0] would name nothing there:
+// a program that re-execs itself through argv[0] would fail. It is made
+// absolute against the launch directory, still without resolving the link.
+#[test]
+fn a_relative_argv0_is_made_absolute_without_resolving_links() {
+    let dir = tempfile::tempdir().unwrap();
+    std::os::unix::fs::symlink("/bin/sh", dir.path().join("applet")).unwrap();
+    let out = dir.path().join("argv0");
+
+    let output = daemonize_cmd()
+        .current_dir(dir.path())
+        .args(["-f", "--", "./applet"])
+        .args(["-c", &format!("printf %s \"$0\" > {}", out.display())])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let launch_dir = dir.path().canonicalize().unwrap();
+    assert_eq!(
+        std::fs::read_to_string(&out).unwrap(),
+        launch_dir.join("applet").to_str().unwrap()
+    );
+}
+
+// Covers: R111
+//
+// A bare name is looked up in PATH, so it means the same from `/`: it stays.
+#[test]
+fn a_bare_argv0_stays_as_given() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("argv0");
+
+    let output = daemonize_cmd()
+        .args(["-f", "--", "sh", "-c"])
+        .arg(format!("printf %s \"$0\" > {}", out.display()))
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(std::fs::read_to_string(&out).unwrap(), "sh");
+}
+
 // Covers: R111, R112
 #[test]
 fn hyphen_arguments_pass_through() {
