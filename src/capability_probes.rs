@@ -231,6 +231,7 @@ fn faccessat_rejects_at_eaccess() {
 // Covers: R139
 #[test]
 #[allow(unsafe_code)]
+#[allow(clippy::disallowed_methods)] // probes the raw call the channel makes
 fn socketpair_takes_sock_cloexec() {
     use nix::fcntl::{fcntl, FcntlArg, FdFlag};
     use std::os::fd::{FromRawFd, OwnedFd};

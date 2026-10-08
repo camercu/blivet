@@ -132,6 +132,7 @@ impl NotifyPipe {
 /// second step that a subprocess spawned on another thread in between can
 /// beat. The caller moves the ends above stdio.
 #[allow(unsafe_code)]
+#[allow(clippy::disallowed_methods)] // the one place it is allowed
 pub(crate) fn channel() -> io::Result<(OwnedFd, OwnedFd)> {
     #[cfg(blivet_sock_cloexec)]
     let kind = libc::SOCK_STREAM | libc::SOCK_CLOEXEC;
