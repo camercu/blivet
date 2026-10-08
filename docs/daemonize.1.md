@@ -139,6 +139,12 @@ Exit codes follow the **sysexits.h** conventions:
 **0**
 :   Daemon started successfully.
 
+**1**
+:   The daemon ended before it reached the program without reporting
+    why, for example killed by a signal; or the notification it sent
+    was malformed. Not a **sysexits.h** value, so it cannot be mistaken
+    for a categorized failure.
+
 **64** (EX_USAGE)
 :   Configuration or validation error.
 
@@ -152,6 +158,10 @@ Exit codes follow the **sysexits.h** conventions:
 
 **69** (EX_UNAVAILABLE)
 :   Lock file held by another process.
+
+**70** (EX_SOFTWARE)
+:   Internal error: the daemon panicked before it reached the program.
+    The panic text is printed.
 
 **71** (EX_OSERR)
 :   OS error: fork, setsid, or chdir failed; a required post-fork

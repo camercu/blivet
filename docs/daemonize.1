@@ -170,6 +170,13 @@ Exit codes follow the \f[B]sysexits.h\f[R] conventions:
 \f[B]0\f[R]
 Daemon started successfully.
 .TP
+\f[B]1\f[R]
+The daemon ended before it reached the program without reporting why,
+for example killed by a signal; or the notification it sent was
+malformed.
+Not a \f[B]sysexits.h\f[R] value, so it cannot be mistaken for a
+categorized failure.
+.TP
 \f[B]64\f[R] (EX_USAGE)
 Configuration or validation error.
 .TP
@@ -183,6 +190,10 @@ User or group not found.
 .TP
 \f[B]69\f[R] (EX_UNAVAILABLE)
 Lock file held by another process.
+.TP
+\f[B]70\f[R] (EX_SOFTWARE)
+Internal error: the daemon panicked before it reached the program.
+The panic text is printed.
 .TP
 \f[B]71\f[R] (EX_OSERR)
 OS error: fork, setsid, or chdir failed; a required post\-fork system
