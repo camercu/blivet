@@ -237,6 +237,11 @@ impl AbortGuard<'_> {
         }
     }
 
+    /// Stops restoring the env: `init` may start threads (R164).
+    fn forget_env(&mut self) {
+        self.env.clear();
+    }
+
     /// Saves the supplementary groups before step 14 replaces them, in
     /// foreground mode. Best-effort, as the working directory is.
     fn save_groups(&mut self) {
@@ -449,7 +454,10 @@ unsafe fn run_post_fork<T>(
     // Step 15: The caller's privileged init (R153). After the lock, so only
     // the instance holding it runs; after the fd sweep, so what it opens
     // stays open. An error is the sequence's, and the abort guard removes the
-    // pidfile (R154).
+    // pidfile (R154). From here other threads may run, and `setenv` with one
+    // alive is undefined behaviour, so a failure leaves the env as step 11
+    // set it.
+    abort.forget_env();
     let value = init()?;
 
     // Steps 16-17: Hand the daemon's files to the target identity while still
@@ -679,19 +687,18 @@ mod tests {
 
     // Covers: R164
     #[test]
-    fn a_failed_foreground_start_restores_signals_and_env() {
-        run_in_subprocess(
-            "sequence::tests::a_failed_foreground_start_restores_signals_and_env_subprocess",
-        );
+    fn a_failed_foreground_start_restores_signals() {
+        run_in_subprocess("sequence::tests::a_failed_foreground_start_restores_signals_subprocess");
     }
 
     /// The caller's handlers (the Rust runtime's stack-overflow SIGSEGV one
-    /// among them), its mask, and its environment come back when the start
-    /// fails after steps 9-11 changed them.
+    /// among them) and its mask come back when the start fails after steps 9
+    /// and 10 changed them, even from init, as sigaction and sigprocmask are
+    /// safe with other threads running.
     #[test]
     #[ignore]
     #[allow(unsafe_code)]
-    fn a_failed_foreground_start_restores_signals_and_env_subprocess() {
+    fn a_failed_foreground_start_restores_signals_subprocess() {
         use nix::sys::signal::{sigaction, SaFlags, SigAction, SigHandler, SigSet, Signal};
         if !is_subprocess() {
             return;
@@ -706,31 +713,94 @@ mod tests {
         let mut blocked = SigSet::empty();
         blocked.add(Signal::SIGUSR2);
         blocked.thread_block().unwrap();
-        // SAFETY: this subprocess runs one thread.
-        unsafe {
-            std::env::set_var("BLIVET_KEPT", "caller");
-            std::env::remove_var("BLIVET_NEW");
-        }
         let before = signal_state();
         let mut config = DaemonConfig::new();
-        config
-            .foreground(true)
-            .close_fds(false)
-            .env("BLIVET_KEPT", "daemon")
-            .env("BLIVET_NEW", "daemon");
+        config.foreground(true).close_fds(false);
 
         let result: Result<(DaemonContext, ()), _> =
             run_inner_with(&config, &mut NullForker::new(vec![], Ok(())), || {
-                assert_eq!(std::env::var("BLIVET_KEPT").unwrap(), "daemon");
                 Err(DaemonizeError::application(75, "database unreachable"))
             });
 
         assert!(result.is_err());
         assert_eq!(signal_state(), before, "signal state not restored");
+    }
+
+    // Covers: R164
+    #[test]
+    fn a_start_failing_before_init_restores_the_env() {
+        run_in_subprocess(
+            "sequence::tests::a_start_failing_before_init_restores_the_env_subprocess",
+        );
+    }
+
+    #[test]
+    #[ignore]
+    #[allow(unsafe_code)]
+    fn a_start_failing_before_init_restores_the_env_subprocess() {
+        if !is_subprocess() {
+            return;
+        }
+        // SAFETY: this subprocess runs one thread.
+        unsafe {
+            std::env::set_var("BLIVET_KEPT", "caller");
+            std::env::remove_var("BLIVET_NEW");
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = DaemonConfig::new();
+        config
+            .foreground(true)
+            .close_fds(false)
+            .stdout(dir.path().join("app.log"))
+            .env("BLIVET_KEPT", "daemon")
+            .env("BLIVET_NEW", "daemon");
+        steps::failpoints::STREAM_TRUNCATE_FAILS.set();
+
+        let result = run_inner(&config, &mut NullForker::new(vec![], Ok(())));
+
+        assert!(
+            matches!(result, Err(DaemonizeError::OutputFileError(_))),
+            "{result:?}"
+        );
         assert_eq!(std::env::var("BLIVET_KEPT").unwrap(), "caller");
         assert!(
             std::env::var_os("BLIVET_NEW").is_none(),
             "a set variable stayed"
+        );
+    }
+
+    // Covers: R164
+    #[test]
+    fn a_start_failing_in_init_leaves_the_env_alone() {
+        run_in_subprocess(
+            "sequence::tests::a_start_failing_in_init_leaves_the_env_alone_subprocess",
+        );
+    }
+
+    /// From init on, other threads may run, and `setenv` with another thread
+    /// alive is undefined behaviour. The env stays as step 11 set it.
+    #[test]
+    #[ignore]
+    fn a_start_failing_in_init_leaves_the_env_alone_subprocess() {
+        if !is_subprocess() {
+            return;
+        }
+        let mut config = DaemonConfig::new();
+        config
+            .foreground(true)
+            .close_fds(false)
+            .env("BLIVET_SET", "daemon");
+
+        let result: Result<(DaemonContext, ()), _> =
+            run_inner_with(&config, &mut NullForker::new(vec![], Ok(())), || {
+                Err(DaemonizeError::application(75, "database unreachable"))
+            });
+
+        assert!(result.is_err());
+        assert_eq!(
+            std::env::var("BLIVET_SET").as_deref(),
+            Ok("daemon"),
+            "the env was restored after init, when threads may run"
         );
     }
 
