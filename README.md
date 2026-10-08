@@ -73,8 +73,10 @@ exits 0, or the error's code
 
 That message releases the launcher, which exits 0. If the daemon calls
 `report_error()`, the launcher exits with that error's `sysexits.h` code. If the
-daemon ends any other way before notifying, the launcher exits 1. That covers an
-early return, a panic, a kill by a signal, and a call to `std::process::exit`.
+daemon panics during daemonizing, in `init` too, the launcher exits 70 with the
+panic text. If the daemon ends any other way before notifying, the launcher
+exits 1. That covers an early return, a later panic, a kill by a signal, and a
+call to `std::process::exit`.
 
 The daemonize call must run **single-threaded**. [Safety](#safety) explains
 why.
