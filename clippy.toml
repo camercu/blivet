@@ -6,6 +6,10 @@ disallowed-methods = [
     { path = "nix::unistd::dup2_stdin", reason = "moves a stdio slot; only redirect_to_devnull and StdioSlot::dup2 may, and they assert test isolation" },
     { path = "nix::unistd::dup2_stdout", reason = "moves a stdio slot; only redirect_to_devnull and StdioSlot::dup2 may, and they assert test isolation" },
     { path = "nix::unistd::dup2_stderr", reason = "moves a stdio slot; only redirect_to_devnull and StdioSlot::dup2 may, and they assert test isolation" },
+    { path = "std::env::set_var", reason = "setenv races any other thread's environ read; only the single-threaded steps may (set_env_vars, restore_env_vars, identity::switch_to; tests: allow it)" },
+    { path = "std::env::remove_var", reason = "unsetenv races any other thread's environ read; only restore_env_vars may (tests: allow it)" },
+    { path = "nix::unistd::write", reason = "a write to the notification channel raises SIGPIPE when the launcher is gone; write through notify::ChannelWriter (pidfile contents: allow it)" },
+    { path = "libc::write", reason = "a write to the notification channel raises SIGPIPE when the launcher is gone; write through notify::ChannelWriter" },
 ]
 disallowed-macros = [
     { path = "std::eprintln", reason = "panics when the write fails, and a library error path then unwinds into the caller's code; use notify::print_on_stderr (CLI, tests, build script: allow it)" },

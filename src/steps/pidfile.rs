@@ -139,6 +139,7 @@ fn inject_pidfile_write_failure() -> Result<(), DaemonizeError> {
 }
 
 /// Write all bytes to a file descriptor, looping on partial writes.
+#[allow(clippy::disallowed_methods)] // the pidfile, a regular file: SIGPIPE cannot hit it
 fn write_all_fd(fd: impl AsFd, buf: &[u8]) -> Result<(), nix::errno::Errno> {
     let fd = fd.as_fd();
     let mut written = 0;

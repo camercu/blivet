@@ -238,6 +238,7 @@ mod tests {
     /// Closes every fd it was not told to keep, and keeps the ones it was.
     ///
     /// Closes fds process-wide, so only an isolated subprocess may call it.
+    #[allow(clippy::disallowed_methods)] // a test pipe or file, not the channel: SIGPIPE cannot hit it
     fn assert_closes_all_but_skipped() {
         let (rd, wr) = crate::test_support::make_pipe();
         // A second pipe deliberately left out of the skip list: it must be

@@ -191,7 +191,11 @@ impl ResolvedIdentity {
             ] {
                 // SAFETY: this function's contract requires a single thread,
                 // so the `setenv` cannot race another thread's `environ` read.
-                unsafe { std::env::set_var(key, value) };
+                #[allow(clippy::disallowed_methods)]
+                // setenv thread safety: single thread, per the contract
+                unsafe {
+                    std::env::set_var(key, value)
+                };
             }
         }
         Ok(())

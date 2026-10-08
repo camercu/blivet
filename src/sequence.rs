@@ -739,6 +739,7 @@ mod tests {
     #[test]
     #[ignore]
     #[allow(unsafe_code)]
+    #[allow(clippy::disallowed_methods)] // setenv thread safety: a one-thread subprocess
     fn a_start_failing_before_init_restores_the_env_subprocess() {
         if !is_subprocess() {
             return;
@@ -2119,6 +2120,7 @@ mod tests {
 
     #[test]
     #[ignore]
+    #[allow(clippy::disallowed_methods)] // a test pipe or file, not the channel: SIGPIPE cannot hit it
     fn close_fds_false_preserves_fds_subprocess() {
         if !is_subprocess() {
             return;

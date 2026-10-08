@@ -67,6 +67,7 @@ pub(crate) fn clear_signal_mask() -> Result<nix::sys::signal::SigSet, DaemonizeE
 /// Returns each variable's previous value, in the order set, for
 /// [`restore_env_vars`] to put back after a foreground failure (R164).
 #[allow(unsafe_code)]
+#[allow(clippy::disallowed_methods)] // setenv thread safety: single thread, per the contract
 pub(crate) fn set_env_vars(env: &[(String, String)]) -> Vec<(String, Option<OsString>)> {
     #[cfg(test)]
     crate::test_support::assert_isolated("set_env_vars");
@@ -83,6 +84,7 @@ pub(crate) fn set_env_vars(env: &[(String, String)]) -> Vec<(String, Option<OsSt
 /// Puts back what [`set_env_vars`] replaced, latest first, so a key set twice
 /// ends at the value it had before either. Single-threaded, as `set_env_vars`.
 #[allow(unsafe_code)]
+#[allow(clippy::disallowed_methods)] // setenv thread safety: before init, single thread
 pub(crate) fn restore_env_vars(was: &mut Vec<(String, Option<OsString>)>) {
     while let Some((key, value)) = was.pop() {
         match value {

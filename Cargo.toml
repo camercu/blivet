@@ -73,5 +73,7 @@ signal-hook = "0.4"
 mutants = "0.0.4"
 
 [lints.clippy]
+disallowed_methods = "deny"
+disallowed_macros = "deny"
 undocumented_unsafe_blocks = "deny"
 multiple_unsafe_ops_per_block = "deny"

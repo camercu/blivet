@@ -1077,6 +1077,7 @@ mod tests {
 
     #[test]
     #[ignore]
+    #[allow(clippy::disallowed_methods)] // writes the redirect's file, not the channel
     fn execute_redirect_into_a_closed_stdout_slot_subprocess() {
         if !is_subprocess() {
             return;
@@ -1111,6 +1112,7 @@ mod tests {
 
     #[test]
     #[ignore]
+    #[allow(clippy::disallowed_methods)] // writes the redirect's file, not the channel
     fn execute_redirect_into_a_closed_stderr_slot_subprocess() {
         if !is_subprocess() {
             return;
