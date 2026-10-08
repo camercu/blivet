@@ -1,20 +1,32 @@
+# cargo-deny configuration. Run via `just lint-deny`.
+# Reference: https://embarkstudios.github.io/cargo-deny/
+
 [graph]
 targets = []
-all-features = false
+# Every optional feature's dependencies are checked too, not only the defaults.
+all-features = true
 
 [advisories]
+# A yanked crate was pulled for a reason; resolving to one is a failure.
+yanked = "deny"
 ignore = []
 
 [licenses]
 allow = ["MIT", "Apache-2.0", "Unicode-3.0"]
 confidence-threshold = 0.8
+exceptions = []
 
 [bans]
 multiple-versions = "warn"
-wildcards = "allow"
+# A `*` version requirement accepts whatever is published next.
+wildcards = "deny"
+# Path dependencies carry no version and would otherwise count as wildcards.
+allow-wildcard-paths = true
 
 [sources]
-unknown-registry = "warn"
-unknown-git = "warn"
+# Only crates.io: a crate from anywhere else is a supply-chain decision, made
+# by adding it to allow-registry or allow-git here, not by default.
+unknown-registry = "deny"
+unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
 allow-git = []
