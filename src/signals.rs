@@ -27,7 +27,12 @@
 /// arguments, so this is a should-not-happen guard) so the caller reports it
 /// to the parent rather than panicking. `EINVAL` — an uncatchable or invalid
 /// signal number — is skipped silently.
-pub(crate) fn reset_signal_dispositions() -> Result<(), crate::error::DaemonizeError> {
+///
+/// With `saved`, each disposition it replaces is pushed there as it goes, so
+/// a foreground failure, this one's included, can put them back (R164).
+pub(crate) fn reset_signal_dispositions(
+    mut saved: Option<&mut Vec<Disposition>>,
+) -> Result<(), crate::error::DaemonizeError> {
     #[cfg(test)]
     crate::test_support::assert_isolated("reset_signal_dispositions");
     #[cfg(test)]
@@ -47,8 +52,13 @@ pub(crate) fn reset_signal_dispositions() -> Result<(), crate::error::DaemonizeE
         unsafe { libc::sigemptyset(&mut sa.sa_mask) };
         sa.sa_flags = 0;
 
-        let ret = unsafe { libc::sigaction(sig, &sa, std::ptr::null_mut()) };
-        if ret != 0 {
+        let mut was: libc::sigaction = unsafe { std::mem::zeroed() };
+        let ret = unsafe { libc::sigaction(sig, &sa, &mut was) };
+        if ret == 0 {
+            if let Some(saved) = saved.as_deref_mut() {
+                saved.push(Disposition { sig, was });
+            }
+        } else {
             let err = std::io::Error::last_os_error();
             if err.raw_os_error() != Some(libc::EINVAL) {
                 return Err(crate::error::DaemonizeError::SystemError(format!(
@@ -59,6 +69,19 @@ pub(crate) fn reset_signal_dispositions() -> Result<(), crate::error::DaemonizeE
         }
     }
     Ok(())
+}
+
+/// A signal's disposition as step 9 found it.
+pub(crate) struct Disposition {
+    sig: i32,
+    was: libc::sigaction,
+}
+
+/// Puts back what [`reset_signal_dispositions`] replaced, latest first.
+pub(crate) fn restore_dispositions(saved: &mut Vec<Disposition>) {
+    while let Some(Disposition { sig, was }) = saved.pop() {
+        unsafe { libc::sigaction(sig, &was, std::ptr::null_mut()) };
+    }
 }
 
 /// Returns the range of signal numbers to reset.
@@ -297,7 +320,7 @@ mod tests {
         );
 
         // Reset all dispositions
-        reset_signal_dispositions().unwrap();
+        reset_signal_dispositions(None).unwrap();
 
         // Read back SIGUSR1 disposition — should be SIG_DFL now
         let after_reset = unsafe { sigaction(Signal::SIGUSR1, &old) }.unwrap();
@@ -329,7 +352,7 @@ mod tests {
         // silent process death instead of an EPIPE error.
         let ign = SigAction::new(SigHandler::SigIgn, SaFlags::empty(), SigSet::empty());
         unsafe { sigaction(Signal::SIGPIPE, &ign) }.unwrap();
-        reset_signal_dispositions().unwrap();
+        reset_signal_dispositions(None).unwrap();
         let after = unsafe { sigaction(Signal::SIGPIPE, &ign) }.unwrap();
         assert!(
             matches!(after.handler(), SigHandler::SigIgn),
@@ -340,7 +363,7 @@ mod tests {
         // not force SIG_IGN: an explicit SIG_DFL stays SIG_DFL.
         let dfl = SigAction::new(SigHandler::SigDfl, SaFlags::empty(), SigSet::empty());
         unsafe { sigaction(Signal::SIGPIPE, &dfl) }.unwrap();
-        reset_signal_dispositions().unwrap();
+        reset_signal_dispositions(None).unwrap();
         let after = unsafe { sigaction(Signal::SIGPIPE, &dfl) }.unwrap();
         assert!(
             matches!(after.handler(), SigHandler::SigDfl),

@@ -159,9 +159,11 @@ fn panicked(payload: &(dyn std::any::Any + Send)) -> DaemonizeError {
 }
 
 /// What a failed sequence undoes (R164), in the reverse of the order it was
-/// done: stdio slots (steps 12 and 6), the working directory (step 5), the
-/// umask (step 4), the pidfile (step 8), and last the lock (step 7). A
-/// half-done identity switch (step 17) undoes itself.
+/// done: the supplementary groups (step 14), stdio slots (steps 12 and 6),
+/// the environment (step 11), the signal mask (step 10), the signal
+/// dispositions (step 9), the working directory (step 5), the umask (step 4),
+/// the pidfile (step 8), and last the lock (step 7). A half-done identity
+/// switch (step 17) undoes itself.
 ///
 /// In foreground mode the process is the caller's, and it gets back the parts
 /// that can be restored. In daemon mode the process exits on failure, so only
@@ -180,6 +182,10 @@ struct AbortGuard<'a> {
     stdio: Vec<steps::SavedSlot>,
     cwd: Option<OwnedFd>,
     umask: Option<nix::sys::stat::Mode>,
+    dispositions: Vec<signals::Disposition>,
+    mask: Option<nix::sys::signal::SigSet>,
+    env: Vec<(String, Option<std::ffi::OsString>)>,
+    groups: Option<Vec<libc::gid_t>>,
     /// The pidfile this process owns from the second half of step 8: written
     /// or truncated by it, so a failure must not leave it naming a process
     /// that never started. Removed whatever
@@ -200,8 +206,42 @@ impl AbortGuard<'_> {
             stdio: Vec::new(),
             cwd: None,
             umask: None,
+            dispositions: Vec::new(),
+            mask: None,
+            env: Vec::new(),
+            groups: None,
             pidfile: None,
             lock: None,
+        }
+    }
+
+    /// Where step 9 records the dispositions it replaces, in foreground mode.
+    fn dispositions(&mut self) -> Option<&mut Vec<signals::Disposition>> {
+        match self.rollback {
+            steps::Rollback::PutBack => Some(&mut self.dispositions),
+            steps::Rollback::Skip => None,
+        }
+    }
+
+    /// The signal mask step 10 replaced, to put back in foreground mode.
+    fn note_mask(&mut self, old: nix::sys::signal::SigSet) {
+        if let steps::Rollback::PutBack = self.rollback {
+            self.mask = Some(old);
+        }
+    }
+
+    /// The variables step 11 replaced, to put back in foreground mode.
+    fn note_env(&mut self, old: Vec<(String, Option<std::ffi::OsString>)>) {
+        if let steps::Rollback::PutBack = self.rollback {
+            self.env = old;
+        }
+    }
+
+    /// Saves the supplementary groups before step 14 replaces them, in
+    /// foreground mode. Best-effort, as the working directory is.
+    fn save_groups(&mut self) {
+        if let steps::Rollback::PutBack = self.rollback {
+            self.groups = crate::sys::raw_getgroups().ok();
         }
     }
 
@@ -244,6 +284,10 @@ impl AbortGuard<'_> {
         self.stdio.drain(..).for_each(steps::SavedSlot::keep);
         self.cwd = None;
         self.umask = None;
+        self.dispositions.clear();
+        self.mask = None;
+        self.env.clear();
+        self.groups = None;
         self.pidfile = None;
         self.lock.take()
     }
@@ -251,8 +295,16 @@ impl AbortGuard<'_> {
 
 impl Drop for AbortGuard<'_> {
     fn drop(&mut self) {
+        if let Some(groups) = self.groups.take() {
+            let _ = crate::sys::raw_setgroups(&groups);
+        }
         // Each saved slot puts itself back when dropped; latest first.
         while self.stdio.pop().is_some() {}
+        steps::restore_env_vars(&mut self.env);
+        if let Some(mask) = self.mask.take() {
+            let _ = mask.thread_set_mask();
+        }
+        signals::restore_dispositions(&mut self.dispositions);
         if let Some(cwd) = self.cwd.take() {
             let _ = nix::unistd::fchdir(cwd.as_fd());
         }
@@ -336,13 +388,13 @@ unsafe fn run_post_fork<T>(
     }
 
     // Step 9: Reset signal dispositions
-    signals::reset_signal_dispositions()?;
+    signals::reset_signal_dispositions(abort.dispositions())?;
 
     // Step 10: Clear signal mask
-    steps::clear_signal_mask()?;
+    abort.note_mask(steps::clear_signal_mask()?);
 
     // Step 11: Set environment variables
-    steps::set_env_vars(&config.env);
+    abort.note_env(steps::set_env_vars(&config.env));
 
     // Step 12: Redirect stdout/stderr to configured files. Only a foreground
     // caller sees the slots after a failure, so only it pays for saving them.
@@ -390,6 +442,7 @@ unsafe fn run_post_fork<T>(
     // The supplementary groups too, from the real group database, before
     // init can change root (R162).
     if let Some(identity) = &identity {
+        abort.save_groups();
         identity.join_groups()?;
     }
 
@@ -602,6 +655,113 @@ mod tests {
 
         assert!(result.is_err());
         assert!(!pidfile.exists(), "a failed start left its pidfile");
+    }
+
+    /// Every signal's handler and flags, and the signal mask.
+    #[allow(unsafe_code)]
+    fn signal_state() -> (Vec<(i32, usize, i32)>, Vec<i32>) {
+        let mut dispositions = Vec::new();
+        for sig in 1..=64 {
+            let mut now: libc::sigaction = unsafe { std::mem::zeroed() };
+            // SAFETY: a null new action only reads the disposition into `now`.
+            if unsafe { libc::sigaction(sig, std::ptr::null(), &mut now) } == 0 {
+                dispositions.push((sig, now.sa_sigaction, now.sa_flags as i32));
+            }
+        }
+        let mask = nix::sys::signal::SigSet::thread_get_mask().unwrap();
+        let blocked = (1..32)
+            .filter(|&sig| nix::sys::signal::Signal::try_from(sig).is_ok_and(|s| mask.contains(s)))
+            .collect();
+        (dispositions, blocked)
+    }
+
+    extern "C" fn caller_handler(_: libc::c_int) {}
+
+    // Covers: R164
+    #[test]
+    fn a_failed_foreground_start_restores_signals_and_env() {
+        run_in_subprocess(
+            "sequence::tests::a_failed_foreground_start_restores_signals_and_env_subprocess",
+        );
+    }
+
+    /// The caller's handlers (the Rust runtime's stack-overflow SIGSEGV one
+    /// among them), its mask, and its environment come back when the start
+    /// fails after steps 9-11 changed them.
+    #[test]
+    #[ignore]
+    #[allow(unsafe_code)]
+    fn a_failed_foreground_start_restores_signals_and_env_subprocess() {
+        use nix::sys::signal::{sigaction, SaFlags, SigAction, SigHandler, SigSet, Signal};
+        if !is_subprocess() {
+            return;
+        }
+        let handler = SigAction::new(
+            SigHandler::Handler(caller_handler),
+            SaFlags::SA_RESTART,
+            SigSet::empty(),
+        );
+        // SAFETY: the handler does nothing, so it is async-signal-safe.
+        unsafe { sigaction(Signal::SIGUSR1, &handler) }.unwrap();
+        let mut blocked = SigSet::empty();
+        blocked.add(Signal::SIGUSR2);
+        blocked.thread_block().unwrap();
+        // SAFETY: this subprocess runs one thread.
+        unsafe {
+            std::env::set_var("BLIVET_KEPT", "caller");
+            std::env::remove_var("BLIVET_NEW");
+        }
+        let before = signal_state();
+        let mut config = DaemonConfig::new();
+        config
+            .foreground(true)
+            .close_fds(false)
+            .env("BLIVET_KEPT", "daemon")
+            .env("BLIVET_NEW", "daemon");
+
+        let result: Result<(DaemonContext, ()), _> =
+            run_inner_with(&config, &mut NullForker::new(vec![], Ok(())), || {
+                assert_eq!(std::env::var("BLIVET_KEPT").unwrap(), "daemon");
+                Err(DaemonizeError::application(75, "database unreachable"))
+            });
+
+        assert!(result.is_err());
+        assert_eq!(signal_state(), before, "signal state not restored");
+        assert_eq!(std::env::var("BLIVET_KEPT").unwrap(), "caller");
+        assert!(
+            std::env::var_os("BLIVET_NEW").is_none(),
+            "a set variable stayed"
+        );
+    }
+
+    // Covers: R164
+    #[test]
+    #[ignore = "needs root: the privileged tier runs it"]
+    fn root_gets_its_groups_back_after_a_failed_foreground_start() {
+        run_in_subprocess(
+            "sequence::tests::root_gets_its_groups_back_after_a_failed_foreground_start_subprocess",
+        );
+    }
+
+    #[test]
+    #[ignore]
+    fn root_gets_its_groups_back_after_a_failed_foreground_start_subprocess() {
+        if !is_subprocess() {
+            return;
+        }
+        crate::sys::raw_setgroups(&[0, 4242, 4343]).unwrap();
+        let before = crate::test_support::supplementary_gids();
+        let mut config = DaemonConfig::new();
+        config.foreground(true).close_fds(false).user("nobody");
+
+        let result: Result<(DaemonContext, ()), _> =
+            run_inner_with(&config, &mut NullForker::new(vec![], Ok(())), || {
+                assert_ne!(crate::test_support::supplementary_gids(), before);
+                Err(DaemonizeError::application(75, "database unreachable"))
+            });
+
+        assert!(result.is_err());
+        assert_eq!(crate::test_support::supplementary_gids(), before);
     }
 
     // Covers: R64, R65b, R155

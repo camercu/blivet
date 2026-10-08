@@ -556,11 +556,11 @@ Step failures in foreground mode return `Err` to the caller instead
 of the write-to-pipe-and-`_exit()` behavior described per step below
 (see Error paths, R134). On the way out, the sequence's abort guard
 puts back what it can (R164): stdin, stdout, and stderr, the working
-directory when it could open it, the umask, and the primary group of a
-half-done identity switch, and it removes the pidfile it wrote. What it
-cannot restore stays in effect: inherited descriptors it closed, the
-signal dispositions and mask, environment variables it set, the
-supplementary groups, and whatever `init` did.
+directory when it could open it, the umask, the signal dispositions and
+mask, the environment variables it set, the supplementary groups, and
+the primary group of a half-done identity switch, and it removes the
+pidfile it wrote. What it cannot restore stays in effect: inherited
+descriptors it closed, and whatever `init` did.
 
 ### Steps
 
@@ -1653,16 +1653,16 @@ verification points.
   socket (`-o /dev/null`, a tty) keeps its owner.
 - R164. A foreground sequence that fails puts back what it changed in
   the caller's process and can restore: stdin, stdout, and stderr, the
-  umask, the primary group when `setuid` failed after `setgid`, and
-  the working directory when it could open it (a directory
-  the caller may search but not read cannot be opened, and the start
-  goes on without saving it), and removes the pidfile it wrote. In both
-  modes the pidfile goes before the lock is released, so a second
-  instance cannot take the lock and lose its pidfile to the first.
-  It cannot restore inherited descriptors it closed, signal dispositions
-  and mask, environment variables it set, supplementary groups, or a
-  saved gid that differed from the real one (the group restore sets the
-  real and effective gid, and the saved gid follows the real one).
+  umask, the signal dispositions and mask, the environment variables it
+  set, the supplementary groups, the primary group when `setuid` failed
+  after `setgid`, and the working directory when it could open it (a
+  directory the caller may search but not read cannot be opened, and
+  the start goes on without saving it), and removes the pidfile it
+  wrote. In both modes the pidfile goes before the lock is released, so
+  a second instance cannot take the lock and lose its pidfile to the
+  first. It cannot restore inherited descriptors it closed, or a saved
+  gid that differed from the real one (the group restore sets the real
+  and effective gid, and the saved gid follows the real one).
 - R165. The notification pipe is a connected `AF_UNIX` stream socket
   pair, one-way: the launcher's end cannot send and the daemon's end
   cannot receive. The daemon writes to it only with `send` and

@@ -1,6 +1,7 @@
 //! Steps that set process-wide state: umask (step 4), working directory
 //! (step 5), signal mask (step 10), and environment (step 11).
 
+use std::ffi::OsString;
 use std::path::Path;
 
 use nix::sys::stat::Mode;
@@ -30,8 +31,9 @@ pub(crate) fn change_dir(path: &Path) -> Result<(), DaemonizeError> {
 /// Step 10: Clear the signal mask.
 ///
 /// Returns [`SystemError`](DaemonizeError::SystemError) if `sigprocmask` fails
-/// (e.g. blocked by a seccomp filter) so the caller can report it.
-pub(crate) fn clear_signal_mask() -> Result<(), DaemonizeError> {
+/// (e.g. blocked by a seccomp filter) so the caller can report it. Returns
+/// the mask it replaced, for a foreground failure to put back (R164).
+pub(crate) fn clear_signal_mask() -> Result<nix::sys::signal::SigSet, DaemonizeError> {
     use nix::sys::signal::{SigSet, SigmaskHow};
     #[cfg(test)]
     if crate::steps::failpoints::SIGPROCMASK_FAILS.injected() {
@@ -39,8 +41,14 @@ pub(crate) fn clear_signal_mask() -> Result<(), DaemonizeError> {
             "sigprocmask: injected failure".into(),
         ));
     }
-    nix::sys::signal::sigprocmask(SigmaskHow::SIG_SETMASK, Some(&SigSet::empty()), None)
-        .map_err(|e| DaemonizeError::SystemError(format!("sigprocmask: {e}")))
+    let mut was = SigSet::empty();
+    nix::sys::signal::sigprocmask(
+        SigmaskHow::SIG_SETMASK,
+        Some(&SigSet::empty()),
+        Some(&mut was),
+    )
+    .map_err(|e| DaemonizeError::SystemError(format!("sigprocmask: {e}")))?;
+    Ok(was)
 }
 
 /// Step 11: Set environment variables in insertion order.
@@ -55,14 +63,33 @@ pub(crate) fn clear_signal_mask() -> Result<(), DaemonizeError> {
 /// Infallible for a validated config: `set_var` panics only on an empty key,
 /// `=` or NUL in the key, or NUL in the value — all rejected by
 /// [`DaemonConfig::validate`](crate::DaemonConfig::validate) (R36, R138).
+///
+/// Returns each variable's previous value, in the order set, for
+/// [`restore_env_vars`] to put back after a foreground failure (R164).
 #[allow(unsafe_code)]
-pub(crate) fn set_env_vars(env: &[(String, String)]) {
+pub(crate) fn set_env_vars(env: &[(String, String)]) -> Vec<(String, Option<OsString>)> {
     #[cfg(test)]
     crate::test_support::assert_isolated("set_env_vars");
+    let mut was = Vec::with_capacity(env.len());
     for (key, value) in env {
+        was.push((key.clone(), std::env::var_os(key)));
         // SAFETY: single-threaded per this fn's contract (post-fork child or
         // foreground entry gate), so the `setenv` cannot race.
         unsafe { std::env::set_var(key, value) };
+    }
+    was
+}
+
+/// Puts back what [`set_env_vars`] replaced, latest first, so a key set twice
+/// ends at the value it had before either. Single-threaded, as `set_env_vars`.
+#[allow(unsafe_code)]
+pub(crate) fn restore_env_vars(was: &mut Vec<(String, Option<OsString>)>) {
+    while let Some((key, value)) = was.pop() {
+        // SAFETY: as set_env_vars.
+        match value {
+            Some(value) => unsafe { std::env::set_var(&key, value) },
+            None => unsafe { std::env::remove_var(&key) },
+        }
     }
 }
 

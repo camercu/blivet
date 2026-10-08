@@ -1,5 +1,6 @@
 //! Thin FFI wrappers with no concept of their own to live in: closing a
-//! descriptor by number, `initgroups`, `_exit`, and `AT_FDCWD`.
+//! descriptor by number, `initgroups`, `getgroups` and `setgroups`, `_exit`,
+//! and `AT_FDCWD`.
 //!
 //! Each upholds its own invariants, so callers use it without `unsafe`. Raw
 //! FFI that belongs to a concept lives with it instead: signal handling in
@@ -29,6 +30,23 @@ pub(crate) fn raw_initgroups(
     group: libc::gid_t,
 ) -> Result<(), nix::errno::Errno> {
     let ret = unsafe { libc::initgroups(user.as_ptr(), group as _) };
+    nix::errno::Errno::result(ret).map(drop)
+}
+
+/// The supplementary groups, as `getgroups` lists them.
+///
+/// `nix::unistd::getgroups` and `setgroups` are not available on macOS.
+pub(crate) fn raw_getgroups() -> Result<Vec<libc::gid_t>, nix::errno::Errno> {
+    let n = nix::errno::Errno::result(unsafe { libc::getgroups(0, std::ptr::null_mut()) })?;
+    let mut groups = vec![0; n as usize];
+    let n = nix::errno::Errno::result(unsafe { libc::getgroups(n, groups.as_mut_ptr()) })?;
+    groups.truncate(n as usize);
+    Ok(groups)
+}
+
+/// Sets the supplementary groups (`setgroups`); needs privilege.
+pub(crate) fn raw_setgroups(groups: &[libc::gid_t]) -> Result<(), nix::errno::Errno> {
+    let ret = unsafe { libc::setgroups(groups.len() as _, groups.as_ptr()) };
     nix::errno::Errno::result(ret).map(drop)
 }
 
