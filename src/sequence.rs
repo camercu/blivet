@@ -665,7 +665,12 @@ mod tests {
         assert!(!pidfile.exists(), "a failed start left its pidfile");
     }
 
-    /// Every signal's handler and flags, and the signal mask.
+    /// Linux's `SA_RESTORER`. On x86_64, glibc and bionic add it to every
+    /// action they install, so a restored action differs from the original
+    /// in this bit alone. It names libc's return trampoline, not behaviour.
+    const SA_RESTORER: i32 = 0x0400_0000;
+
+    /// Every signal's handler and flags, less `SA_RESTORER`, and the mask.
     #[allow(unsafe_code)]
     fn signal_state() -> (Vec<(i32, usize, i32)>, Vec<i32>) {
         let mut dispositions = Vec::new();
@@ -673,7 +678,7 @@ mod tests {
             let mut now: libc::sigaction = unsafe { std::mem::zeroed() };
             // SAFETY: a null new action only reads the disposition into `now`.
             if unsafe { libc::sigaction(sig, std::ptr::null(), &mut now) } == 0 {
-                dispositions.push((sig, now.sa_sigaction, now.sa_flags as i32));
+                dispositions.push((sig, now.sa_sigaction, now.sa_flags as i32 & !SA_RESTORER));
             }
         }
         let mask = nix::sys::signal::SigSet::thread_get_mask().unwrap();
