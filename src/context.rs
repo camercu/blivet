@@ -278,6 +278,10 @@ impl DaemonContext {
     pub fn notify_parent_or_report(&mut self) {
         if let Some(pipe) = self.notify_pipe.take() {
             if let Err(e) = pipe.signal_ready() {
+                // The pipe is spent, but this daemon never started and is
+                // about to exit: its pidfile goes whatever cleanup_on_drop
+                // says (R154).
+                self.cleanup();
                 self.report_error(&DaemonizeError::NotifyFailed(e));
             }
         }
@@ -643,6 +647,37 @@ mod tests {
                     .contains("application error: database unreachable")
             ),
             (Some(75), true),
+            "{}",
+            crate::test_support::subprocess_report(NAME, &output)
+        );
+    }
+
+    // Covers: R154
+    //
+    // A failed readiness send takes the pipe with it, yet the daemon never
+    // started and is about to exit, so its pidfile must go even with
+    // cleanup_on_drop off.
+    #[test]
+    fn notify_parent_or_report_removes_the_pidfile_when_the_launcher_is_gone() {
+        const MARKER: &str = "__BLIVET_NOR_NO_LAUNCHER_PIDFILE";
+        const NAME: &str =
+            "context::tests::notify_parent_or_report_removes_the_pidfile_when_the_launcher_is_gone";
+
+        if let Some(pidfile) = std::env::var_os(MARKER) {
+            let (rd, wr) = make_pipe();
+            drop(rd);
+            let mut ctx = ctx(&pidfile_config(pidfile), None, Some(NotifyPipe::new(wr)));
+            ctx.notify_parent_or_report();
+            std::process::exit(0);
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let pidfile = dir.path().join("test.pid");
+        std::fs::write(&pidfile, "12345\n").unwrap();
+        let output = crate::test_support::rerun_in_subprocess(NAME, MARKER, &pidfile);
+        assert_eq!(
+            (output.status.code(), pidfile.exists()),
+            (Some(71), false),
             "{}",
             crate::test_support::subprocess_report(NAME, &output)
         );
