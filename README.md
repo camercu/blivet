@@ -149,7 +149,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ```
 
 An error from `init` reaches the launcher with its exit code, and the pidfile
-is removed (unless `cleanup_on_drop(false)`). `with_exit_code(code)` gives any
+is removed. `with_exit_code(code)` gives any
 failed `Result` that code.
 
 A `chroot` in `init` is not supported (see `docs/adr/0005`): blivet still

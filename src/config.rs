@@ -253,7 +253,10 @@ impl DaemonConfig {
     /// the `examples/echo_server.rs` example.
     ///
     /// When `true`, dropping [`DaemonContext`](crate::DaemonContext) removes
-    /// the pidfile from disk. Can be overridden at runtime via
+    /// the pidfile from disk. A start that fails removes it either way: a
+    /// failed sequence, or a daemon that reports an error or drops while its
+    /// launcher still waits, never started. Can be
+    /// overridden at runtime via
     /// [`DaemonContext::set_cleanup_on_drop`](crate::DaemonContext::set_cleanup_on_drop).
     pub fn cleanup_on_drop(&mut self, cleanup: bool) -> &mut Self {
         self.cleanup_on_drop = cleanup;

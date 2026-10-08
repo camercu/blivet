@@ -264,8 +264,8 @@ message; see the notification pipe protocol), closes it, then calls
 to stderr first (R161). `exec` uses it to report an exec failure.
 
 **Drop behavior:** if `notify_pipe` is still `Some` when `DaemonContext`
-is dropped, the `Drop` impl removes the pidfile (if `cleanup_on_drop`
-is `true`, the default), then writes an error with exit code `1` and the
+is dropped, the `Drop` impl removes the pidfile (whatever
+`cleanup_on_drop` says: the start never succeeded, R154), then writes an error with exit code `1` and the
 message "daemon exited without signaling readiness" to the pipe and
 closes it. The parent reads this and exits 1.
 
@@ -830,8 +830,7 @@ joins them before it returns. The unchecked forms skip both checks.
 User resolution failure returns `UserNotFound`, group resolution
 failure `GroupNotFound`, and `initgroups`/`setgid`/`setuid` failure
 `PermissionDenied`. Each is a post-fork error (see post-fork error
-policy); the pidfile the sequence wrote is removed when
-`cleanup_on_drop` is on.
+policy); the pidfile the sequence wrote is removed (R145).
 
 > `initgroups()` (not bare `setgroups()`) is needed because
 > `getpwnam()` only returns the primary GID; `initgroups()` consults
@@ -1283,7 +1282,8 @@ verification points.
 - R17. Pidfile contains PID as decimal + `\n`.
 - R18. No pidfile when not configured.
 - R19. Pidfile is removed on daemon exit when `cleanup_on_drop` is true
-  (the default). Pidfile survives when `cleanup_on_drop` is false.
+  (the default). Pidfile survives when `cleanup_on_drop` is false,
+  once the daemon has started (R154).
 - R20. With default config, umask is 0.
 - R21. With configured umask, process umask matches.
 - R22. Configured chdir changes CWD.
@@ -1553,9 +1553,9 @@ verification points.
   user's mistake belongs pre-fork, where nothing has happened yet.
 - R145. A daemonization sequence that fails once it owns the pidfile
   — holds its lock, or has created or truncated it — removes it before
-  aborting, in daemon and foreground mode alike, gated on
-  `cleanup_on_drop` like the drop-time cleanup it stands in for. No
-  `DaemonContext` exists on that path, so nothing else would. That
+  aborting, in daemon and foreground mode alike, whatever
+  `cleanup_on_drop` says: that setting governs only a daemon that
+  started (R154). No `DaemonContext` exists on that path, so nothing else would. That
   includes a write that fails half way, which would otherwise leave an
   empty pidfile. A failure before then removes nothing: after a lock
   conflict, or an `open` the system refused, the file on disk belongs
@@ -1612,8 +1612,10 @@ verification points.
   beside the `DaemonContext`.
 - R154. An error from `init` is the sequence's error: returned in
   foreground mode, sent to the launcher with its exit code in daemon
-  mode. Either way the pidfile the sequence wrote is removed when
-  `cleanup_on_drop` is on.
+  mode. Either way the pidfile the sequence wrote is removed. So is the
+  pidfile of a `DaemonContext` that reports an error or drops while the
+  launcher still waits: a start that never succeeded leaves no pidfile,
+  whatever `cleanup_on_drop` says.
 - R155. The target identity is resolved before `init` runs, so a user
   or group that does not exist fails before init's side effects. The
   chown (unless disabled) and the switch run after `init`, in that

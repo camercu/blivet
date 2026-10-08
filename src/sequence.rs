@@ -182,9 +182,9 @@ struct AbortGuard<'a> {
     umask: Option<nix::sys::stat::Mode>,
     /// The pidfile this process owns from the second half of step 8: written
     /// or truncated by it, so a failure must not leave it naming a process
-    /// that never started. Set only with
-    /// [`cleanup_on_drop`](crate::DaemonConfig::cleanup_on_drop), matching the
-    /// drop-time cleanup the [`DaemonContext`] would have done.
+    /// that never started. Removed whatever
+    /// [`cleanup_on_drop`](crate::DaemonConfig::cleanup_on_drop) says, which
+    /// governs only a daemon that started (R145).
     pidfile: Option<&'a std::path::Path>,
     lock: Option<Flock<OwnedFd>>,
 }
@@ -324,9 +324,7 @@ unsafe fn run_post_fork<T>(
     let mut pidfile_fd = None;
     if let Some(ref pidfile_path) = config.pidfile {
         let pidfile = steps::open_pidfile(pidfile_path, lockfile_path.zip(abort.lock.as_ref()))?;
-        if config.cleanup_on_drop {
-            abort.pidfile = Some(pidfile_path);
-        }
+        abort.pidfile = Some(pidfile_path);
         let (id, fd) = pidfile.write_pid()?;
         owned.push(("pidfile", id));
         pidfile_fd = fd;
@@ -572,6 +570,38 @@ mod tests {
         let err = result.expect_err("init's error is the sequence's error");
         assert_eq!(err.exit_code(), 75);
         assert!(!pidfile.exists(), "a failed init left the pidfile behind");
+    }
+
+    // Covers: R145, R154
+    #[test]
+    fn a_failed_start_removes_the_pidfile_even_without_cleanup_on_drop() {
+        run_in_subprocess(
+            "sequence::tests::a_failed_start_removes_the_pidfile_even_without_cleanup_on_drop_subprocess",
+        );
+    }
+
+    #[test]
+    #[ignore]
+    fn a_failed_start_removes_the_pidfile_even_without_cleanup_on_drop_subprocess() {
+        if !is_subprocess() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let pidfile = dir.path().join("app.pid");
+        let mut config = DaemonConfig::new();
+        config
+            .foreground(true)
+            .close_fds(false)
+            .pidfile(&pidfile)
+            .cleanup_on_drop(false);
+
+        let result: Result<(DaemonContext, ()), _> =
+            run_inner_with(&config, &mut NullForker::new(vec![], Ok(())), || {
+                Err(DaemonizeError::application(75, "database unreachable"))
+            });
+
+        assert!(result.is_err());
+        assert!(!pidfile.exists(), "a failed start left its pidfile");
     }
 
     // Covers: R64, R65b, R155

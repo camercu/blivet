@@ -25,8 +25,10 @@ use crate::notify::NotifyPipe;
 /// daemon or it called [`std::process::exit`], closes the pipe with no
 /// message, which the parent also reads as a failure. Only
 /// [`exec`](DaemonContext::exec) tells the parent to read that close as
-/// success. When [`cleanup_on_drop`](crate::DaemonConfig::cleanup_on_drop) is
-/// `true` (the default), dropping also removes the pidfile from disk.
+/// success. Dropping also removes the pidfile from disk: always while the
+/// launcher still waits for readiness, otherwise when
+/// [`cleanup_on_drop`](crate::DaemonConfig::cleanup_on_drop) is `true` (the
+/// default).
 ///
 /// **Signal caveat:** `Drop` does not run when the process is killed by a
 /// signal. To clean up the pidfile on `SIGTERM`/`SIGINT`, either call
@@ -352,9 +354,9 @@ impl DaemonContext {
     /// parent, which could cause double-flush corruption or deadlocks.
     ///
     /// Because `_exit` bypasses [`Drop`], this replicates the drop-time pidfile
-    /// cleanup itself (gated on
-    /// [`cleanup_on_drop`](crate::DaemonConfig::cleanup_on_drop)): a daemon that
-    /// aborts startup must not leave a stale pidfile behind.
+    /// cleanup itself: a daemon that aborts startup must not leave a stale
+    /// pidfile behind, so while the launcher waits the pidfile goes whatever
+    /// [`cleanup_on_drop`](crate::DaemonConfig::cleanup_on_drop) says.
     pub fn report_error(&mut self, err: &DaemonizeError) -> ! {
         let code = self.cleanup_and_signal_error(err);
         crate::sys::raw_exit(code as i32)
@@ -391,8 +393,11 @@ impl DaemonContext {
     /// that can drift apart. They did drift: `Drop` signalled first for long
     /// enough that a parent could wake to a pidfile still on disk, ten lines
     /// below the comment forbidding exactly that.
+    ///
+    /// A launcher still waiting means the start never succeeded, so the
+    /// pidfile goes whatever `cleanup_on_drop` says (R154).
     fn cleanup_then_signal(&mut self, signal: impl FnOnce(NotifyPipe)) {
-        if self.config.cleanup_on_drop {
+        if self.config.cleanup_on_drop || self.notify_pipe.is_some() {
             self.cleanup();
         }
         if let Some(pipe) = self.notify_pipe.take() {
@@ -1173,17 +1178,31 @@ mod tests {
         );
     }
 
+    // Covers: R154
+    //
+    // A launcher still waiting means the start never succeeded: its pidfile
+    // names a daemon that is not running, whatever cleanup_on_drop says.
     #[test]
-    fn report_error_respects_cleanup_on_drop_disabled() {
-        // With cleanup_on_drop=false the pidfile is intentionally preserved.
+    fn a_failed_start_removes_the_pidfile_even_without_cleanup_on_drop() {
         let dir = tempfile::tempdir().unwrap();
         let pidfile = dir.path().join("daemon.pid");
         std::fs::write(&pidfile, "123").unwrap();
 
         let (_rd, wr) = make_pipe();
-        let mut cfg = DaemonConfig::new();
-        cfg.pidfile(&pidfile).cleanup_on_drop(false);
-        let mut ctx = ctx(&cfg, None, Some(NotifyPipe::new(wr)));
+        let mut ctx = ctx(&pidfile_config(&pidfile), None, Some(NotifyPipe::new(wr)));
+
+        ctx.cleanup_and_signal_error(&DaemonizeError::ExecFailed("boom".into()));
+
+        assert!(!pidfile.exists(), "a failed start left its pidfile");
+    }
+
+    // Covers: R77
+    #[test]
+    fn report_error_after_readiness_respects_cleanup_on_drop_disabled() {
+        let dir = tempfile::tempdir().unwrap();
+        let pidfile = dir.path().join("daemon.pid");
+        std::fs::write(&pidfile, "123").unwrap();
+        let mut ctx = ctx(&pidfile_config(&pidfile), None, None);
 
         ctx.cleanup_and_signal_error(&DaemonizeError::ExecFailed("boom".into()));
 
