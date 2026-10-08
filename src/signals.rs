@@ -47,12 +47,10 @@ pub(crate) fn reset_signal_dispositions(
             continue;
         }
 
-        let mut sa: libc::sigaction = unsafe { std::mem::zeroed() };
-        sa.sa_sigaction = libc::SIG_DFL;
-        unsafe { libc::sigemptyset(&mut sa.sa_mask) };
-        sa.sa_flags = 0;
-
-        let mut was: libc::sigaction = unsafe { std::mem::zeroed() };
+        let sa = new_sigaction(libc::SIG_DFL, 0);
+        let mut was = zeroed_sigaction();
+        // SAFETY: `sa` is an initialised SIG_DFL action, and `was` is a valid
+        // sigaction for the kernel to fill.
         let ret = unsafe { libc::sigaction(sig, &sa, &mut was) };
         if ret == 0 {
             if let Some(saved) = saved.as_deref_mut() {
@@ -80,8 +78,35 @@ pub(crate) struct Disposition {
 /// Puts back what [`reset_signal_dispositions`] replaced, latest first.
 pub(crate) fn restore_dispositions(saved: &mut Vec<Disposition>) {
     while let Some(Disposition { sig, was }) = saved.pop() {
+        // SAFETY: `was` is a disposition sigaction itself reported for `sig`.
         unsafe { libc::sigaction(sig, &was, std::ptr::null_mut()) };
     }
+}
+
+/// A `sigaction` with every field zero, for the kernel to fill.
+pub(crate) fn zeroed_sigaction() -> libc::sigaction {
+    // SAFETY: `sigaction` is a C struct of integers, a handler word and a
+    // signal set, and all-zero bytes are a valid value of each.
+    unsafe { std::mem::zeroed() }
+}
+
+/// A `sigaction` that installs `handler` with `flags` and an empty mask.
+fn new_sigaction(handler: libc::sighandler_t, flags: libc::c_int) -> libc::sigaction {
+    let mut sa = zeroed_sigaction();
+    sa.sa_sigaction = handler;
+    // SAFETY: `sa_mask` is a valid signal set owned by `sa`.
+    unsafe { libc::sigemptyset(&mut sa.sa_mask) };
+    sa.sa_flags = flags;
+    sa
+}
+
+/// `sig`'s current disposition, read without changing it.
+pub(crate) fn disposition(sig: i32) -> std::io::Result<libc::sigaction> {
+    let mut now = zeroed_sigaction();
+    // SAFETY: a null new action only reads the disposition into `now`.
+    let ret = unsafe { libc::sigaction(sig, std::ptr::null(), &mut now) };
+    nix::errno::Errno::result(ret)?;
+    Ok(now)
 }
 
 /// Returns the range of signal numbers to reset.
@@ -132,7 +157,8 @@ pub(crate) extern "C" fn pidfile_cleanup_handler(signum: i32) {
     }
     // The disposition was reset to default by SA_RESETHAND before this handler
     // ran; re-raise so the process terminates with a status reflecting the
-    // signal. `raise` is async-signal-safe.
+    // signal.
+    // SAFETY: `raise` is async-signal-safe and takes any signal number.
     unsafe { libc::raise(signum) };
 }
 
@@ -183,15 +209,11 @@ pub(crate) fn may_clean_up_on(sig: i32) -> bool {
 /// the exec'd program expects the default (R128). If the exec fails,
 /// [`CallerSigpipe::restore`] puts the caller's disposition back.
 pub(crate) fn restore_default_sigpipe() -> CallerSigpipe {
-    let mut sa: libc::sigaction = unsafe { std::mem::zeroed() };
-    sa.sa_sigaction = libc::SIG_DFL;
-    let mut old: libc::sigaction = unsafe { std::mem::zeroed() };
+    let sa = new_sigaction(libc::SIG_DFL, 0);
+    let mut old = zeroed_sigaction();
     // SAFETY: SIG_DFL with an empty mask is a valid disposition for SIGPIPE,
     // and `old` receives the one it replaces.
-    unsafe {
-        libc::sigemptyset(&mut sa.sa_mask);
-        libc::sigaction(libc::SIGPIPE, &sa, &mut old);
-    }
+    unsafe { libc::sigaction(libc::SIGPIPE, &sa, &mut old) };
     CallerSigpipe(old)
 }
 
@@ -241,10 +263,8 @@ pub(crate) fn install_pidfile_cleanup_signals(
                 format!("signal {sig} is not one cleanup_on_signals accepts: it takes only catchable signals whose default action ends the process, SIGPIPE aside"),
             ));
         }
-        let mut current: libc::sigaction = unsafe { std::mem::zeroed() };
-        // SAFETY: a null new action only reads the disposition into `current`.
-        let queried = unsafe { libc::sigaction(sig, std::ptr::null(), &mut current) } == 0;
-        if queried && current.sa_sigaction != libc::SIG_DFL && current.sa_sigaction != ours {
+        let theirs = disposition(sig).map(|now| now.sa_sigaction);
+        if theirs.is_ok_and(|h| h != libc::SIG_DFL && h != ours) {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::AlreadyExists,
                 format!("signal {sig} already has a handler or is ignored; not replacing it"),
@@ -267,14 +287,9 @@ pub(crate) fn install_pidfile_cleanup_signals(
     CLEANUP_PIDFILE.store(leaked, Ordering::Release);
 
     for &sig in signals {
-        let mut sa: libc::sigaction = unsafe { std::mem::zeroed() };
-        // Coerce to a fn pointer before the usize cast (a bare fn-item cast
-        // trips clippy::fn_to_numeric_cast); sa_sigaction is pointer-sized.
-        let handler = pidfile_cleanup_handler as extern "C" fn(i32);
-        sa.sa_sigaction = handler as usize;
-        unsafe { libc::sigemptyset(&mut sa.sa_mask) };
-        sa.sa_flags = libc::SA_RESETHAND;
-
+        let sa = new_sigaction(ours, libc::SA_RESETHAND);
+        // SAFETY: `sa` installs pidfile_cleanup_handler, which calls only
+        // async-signal-safe functions.
         let ret = unsafe { libc::sigaction(sig, &sa, std::ptr::null_mut()) };
         if ret != 0 {
             let err = std::io::Error::last_os_error();
@@ -310,9 +325,11 @@ mod tests {
 
         // Install SIG_IGN handler for SIGUSR1
         let handler = SigAction::new(SigHandler::SigIgn, SaFlags::empty(), SigSet::empty());
+        // SAFETY: SIG_IGN and SIG_DFL install no handler, so no code runs.
         let old = unsafe { sigaction(Signal::SIGUSR1, &handler) }.unwrap();
 
         // Verify it's not SIG_DFL
+        // SAFETY: SIG_IGN and SIG_DFL install no handler, so no code runs.
         let current = unsafe { sigaction(Signal::SIGUSR1, &handler) }.unwrap();
         assert!(
             !matches!(current.handler(), SigHandler::SigDfl),
@@ -323,6 +340,7 @@ mod tests {
         reset_signal_dispositions(None).unwrap();
 
         // Read back SIGUSR1 disposition — should be SIG_DFL now
+        // SAFETY: SIG_IGN and SIG_DFL install no handler, so no code runs.
         let after_reset = unsafe { sigaction(Signal::SIGUSR1, &old) }.unwrap();
         assert!(
             matches!(after_reset.handler(), SigHandler::SigDfl),
@@ -351,8 +369,10 @@ mod tests {
         // resetting it would turn every write to a closed pipe/socket into
         // silent process death instead of an EPIPE error.
         let ign = SigAction::new(SigHandler::SigIgn, SaFlags::empty(), SigSet::empty());
+        // SAFETY: SIG_IGN and SIG_DFL install no handler, so no code runs.
         unsafe { sigaction(Signal::SIGPIPE, &ign) }.unwrap();
         reset_signal_dispositions(None).unwrap();
+        // SAFETY: SIG_IGN and SIG_DFL install no handler, so no code runs.
         let after = unsafe { sigaction(Signal::SIGPIPE, &ign) }.unwrap();
         assert!(
             matches!(after.handler(), SigHandler::SigIgn),
@@ -362,8 +382,10 @@ mod tests {
         // The reset preserves the caller's choice, whatever it is — it does
         // not force SIG_IGN: an explicit SIG_DFL stays SIG_DFL.
         let dfl = SigAction::new(SigHandler::SigDfl, SaFlags::empty(), SigSet::empty());
+        // SAFETY: SIG_IGN and SIG_DFL install no handler, so no code runs.
         unsafe { sigaction(Signal::SIGPIPE, &dfl) }.unwrap();
         reset_signal_dispositions(None).unwrap();
+        // SAFETY: SIG_IGN and SIG_DFL install no handler, so no code runs.
         let after = unsafe { sigaction(Signal::SIGPIPE, &dfl) }.unwrap();
         assert!(
             matches!(after.handler(), SigHandler::SigDfl),
@@ -437,10 +459,9 @@ mod tests {
     /// Current disposition of `sig` (the `sa_sigaction` word), read without
     /// changing it.
     fn current_disposition(sig: i32) -> usize {
-        let mut old: libc::sigaction = unsafe { std::mem::zeroed() };
-        let ret = unsafe { libc::sigaction(sig, std::ptr::null(), &mut old) };
-        assert_eq!(ret, 0, "sigaction query for signal {sig} failed");
-        old.sa_sigaction
+        disposition(sig)
+            .unwrap_or_else(|e| panic!("sigaction query for signal {sig} failed: {e}"))
+            .sa_sigaction
     }
 
     // Covers: R129

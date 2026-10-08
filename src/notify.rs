@@ -142,9 +142,9 @@ pub(crate) fn channel() -> io::Result<(OwnedFd, OwnedFd)> {
     // SAFETY: on success socketpair writes two new descriptors into `fds`.
     let ret = unsafe { libc::socketpair(libc::AF_UNIX, kind, 0, fds.as_mut_ptr()) };
     nix::errno::Errno::result(ret)?;
-    // SAFETY: both descriptors are new, open, and owned by nothing else.
-    let (launcher, daemon) =
-        unsafe { (OwnedFd::from_raw_fd(fds[0]), OwnedFd::from_raw_fd(fds[1])) };
+    // SAFETY: socketpair succeeded, so each descriptor is new, open, and
+    // owned by nothing else.
+    let [launcher, daemon] = fds.map(|fd| unsafe { OwnedFd::from_raw_fd(fd) });
     #[cfg(not(blivet_sock_cloexec))]
     for end in [&launcher, &daemon] {
         use nix::fcntl::{fcntl, FcntlArg, FdFlag};

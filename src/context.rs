@@ -577,7 +577,6 @@ mod tests {
     /// here the Rust runtime's SIG_IGN.
     #[test]
     #[ignore]
-    #[allow(unsafe_code)]
     fn a_failed_exec_puts_the_callers_sigpipe_back_subprocess() {
         if !crate::test_support::is_subprocess() {
             return;
@@ -586,9 +585,7 @@ mod tests {
 
         let err = ctx.try_exec(c"/nonexistent_blivet_program", &[c"x"]);
 
-        let mut now: libc::sigaction = unsafe { std::mem::zeroed() };
-        // SAFETY: a null new action only reads the disposition into `now`.
-        unsafe { libc::sigaction(libc::SIGPIPE, std::ptr::null(), &mut now) };
+        let now = crate::signals::disposition(libc::SIGPIPE).unwrap();
         assert!(matches!(err, DaemonizeError::ProgramNotFound(_)), "{err:?}");
         assert_eq!(
             now.sa_sigaction,
@@ -885,6 +882,7 @@ mod tests {
             SaFlags::empty(),
             SigSet::empty(),
         );
+        // SAFETY: the handler does nothing, so it is async-signal-safe.
         unsafe { sigaction(Signal::SIGUSR2, &handler) }.unwrap();
         let dir = tempfile::tempdir().unwrap();
         let mut cfg = DaemonConfig::new();
@@ -893,7 +891,9 @@ mod tests {
         let result = ctx(&cfg, None, None).cleanup_on_signals(&[libc::SIGUSR1, libc::SIGUSR2]);
 
         let query = SigAction::new(SigHandler::SigDfl, SaFlags::empty(), SigSet::empty());
+        // SAFETY: SIG_DFL and the do-nothing handler are async-signal-safe.
         let usr1 = unsafe { sigaction(Signal::SIGUSR1, &query) }.unwrap();
+        // SAFETY: as above.
         let usr2 = unsafe { sigaction(Signal::SIGUSR2, &handler) }.unwrap();
         assert!(
             matches!(&result, Err(DaemonizeError::ValidationError(m)) if m.contains(&libc::SIGUSR2.to_string())),
@@ -929,6 +929,7 @@ mod tests {
             return;
         }
         let ignore = SigAction::new(SigHandler::SigIgn, SaFlags::empty(), SigSet::empty());
+        // SAFETY: SIG_IGN runs no code.
         unsafe { sigaction(Signal::SIGHUP, &ignore) }.unwrap();
         let dir = tempfile::tempdir().unwrap();
         let mut cfg = DaemonConfig::new();
@@ -981,7 +982,6 @@ mod tests {
 
     #[test]
     #[ignore]
-    #[allow(unsafe_code)]
     fn cleanup_on_signals_may_replace_its_own_handler_subprocess() {
         if !crate::test_support::is_subprocess() {
             return;
@@ -995,12 +995,7 @@ mod tests {
         let again = ctx.cleanup_on_signals(&[libc::SIGTERM]);
 
         assert!(again.is_ok(), "{again:?}");
-        let mut current: libc::sigaction = unsafe { std::mem::zeroed() };
-        // SAFETY: a null new action only reads the disposition into `current`.
-        assert_eq!(
-            unsafe { libc::sigaction(libc::SIGTERM, std::ptr::null(), &mut current) },
-            0
-        );
+        let current = crate::signals::disposition(libc::SIGTERM).unwrap();
         assert_eq!(
             current.sa_sigaction,
             crate::signals::pidfile_cleanup_handler as extern "C" fn(i32) as usize,

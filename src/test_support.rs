@@ -149,6 +149,33 @@ pub(crate) fn fill_fd_table(free: usize) -> Vec<std::os::fd::OwnedFd> {
     held
 }
 
+/// Runs `f` with the descriptors in `closed` closed, then puts each back.
+///
+/// For tests of what lands in a freed stdio slot. Closing stdio changes the
+/// process, so this asserts it runs in its own.
+#[allow(unsafe_code)]
+pub(crate) fn with_fds_closed<R>(closed: &[i32], f: impl FnOnce() -> R) -> R {
+    assert_isolated("with_fds_closed");
+    let saved: Vec<std::os::fd::OwnedFd> = closed
+        .iter()
+        .map(|&fd| {
+            // SAFETY: `fd` is a stdio slot this test process holds open.
+            let fd = unsafe { std::os::fd::BorrowedFd::borrow_raw(fd) };
+            fd.try_clone_to_owned().expect("dup")
+        })
+        .collect();
+    for &fd in closed {
+        crate::sys::raw_close(fd);
+    }
+    let result = f();
+    for (&fd, copy) in closed.iter().zip(&saved) {
+        // SAFETY: `dup2` onto a closed slot touches no memory, and no handle
+        // owns the slot.
+        unsafe { libc::dup2(std::os::fd::AsRawFd::as_raw_fd(copy), fd) };
+    }
+    result
+}
+
 /// A pipe for a test to read to EOF: `(read, write)`, close-on-exec like the
 /// notification pipe, so a subprocess a parallel `cargo test` thread spawns
 /// does not inherit the write end and hold the read open. On macOS the flag
@@ -192,16 +219,7 @@ pub(crate) fn assert_isolated(what: &str) {
 
 /// This process's supplementary group IDs.
 pub(crate) fn supplementary_gids() -> Vec<libc::gid_t> {
-    // libc, not nix::unistd::getgroups: nix gates it out on apple targets.
-    #[allow(unsafe_code)]
-    unsafe {
-        let n = libc::getgroups(0, std::ptr::null_mut());
-        assert!(n >= 0, "getgroups failed");
-        let mut buf = vec![0 as libc::gid_t; n as usize];
-        let n = libc::getgroups(n, buf.as_mut_ptr());
-        assert!(n >= 0, "getgroups failed");
-        buf[..n as usize].to_vec()
-    }
+    crate::sys::raw_getgroups().expect("getgroups failed")
 }
 
 /// A gid the current user cannot chown files to: not the effective gid and

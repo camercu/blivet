@@ -19,6 +19,8 @@
 /// `nix::unistd::close` can't be used because it requires `IntoRawFd` (no safe
 /// conversion from a bare `i32`), and it treats EBADF as an error.
 pub(crate) fn raw_close(fd: i32) {
+    // SAFETY: `close` touches no memory. Callers pass descriptors no handle
+    // owns (see above), so no `OwnedFd` is left naming a closed or reused fd.
     unsafe { libc::close(fd) };
 }
 
@@ -29,6 +31,7 @@ pub(crate) fn raw_initgroups(
     user: &std::ffi::CStr,
     group: libc::gid_t,
 ) -> Result<(), nix::errno::Errno> {
+    // SAFETY: `user` is a valid NUL-terminated string for the call's length.
     let ret = unsafe { libc::initgroups(user.as_ptr(), group as _) };
     nix::errno::Errno::result(ret).map(drop)
 }
@@ -37,8 +40,10 @@ pub(crate) fn raw_initgroups(
 ///
 /// `nix::unistd::getgroups` and `setgroups` are not available on macOS.
 pub(crate) fn raw_getgroups() -> Result<Vec<libc::gid_t>, nix::errno::Errno> {
+    // SAFETY: a zero size with a null buffer only asks for the count.
     let n = nix::errno::Errno::result(unsafe { libc::getgroups(0, std::ptr::null_mut()) })?;
     let mut groups = vec![0; n as usize];
+    // SAFETY: `groups` holds `n` elements, the size passed.
     let n = nix::errno::Errno::result(unsafe { libc::getgroups(n, groups.as_mut_ptr()) })?;
     groups.truncate(n as usize);
     Ok(groups)
@@ -46,6 +51,7 @@ pub(crate) fn raw_getgroups() -> Result<Vec<libc::gid_t>, nix::errno::Errno> {
 
 /// Sets the supplementary groups (`setgroups`); needs privilege.
 pub(crate) fn raw_setgroups(groups: &[libc::gid_t]) -> Result<(), nix::errno::Errno> {
+    // SAFETY: the pointer and length come from one slice.
     let ret = unsafe { libc::setgroups(groups.len() as _, groups.as_ptr()) };
     nix::errno::Errno::result(ret).map(drop)
 }
@@ -55,6 +61,7 @@ pub(crate) fn raw_setgroups(groups: &[libc::gid_t]) -> Result<(), nix::errno::Er
 /// Unlike `std::process::exit`, this does not run atexit handlers or flush
 /// stdio buffers — necessary post-fork to avoid double-flush corruption.
 pub(crate) fn raw_exit(code: i32) -> ! {
+    // SAFETY: `_exit` takes any status and never returns.
     unsafe { libc::_exit(code) }
 }
 

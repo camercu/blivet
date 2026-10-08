@@ -85,9 +85,11 @@ pub(crate) fn set_env_vars(env: &[(String, String)]) -> Vec<(String, Option<OsSt
 #[allow(unsafe_code)]
 pub(crate) fn restore_env_vars(was: &mut Vec<(String, Option<OsString>)>) {
     while let Some((key, value)) = was.pop() {
-        // SAFETY: as set_env_vars.
         match value {
+            // SAFETY: callers run this before init, on a single thread, so
+            // the `setenv` cannot race another thread's `environ` read.
             Some(value) => unsafe { std::env::set_var(&key, value) },
+            // SAFETY: as above, for `unsetenv`.
             None => unsafe { std::env::remove_var(&key) },
         }
     }

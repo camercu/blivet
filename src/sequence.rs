@@ -671,14 +671,11 @@ mod tests {
     const SA_RESTORER: i32 = 0x0400_0000;
 
     /// Every signal's handler and flags, less `SA_RESTORER`, and the mask.
-    #[allow(unsafe_code)]
     fn signal_state() -> (Vec<(i32, usize, i32)>, Vec<i32>) {
         let mut dispositions = Vec::new();
         for sig in 1..=64 {
-            let mut now: libc::sigaction = unsafe { std::mem::zeroed() };
-            // SAFETY: a null new action only reads the disposition into `now`.
-            if unsafe { libc::sigaction(sig, std::ptr::null(), &mut now) } == 0 {
-                dispositions.push((sig, now.sa_sigaction, now.sa_flags as i32 & !SA_RESTORER));
+            if let Ok(now) = crate::signals::disposition(sig) {
+                dispositions.push((sig, now.sa_sigaction, now.sa_flags & !SA_RESTORER));
             }
         }
         let mask = nix::sys::signal::SigSet::thread_get_mask().unwrap();
@@ -747,10 +744,9 @@ mod tests {
             return;
         }
         // SAFETY: this subprocess runs one thread.
-        unsafe {
-            std::env::set_var("BLIVET_KEPT", "caller");
-            std::env::remove_var("BLIVET_NEW");
-        }
+        unsafe { std::env::set_var("BLIVET_KEPT", "caller") };
+        // SAFETY: as above.
+        unsafe { std::env::remove_var("BLIVET_NEW") };
         let dir = tempfile::tempdir().unwrap();
         let mut config = DaemonConfig::new();
         config

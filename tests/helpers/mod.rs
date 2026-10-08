@@ -205,13 +205,12 @@ pub fn wait_for_daemon(pidfile: &Path) -> Option<Daemon> {
 /// here cost each of its call sites the whole sleep whether or not the process
 /// had already gone.
 fn kill_process(pid: u32) {
-    unsafe { libc::kill(pid as i32, libc::SIGTERM) };
-    let gone = poll_for(TERM_GRACE, || {
-        let gone = unsafe { libc::kill(pid as i32, 0) } != 0;
-        gone.then_some(())
-    });
+    use nix::sys::signal::{kill, Signal};
+    let pid = nix::unistd::Pid::from_raw(pid as i32);
+    let _ = kill(pid, Signal::SIGTERM);
+    let gone = poll_for(TERM_GRACE, || kill(pid, None).is_err().then_some(()));
     if gone.is_none() {
-        unsafe { libc::kill(pid as i32, libc::SIGKILL) };
+        let _ = kill(pid, Signal::SIGKILL);
     }
 }
 

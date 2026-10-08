@@ -89,6 +89,8 @@ fn parse_threads_line(status: &str) -> std::io::Result<usize> {
 #[cfg(target_os = "macos")]
 #[cfg_attr(test, mutants::skip)] // not compiled on the Linux mutation run
 pub(crate) fn count() -> std::io::Result<usize> {
+    // SAFETY: `proc_taskinfo` is a C struct of integers and arrays, for which
+    // all-zero bytes are valid.
     let mut info: libc::proc_taskinfo = unsafe { std::mem::zeroed() };
     let size = std::mem::size_of::<libc::proc_taskinfo>() as libc::c_int;
     // SAFETY: writes up to `size` bytes into the zeroed, correctly sized
@@ -97,7 +99,7 @@ pub(crate) fn count() -> std::io::Result<usize> {
     // write and the negative error sentinel in one comparison.
     let written = unsafe {
         libc::proc_pidinfo(
-            libc::getpid(),
+            nix::unistd::getpid().as_raw(),
             libc::PROC_PIDTASKINFO,
             0,
             (&mut info as *mut libc::proc_taskinfo).cast(),
@@ -113,16 +115,18 @@ pub(crate) fn count() -> std::io::Result<usize> {
 #[cfg(target_os = "freebsd")]
 #[cfg_attr(test, mutants::skip)] // see the note above the macOS query
 pub(crate) fn count() -> std::io::Result<usize> {
+    // SAFETY: `kinfo_proc` is a C struct of integers and arrays, for which
+    // all-zero bytes are valid.
     let mut kp: libc::kinfo_proc = unsafe { std::mem::zeroed() };
     let mut size = std::mem::size_of::<libc::kinfo_proc>();
     let mut mib = [
         libc::CTL_KERN,
         libc::KERN_PROC,
         libc::KERN_PROC_PID,
-        unsafe { libc::getpid() },
+        nix::unistd::getpid().as_raw(),
     ];
-    // SAFETY: standard sysctl call; `kp`/`size` are a correctly sized output
-    // buffer and its length.
+    // SAFETY: `mib` holds `mib.len()` names, and `kp` is writable for `size`
+    // bytes, so the kernel writes only inside it.
     let rc = unsafe {
         libc::sysctl(
             mib.as_mut_ptr(),
@@ -142,17 +146,20 @@ pub(crate) fn count() -> std::io::Result<usize> {
 #[cfg(target_os = "netbsd")]
 #[cfg_attr(test, mutants::skip)] // see the note above the macOS query
 pub(crate) fn count() -> std::io::Result<usize> {
+    // SAFETY: `kinfo_proc2` is a C struct of integers and arrays, for which
+    // all-zero bytes are valid.
     let mut kp: libc::kinfo_proc2 = unsafe { std::mem::zeroed() };
     let mut size = std::mem::size_of::<libc::kinfo_proc2>();
     let mut mib = [
         libc::CTL_KERN,
         libc::KERN_PROC2,
         libc::KERN_PROC_PID,
-        unsafe { libc::getpid() },
+        nix::unistd::getpid().as_raw(),
         size as libc::c_int,
         1,
     ];
-    // SAFETY: standard sysctl call with a correctly sized single-record buffer.
+    // SAFETY: `mib` holds `mib.len()` names, and `kp` is writable for `size`
+    // bytes, one record, so the kernel writes only inside it.
     let rc = unsafe {
         libc::sysctl(
             mib.as_mut_ptr(),
@@ -182,11 +189,12 @@ pub(crate) fn count() -> std::io::Result<usize> {
         libc::CTL_KERN,
         libc::KERN_PROC,
         libc::KERN_PROC_PID | libc::KERN_PROC_SHOW_THREADS,
-        unsafe { libc::getpid() },
+        nix::unistd::getpid().as_raw(),
         elem as libc::c_int,
         0,
     ];
-    // SAFETY: standard sizing sysctl call; output pointer is null.
+    // SAFETY: `mib` holds `mib.len()` names, and a null output buffer makes
+    // the kernel only store the needed length in `size`.
     let rc = unsafe {
         libc::sysctl(
             mib.as_mut_ptr(),
@@ -226,7 +234,8 @@ pub(crate) fn count() -> std::io::Result<usize> {
     // documented rather than hardened here.
     let mut buf = vec![0u8; size];
     mib[5] = (size / elem) as libc::c_int;
-    // SAFETY: `buf`/`size` are a matching pointer and length.
+    // SAFETY: `mib` holds `mib.len()` names, and `buf` is writable for `size`
+    // bytes, so the kernel writes only inside it.
     let rc = unsafe {
         libc::sysctl(
             mib.as_mut_ptr(),

@@ -185,7 +185,6 @@ mod tests {
     /// close it and drop the lock.
     #[test]
     #[ignore]
-    #[allow(unsafe_code)]
     fn lockfile_and_pidfile_stay_clear_of_stdio_subprocess() {
         if !crate::test_support::is_subprocess() {
             return;
@@ -197,21 +196,9 @@ mod tests {
         for (round, closed) in [&[1, 2][..], &[2][..]].into_iter().enumerate() {
             let lock_path = dir.path().join(format!("{round}.lock"));
             let pid_path = dir.path().join(format!("{round}.pid"));
-            let saved: Vec<(i32, i32)> = closed
-                .iter()
-                .map(|&fd| (fd, unsafe { libc::dup(fd) }))
-                .collect();
-            for &fd in closed {
-                unsafe { libc::close(fd) };
-            }
-
-            let lock = open_and_lock(&lock_path);
-            let pid = open_pidfile(&pid_path, None);
-
-            for (fd, copy) in saved {
-                unsafe { libc::dup2(copy, fd) };
-                unsafe { libc::close(copy) };
-            }
+            let (lock, pid) = crate::test_support::with_fds_closed(closed, || {
+                (open_and_lock(&lock_path), open_pidfile(&pid_path, None))
+            });
             let lock = lock.unwrap();
             let pid = match pid.unwrap() {
                 Pidfile::Opened { fd, .. } => fd.as_raw_fd(),

@@ -300,7 +300,6 @@ mod tests {
     /// launcher loses its pipe.
     #[test]
     #[ignore]
-    #[allow(unsafe_code)]
     fn notification_pipe_ends_stay_clear_of_stdio_subprocess() {
         use std::os::fd::AsRawFd;
 
@@ -310,20 +309,9 @@ mod tests {
         // All of stdio closed gives the ends 0 and 1; only stderr closed gives
         // one end fd 2 itself, the boundary.
         for closed in [&[0, 1, 2][..], &[2][..]] {
-            let saved: Vec<(i32, i32)> = closed
-                .iter()
-                .map(|&fd| (fd, unsafe { libc::dup(fd) }))
-                .collect();
-            for &fd in closed {
-                unsafe { libc::close(fd) };
-            }
-
-            let ends = RealForker.create_notification_pipe();
-
-            for (fd, copy) in saved {
-                unsafe { libc::dup2(copy, fd) };
-                unsafe { libc::close(copy) };
-            }
+            let ends = crate::test_support::with_fds_closed(closed, || {
+                RealForker.create_notification_pipe()
+            });
             let (rd, wr) = ends.expect("RealForker creates a pipe");
             assert!(
                 rd.as_raw_fd() > 2 && wr.as_raw_fd() > 2,

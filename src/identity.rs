@@ -184,12 +184,14 @@ impl ResolvedIdentity {
                 let _ = nix::unistd::setegid(before.1);
                 return Err(DaemonizeError::PermissionDenied(format!("setuid: {e}")));
             }
-            // SAFETY: this function's contract requires a single thread, so
-            // these `setenv` calls cannot race `environ`.
-            unsafe {
-                std::env::set_var("USER", &info.name);
-                std::env::set_var("HOME", &info.dir);
-                std::env::set_var("LOGNAME", &info.name);
+            for (key, value) in [
+                ("USER", info.name.as_ref()),
+                ("HOME", info.dir.as_os_str()),
+                ("LOGNAME", info.name.as_ref()),
+            ] {
+                // SAFETY: this function's contract requires a single thread,
+                // so the `setenv` cannot race another thread's `environ` read.
+                unsafe { std::env::set_var(key, value) };
             }
         }
         Ok(())
