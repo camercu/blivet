@@ -246,13 +246,13 @@ to ensure `cleanup()` runs (either explicitly or by dropping
 **Notification methods:**
 
 `notify_parent(&mut self) -> Result<(), DaemonizeError>` writes the
-readiness message (`0x00 0x00`) to the notification pipe and closes it. A pipe write error
-is returned as `DaemonizeError::NotifyFailed` (exit code 71) so callers
-get one error type with a preserved exit code. The companion
-`notify_parent_or_report(&mut self)` does the same but reports the error
-to the parent and `_exit`s instead of returning it. The parent reads the
-readiness message and exits 0. After this call, `notify_pipe` is `None`. This
-is the API for library consumers to signal readiness.
+readiness message (`0x00 0x00`) to the notification pipe and closes it. A pipe
+write error is returned as `DaemonizeError::NotifyFailed` (exit code 71) so
+callers get one error type with a preserved exit code. The companion
+`notify_parent_or_report(&mut self)` does the same but reports the error to the
+parent and `_exit`s instead of returning it. The parent reads the readiness
+message and exits 0. After this call, `notify_pipe` is `None`. This is the API
+for library consumers to signal readiness.
 
 `report_error(&mut self, err: &DaemonizeError) -> !` writes the error
 to the notification pipe (exit code byte, two-byte length, `Display`
@@ -262,9 +262,9 @@ to stderr first (R161). `exec` uses it to report an exec failure.
 
 **Drop behavior:** if `notify_pipe` is still `Some` when `DaemonContext`
 is dropped, the `Drop` impl removes the pidfile (whatever
-`cleanup_on_drop` says: the start never succeeded, R154), then writes an error with exit code `1` and the
-message "daemon exited without signaling readiness" to the pipe and
-closes it. The parent reads this and exits 1.
+`cleanup_on_drop` says: the start never succeeded, R154), then writes an error
+with exit code `1` and the message "daemon exited without signaling readiness"
+to the pipe and closes it. The parent reads this and exits 1.
 
 > Exit code `1` (not a `sysexits.h` value) is used for the Drop case
 > to distinguish it from categorized `DaemonizeError` failures.
@@ -391,7 +391,7 @@ no-op.
 
 - Pre-fork errors (validation failure, pipe creation failure, first
   fork failure) return `Err` directly to the original caller. No
-  notification pipe is involved because the caller _is_ the parent.
+  notification pipe is involved because the caller *is* the parent.
 - Post-fork errors (steps 2–14) are written to the notification pipe
   per the notification protocol. The grandchild calls `_exit()`. The
   parent reads the error, prints it to its stderr, and calls `_exit()`
@@ -566,13 +566,12 @@ undefined behaviour.
 
 1. **Create notification pipe, first fork.** *(Skipped in foreground
    mode.)* Create the notification pipe, a socket pair (R165),
-   close-on-exec on both ends (`pipe_rd`, `pipe_wr`). If the pipe cannot be created — no descriptor free, say
-   — return `Err(SystemError)` to the caller. Fork. If fork fails,
-   close both pipe ends and return `Err(ForkFailed)` to the caller —
-   no pipe protocol is involved.
-   On success: parent closes `pipe_wr` and enters the parent-side
-   pipe reader (see notification protocol); child closes `pipe_rd`
-   and continues with `pipe_wr`.
+   close-on-exec on both ends (`pipe_rd`, `pipe_wr`). If the pipe cannot be
+   created — no descriptor free, say — return `Err(SystemError)` to the caller.
+   Fork. If fork fails, close both pipe ends and return `Err(ForkFailed)` to the
+   caller — no pipe protocol is involved. On success: parent closes `pipe_wr`
+   and enters the parent-side pipe reader (see notification protocol); child
+   closes `pipe_rd` and continues with `pipe_wr`.
 2. **setsid.** *(Skipped in foreground mode.)* Failure: write
    `SetsidFailed` to pipe, `_exit()`.
 3. **Second fork.** *(Skipped in foreground mode.)* If fork fails:
@@ -600,8 +599,8 @@ undefined behaviour.
     enumerated open fds (or iterate 3..`rlim_cur` where enumeration
     is unavailable), skipping the lockfile fd, the notification pipe
     fd, a standalone pidfile's fd and step 12's stream files (kept for
-    step 16's chown, R163), and the descriptors the abort guard holds to undo a foreground failure
-    (R164). See fd closing.
+    step 16's chown, R163), and the descriptors the abort guard holds to undo a
+    foreground failure (R164). See fd closing.
 14. **Resolve the target identity** if a user or group is configured,
     so a missing one fails before `init` runs (R155), and with a user,
     set the supplementary groups (`initgroups`) from the real group
@@ -870,11 +869,10 @@ When `close_fds` is true (the default), close every open fd except
 `AsRawFd::as_raw_fd()` on the `Flock`), the notification pipe write
 fd, a standalone pidfile's fd and step 12's stream files (R163), and
 the descriptors the abort
-guard holds for a foreground undo (R164). Open fds are enumerated via the platform fd directory —
-`/proc/self/fd` on Linux and Android, `/dev/fd` on macOS — when
-available; where
-no reliable listing exists (the BSDs' `/dev/fd` covers only 0-2
-without fdescfs) or reading it fails (e.g. minimal containers without
+guard holds for a foreground undo (R164). Open fds are enumerated via the
+platform fd directory — `/proc/self/fd` on Linux and Android, `/dev/fd` on macOS
+— when available; where no reliable listing exists (the BSDs' `/dev/fd` covers
+only 0-2 without fdescfs) or reading it fails (e.g. minimal containers without
 `/proc`), fall back to brute-force iteration of
 3..`rlimit(RLIMIT_NOFILE).rlim_cur`. If `getrlimit` fails in the
 fallback, report `SystemError`. Individual `close()` errors are
@@ -1555,11 +1553,10 @@ verification points.
   — holds its lock, or has created or truncated it — removes it before
   aborting, in daemon and foreground mode alike, whatever
   `cleanup_on_drop` says: that setting governs only a daemon that
-  started (R154). No `DaemonContext` exists on that path, so nothing else would. That
-  includes a write that fails half way, which would otherwise leave an
-  empty pidfile. A failure before then removes nothing: after a lock
-  conflict, or an `open` the system refused, the file on disk belongs
-  to someone else.
+  started (R154). No `DaemonContext` exists on that path, so nothing else would.
+  That includes a write that fails half way, which would otherwise leave an
+  empty pidfile. A failure before then removes nothing: after a lock conflict,
+  or an `open` the system refused, the file on disk belongs to someone else.
 - R146. Step 12 compares the files it opened by device and inode
   before truncating any of them: a stdout or stderr file that is the
   pidfile or the lockfile, under any name, is refused with
@@ -1649,8 +1646,8 @@ verification points.
 - R163. Step 16 chowns the descriptors the sequence holds (the pidfile,
   the lockfile, and stdout and stderr when redirected), not their paths,
   so the chown reaches the files it opened even if `init` changed what
-  those paths name or what fds 1 and 2 hold. It chowns regular files only: a device, FIFO, or
-  socket (`-o /dev/null`, a tty) keeps its owner.
+  those paths name or what fds 1 and 2 hold. It chowns regular files only: a
+  device, FIFO, or socket (`-o /dev/null`, a tty) keeps its owner.
 - R164. A foreground sequence that fails puts back what it changed in
   the caller's process and can restore: stdin, stdout, and stderr, the
   umask, the signal dispositions and mask, the environment variables it

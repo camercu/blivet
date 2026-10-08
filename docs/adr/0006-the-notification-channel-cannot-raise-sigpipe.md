@@ -63,8 +63,8 @@ the capability table and for illumos, the best-effort stand-in. The table
 lists Linux, Android, macOS, FreeBSD, NetBSD, and OpenBSD. Of the targets
 `nix` supports, only Redox lacks it, and blivet does not build for Redox
 today. Redox has no `flock`, `initgroups`, or `faccessat`. So the crate uses
-`MSG_NOSIGNAL` directly, with no capability alias and no fallback path. A future target without it
-fails to compile, which names the problem at once.
+`MSG_NOSIGNAL` directly, with no capability alias and no fallback path. A future
+target without it fails to compile, which names the problem at once.
 
 ## Consequences
 

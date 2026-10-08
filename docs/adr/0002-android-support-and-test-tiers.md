@@ -8,7 +8,7 @@
 
 Before this decision the crate did not compile for Android at all:
 
-```
+```text
 error[E0599]: no associated item named `AT_EACCESS` found for struct `AtFlags`
   --> src/config.rs:465
 ```

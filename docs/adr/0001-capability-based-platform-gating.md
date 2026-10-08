@@ -49,12 +49,13 @@ emits one `cargo::rustc-cfg` alias per capability (the mechanism `nix` itself
 uses for `linux_android` and `freebsdlike`), declared with
 `cargo::rustc-check-cfg` so a typo is an `unexpected_cfgs` warning — an error
 under the `-D warnings` that `just lint` and `just test` set — rather than a
-silently false branch. Source code gates on the capability alias for every *decision*. An OS name
-survives only where it selects the *mechanism* a capability is implemented
-with and the table has no column for it: the four thread-count queries in
-`src/unsafe_ops.rs` (`proc_pidinfo` on macOS, three `sysctl` shapes on the
-BSDs), reached only once `blivet_thread_count` and `blivet_thread_count_procfs`
-have already decided that a count is readable and not in procfs.
+silently false branch. Source code gates on the capability alias for every
+*decision*. An OS name survives only where it selects the *mechanism* a
+capability is implemented with and the table has no column for it: the four
+thread-count queries in `src/unsafe_ops.rs` (`proc_pidinfo` on macOS, three
+`sysctl` shapes on the BSDs), reached only once `blivet_thread_count` and
+`blivet_thread_count_procfs` have already decided that a count is readable and
+not in procfs.
 
 The initial capability set:
 

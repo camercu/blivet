@@ -41,8 +41,8 @@ fn main() -> Result<(), DaemonizeError> {
   the crate, `#![deny(unsafe_code)]` makes each `unsafe` block opt in.
 - **Privileged init, once.** `daemonize_with()` runs your init after the
   pidfile lock and while still root, so you can bind port 80 or open root-only
-  files, and a second instance fails before its init runs. Then it drops to the configured
-  user.
+  files, and a second instance fails before its init runs. Then it drops to the
+  configured user.
 - **Library and CLI.** A builder with infallible setters and deferred
   validation, or the `daemonize` binary, which wraps any program.
 
@@ -288,9 +288,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ### Reporting your own failures
 
 Inside `daemonize_with()`'s init, use `.with_exit_code(code)` or return
-`DaemonizeError::application(code, message)`. After the call, when startup work that needs no privileges fails (a
-database connect), report it to the launcher with a `sysexits.h` code of your
-choosing via `report_error_msg`, without building a `DaemonizeError` by hand:
+`DaemonizeError::application(code, message)`. After the call, when startup work
+that needs no privileges fails (a database connect), report it to the launcher
+with a `sysexits.h` code of your choosing via `report_error_msg`, without
+building a `DaemonizeError` by hand:
 
 ```rust,ignore
 let db = match Database::connect(&url) {
@@ -389,8 +390,8 @@ On a best-effort target, `daemonize()` and `daemonize_with()` are
 the checked call on `target_os`, as the [crate front page](https://docs.rs/blivet)
 and `examples/echo_server.rs` do. Two Unix targets `nix` supports do not
 compile: Solaris (`x86_64-pc-solaris`), because `nix` lacks `Flock` there, and
-Redox (`x86_64-unknown-redox`), which also lacks `initgroups` and `faccessat`. A non-Unix target fails with one
-`compile_error!` that names it.
+Redox (`x86_64-unknown-redox`), which also lacks `initgroups` and `faccessat`. A
+non-Unix target fails with one `compile_error!` that names it.
 
 Android needs API level 24 (Android 7.0) or later. There, the pre-fork check
 that the pidfile, lockfile, and output directories are writable tests the real

@@ -10,8 +10,9 @@ which wraps any program.
 ### Processes
 
 **Launcher**:
-The original process that called `daemonize()` (or ran the `daemonize` CLI) and blocks until the daemon reports how its start went.
-_Avoid_: parent (the launcher is the daemon's grandparent), original process, caller
+The original process that called `daemonize()` (or ran the `daemonize` CLI) and
+blocks until the daemon reports how its start went. _Avoid_: parent (the
+launcher is the daemon's grandparent), original process, caller
 
 **Daemon**:
 The grandchild process that runs the daemonization sequence and then the application.
@@ -22,8 +23,9 @@ The process between the two forks; it creates the session and exits 0.
 _Avoid_: first child, session leader
 
 **Supervisor**:
-An external service manager (systemd, launchd, a container runtime) that runs the program in foreground mode and owns its lifecycle.
-_Avoid_: init system, service manager (pick one), process supervisor
+An external service manager (systemd, launchd, a container runtime) that runs
+the program in foreground mode and owns its lifecycle. _Avoid_: init system,
+service manager (pick one), process supervisor
 
 ### Configuration and setup
 
@@ -32,24 +34,25 @@ The validated set of choices that drives one daemonization (`DaemonConfig`).
 _Avoid_: options, settings
 
 **Daemonization sequence**:
-The fixed, ordered steps that take a process from launcher to daemon (SPEC steps 1–18).
-_Avoid_: daemonization process, setup
+The fixed, ordered steps that take a process from launcher to daemon (SPEC steps
+1–18). _Avoid_: daemonization process, setup
 
 **Daemon mode**:
 Running the full sequence, with both forks and `setsid`.
 _Avoid_: background mode
 
 **Foreground mode**:
-Running the sequence without the forks, `setsid`, or notification channel, for a supervisor.
-_Avoid_: no-daemon mode, debug mode
+Running the sequence without the forks, `setsid`, or notification channel, for a
+supervisor. _Avoid_: no-daemon mode, debug mode
 
 **Pidfile**:
 A file holding the daemon's process ID.
 _Avoid_: PID file, pid file
 
 **Lockfile**:
-A file the daemon holds an exclusive `flock` on for its lifetime, so a second instance fails; the pidfile by default.
-_Avoid_: lock file, lock (as a noun for the file)
+A file the daemon holds an exclusive `flock` on for its lifetime, so a second
+instance fails; the pidfile by default. _Avoid_: lock file, lock (as a noun for
+the file)
 
 **Single-instance enforcement**:
 The guarantee, through the lockfile, that only one daemon per lockfile runs.
@@ -60,7 +63,8 @@ The state where another process already holds the lockfile.
 _Avoid_: already running
 
 **Privileged init**:
-Caller-supplied work that runs inside the sequence, after the lock and before the identity switch, with the launcher's privileges (`daemonize_with`'s `init`).
+Caller-supplied work that runs inside the sequence, after the lock and before
+the identity switch, with the launcher's privileges (`daemonize_with`'s `init`).
 _Avoid_: init (bare), init closure, setup hook
 
 **Target identity**:
@@ -72,8 +76,8 @@ Setting supplementary groups, group, and user to the target identity, and `USER`
 _Avoid_: user switch, privilege drop, drop privileges
 
 **Path ownership transfer**:
-Chowning the pidfile, lockfile, and output files to the target identity before the identity switch.
-_Avoid_: chown paths (outside the API)
+Chowning the pidfile, lockfile, and output files to the target identity before
+the identity switch. _Avoid_: chown paths (outside the API)
 
 **Output redirect**:
 Pointing the daemon's stdout or stderr at a configured file instead of `/dev/null`.
@@ -84,12 +88,12 @@ The rule that no other thread exists across the daemonization sequence.
 _Avoid_: single-threaded window, thread check
 
 **Checked entry point**:
-`daemonize` or `daemonize_with`, which verify the single-threaded contract and panic if it fails.
-_Avoid_: safe form
+`daemonize` or `daemonize_with`, which verify the single-threaded contract and
+panic if it fails. _Avoid_: safe form
 
 **Unchecked entry point**:
-`daemonize_unchecked` or `daemonize_with_unchecked`, which leave the single-threaded contract to the caller.
-_Avoid_: unsafe form
+`daemonize_unchecked` or `daemonize_with_unchecked`, which leave the
+single-threaded contract to the caller. _Avoid_: unsafe form
 
 ### Start outcome
 
@@ -102,28 +106,28 @@ The daemon's report that it started successfully; the launcher then exits 0.
 _Avoid_: ready signal, signal readiness (clashes with Unix signals)
 
 **Exec marker**:
-The message saying the daemon is about to `exec` a program; channel close then means success.
-_Avoid_: exec pending
+The message saying the daemon is about to `exec` a program; channel close then
+means success. _Avoid_: exec pending
 
 **Failure report**:
-A message carrying an exit code and text; the launcher prints the text and exits with the code.
-_Avoid_: error signal
+A message carrying an exit code and text; the launcher prints the text and exits
+with the code. _Avoid_: error signal
 
 **Unnotified exit**:
-The daemon ending before readiness without a failure report; the launcher exits 1.
-_Avoid_: silent death
+The daemon ending before readiness without a failure report; the launcher
+exits 1. _Avoid_: silent death
 
 **Exit code**:
-The `sysexits.h` status a failure maps to, or the caller's chosen code for an application error.
-_Avoid_: exit status (for the mapped value), return code
+The `sysexits.h` status a failure maps to, or the caller's chosen code for an
+application error. _Avoid_: exit status (for the mapped value), return code
 
 **Application error**:
 A failure the caller reports with its own exit code (`DaemonizeError::Application`).
 _Avoid_: custom error, user error
 
 **Program handoff**:
-Replacing the daemon with another program by `execvp`, keeping the lock (`DaemonContext::exec`, the CLI's last step).
-_Avoid_: spawn, run program
+Replacing the daemon with another program by `execvp`, keeping the lock
+(`DaemonContext::exec`, the CLI's last step). _Avoid_: spawn, run program
 
 ### Shutdown
 
@@ -198,15 +202,18 @@ Views: **Exit code** (`DaemonizeError::exit_code`), **Lockfile fd**
 (`DaemonContext::lockfile_fd`), thread count (internal).
 
 Automations:
+
 - readiness received → launcher exits 0.
 - failure report received → launcher prints the message, exits with its code.
 - channel closed after exec marker → launcher exits 0.
 - channel closed with no marker → launcher exits 1.
 - step failed after first fork → daemon removes pidfile, sends failure report, `_exit`s.
 - init failed → pidfile removed, failure report sent.
-- context dropped unnotified → pidfile removed, failure report "daemon exited without signaling readiness" (exit 1).
+- context dropped unnotified → pidfile removed, failure report "daemon exited
+  without signaling readiness" (exit 1).
 - context dropped after readiness, cleanup on drop set → pidfile removed.
-- termination signal delivered, handlers installed → pidfile removed, default disposition restored, signal re-raised.
+- termination signal delivered, handlers installed → pidfile removed, default
+  disposition restored, signal re-raised.
 
 Unmapped: none of the 4 public types (`DaemonConfig` → Daemon config,
 `DaemonContext` → the daemon's handle after the sequence, `DaemonizeError` →
@@ -215,35 +222,73 @@ failure kinds, `WithExitCode` → Application error).
 ## Relationships
 
 - A **Launcher** waits on exactly one **Daemon** through one **Notification channel**.
-- A **Daemon** sends at most one of: **Readiness**, **Exec marker** then success, or **Failure report**; sending none is an **Unnotified exit**.
-- A **Daemon config** names zero or one **Pidfile** and zero or one **Lockfile**; with no explicit **Lockfile**, the **Pidfile** is the **Lockfile**.
-- A **Lockfile** enforces **Single-instance enforcement** for every daemon that names it.
-- **Privileged init** runs at most once per **Daemon**, after the **Lockfile** is locked and before the **Identity switch**.
-- **Path ownership transfer** precedes the **Identity switch** and covers the **Pidfile**, **Lockfile**, and redirected output files.
+- A **Daemon** sends at most one of: **Readiness**, **Exec marker** then
+  success, or **Failure report**; sending none is an **Unnotified exit**.
+- A **Daemon config** names zero or one **Pidfile** and zero or one
+  **Lockfile**; with no explicit **Lockfile**, the **Pidfile** is the
+  **Lockfile**.
+- A **Lockfile** enforces **Single-instance enforcement** for every daemon that
+  names it.
+- **Privileged init** runs at most once per **Daemon**, after the **Lockfile**
+  is locked and before the **Identity switch**.
+- **Path ownership transfer** precedes the **Identity switch** and covers the
+  **Pidfile**, **Lockfile**, and redirected output files.
 - Every failure maps to exactly one **Exit code**; several failures share one code.
-- **Foreground mode** has no **Launcher** and no **Notification channel**; failures return to the caller.
+- **Foreground mode** has no **Launcher** and no **Notification channel**;
+  failures return to the caller.
 
 ## Example dialogue
 
-> **Dev:** "When the **Daemon** calls `notify_parent()`, does its actual parent see it?"
-> **Domain expert:** "No. Its parent is the **Intermediate child**, already gone. The message goes to the **Launcher**, the grandparent, which exits 0 on **Readiness**."
+> **Dev:** "When the **Daemon** calls `notify_parent()`, does its actual parent
+> see it?"
+> **Domain expert:** "No. Its parent is the **Intermediate child**, already
+> gone. The message goes to the **Launcher**, the grandparent, which exits 0 on
+> **Readiness**."
 > **Dev:** "If **Privileged init** fails to bind port 80, who learns the code?"
-> **Domain expert:** "The **Launcher**. The **Daemon** removes its **Pidfile**, sends a **Failure report** with the **Exit code** you chose via `with_exit_code`, and exits."
+> **Domain expert:** "The **Launcher**. The **Daemon** removes its **Pidfile**,
+> sends a **Failure report** with the **Exit code** you chose via
+> `with_exit_code`, and exits."
 > **Dev:** "And a second instance with the same **Pidfile**?"
-> **Domain expert:** "It hits a **Lock conflict** before its **Privileged init** runs, so it never binds anything. The **Launcher** exits 69."
+> **Domain expert:** "It hits a **Lock conflict** before its **Privileged init**
+> runs, so it never binds anything. The **Launcher** exits 69."
 > **Dev:** "Under systemd I'd use **Foreground mode**. Is there still a **Launcher**?"
-> **Domain expert:** "No. The **Supervisor** owns the process; there is no **Notification channel**, and failures come back as `Err` to your code."
+> **Domain expert:** "No. The **Supervisor** owns the process; there is no
+> **Notification channel**, and failures come back as `Err` to your code."
 
 ## Flagged ambiguities
 
-- "parent" means the **Launcher** in `notify_parent`, man page "parent exits 0", and SPEC; it is the daemon's grandparent. Open: settled API name `notify_parent`. Recommend keeping "Launcher" in prose; consider `notify_ready` at next breaking release.
-- "signal" means both a Unix signal and a channel message (`signal_ready`, "signal readiness", "signals the error to the parent"). Resolved in prose: **Readiness**, **Failure report**; "signal" only for Unix signals.
-- "notification pipe" names a socket pair (SPEC: "The name stays"). Open: settled in SPEC. Recommend **Notification channel**, the term ADR 0006 already uses.
-- "init" means **Privileged init**, an init system (SPEC: "original process (or init system)"), init scripts (man), and "application init". Resolved: **Privileged init** for the closure, **Supervisor** for the others.
-- "lock" vs "lockfile": API `lockfile()`/`no_lockfile()`, CLI `--lock`/`--no-lock`, man page "lock file"/"PID file". Open: CLI flags are settled. Recommend **Lockfile**/**Pidfile** (Debian daemonize(1) spelling) everywhere in prose.
-- "user switch", "identity switch", "switch user", "drop privileges" (pre-ADR-0004 API) name one step. Resolved: **Identity switch**.
-- `DaemonizeError` variant names mix forms: `ForkFailed` (event), `LockfileError`/`PidfileError`/`ChownError`/`SystemError` (noun + Error), `ValidationError` (repeats "Error" inside the error enum), `LockConflict` (state). Open: public API. Recommend `*Failed` for the noun forms at next breaking release.
-- Defect: `notify_parent_or_report`'s name and SPEC promise a report "to the parent"; its rustdoc says the spent channel means no message reaches the launcher, and stderr is `/dev/null` in daemon mode. Only the exit status reports.
-- Defect: man page EXIT STATUS omits 1 (unnotified exit) and 70 (panic), which the CLI can return.
-- Doc drift: man page numbers 11 sequence steps, SPEC 18; "step 9" (chown) in the man page is SPEC step 16. Readers cross-referencing step numbers get the wrong step.
-- "cleanup" removes only the pidfile. Resolved: **Pidfile cleanup** in prose; API names stay.
+- "parent" means the **Launcher** in `notify_parent`, man page "parent exits 0",
+  and SPEC; it is the daemon's grandparent. Open: settled API name
+  `notify_parent`. Recommend keeping "Launcher" in prose; consider
+  `notify_ready` at next breaking release.
+- "signal" means both a Unix signal and a channel message (`signal_ready`,
+  "signal readiness", "signals the error to the parent"). Resolved in prose:
+  **Readiness**, **Failure report**; "signal" only for Unix signals.
+- "notification pipe" names a socket pair (SPEC: "The name stays"). Open:
+  settled in SPEC. Recommend **Notification channel**, the term ADR 0006 already
+  uses.
+- "init" means **Privileged init**, an init system (SPEC: "original process (or
+  init system)"), init scripts (man), and "application init". Resolved:
+  **Privileged init** for the closure, **Supervisor** for the others.
+- "lock" vs "lockfile": API `lockfile()`/`no_lockfile()`, CLI
+  `--lock`/`--no-lock`, man page "lock file"/"PID file". Open: CLI flags are
+  settled. Recommend **Lockfile**/**Pidfile** (Debian daemonize(1) spelling)
+  everywhere in prose.
+- "user switch", "identity switch", "switch user", "drop privileges"
+  (pre-ADR-0004 API) name one step. Resolved: **Identity switch**.
+- `DaemonizeError` variant names mix forms: `ForkFailed` (event),
+  `LockfileError`/`PidfileError`/`ChownError`/`SystemError` (noun + Error),
+  `ValidationError` (repeats "Error" inside the error enum), `LockConflict`
+  (state). Open: public API. Recommend `*Failed` for the noun forms at next
+  breaking release.
+- Defect: `notify_parent_or_report`'s name and SPEC promise a report "to the
+  parent"; its rustdoc says the spent channel means no message reaches the
+  launcher, and stderr is `/dev/null` in daemon mode. Only the exit status
+  reports.
+- Defect: man page EXIT STATUS omits 1 (unnotified exit) and 70 (panic), which
+  the CLI can return.
+- Doc drift: man page numbers 11 sequence steps, SPEC 18; "step 9" (chown) in
+  the man page is SPEC step 16. Readers cross-referencing step numbers get the
+  wrong step.
+- "cleanup" removes only the pidfile. Resolved: **Pidfile cleanup** in prose;
+  API names stay.

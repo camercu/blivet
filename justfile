@@ -28,18 +28,21 @@ fmt-check:
 lint:
     {{cargo}} clippy {{locked}} --all-targets -- -D warnings
 
-# Lint everything that is not Rust: spelling, TOML layout, and the GitHub
-# workflows (actionlint runs shellcheck over
+# Lint everything that is not Rust: spelling, TOML layout, Markdown structure
+# and line length, and the GitHub workflows (actionlint runs shellcheck over
 # each `run:` block). Its own recipe, not part of `check`: CI's `ci` job runs
 # `check` on hosts that do not carry these tools, and the `lint-text` job runs
 # this in the nix shell, at the versions shell.nix pins.
-lint-text: lint-typos lint-taplo lint-actions
+lint-text: lint-typos lint-taplo lint-markdown lint-actions
 
 lint-typos:
     typos
 
 lint-taplo:
     taplo format --check
+
+lint-markdown:
+    markdownlint-cli2
 
 lint-actions:
     actionlint

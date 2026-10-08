@@ -92,8 +92,8 @@ closure shape as the directed one.
 ## Consequences
 
 - Breaking change: `drop_privileges`, `drop_privileges_unchecked`, and
-  `PrivilegesNotDropped` (exit 70, `EX_SOFTWARE`) are removed, and `daemonize()` with a user
-  set now switches before returning.
+  `PrivilegesNotDropped` (exit 70, `EX_SOFTWARE`) are removed, and `daemonize()`
+  with a user set now switches before returning.
 - `daemonize_unchecked` gets an init-taking twin. The CLI calls it with no init
   and loses its separate `drop_privileges_unchecked` block.
 - Tests that drove the full sequence with a user configured, unprivileged, can

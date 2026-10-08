@@ -247,3 +247,5 @@ cannot redirect the chown onto an arbitrary file.
 # SEE ALSO
 
 **daemon**(3), **fork**(2), **setsid**(2), **flock**(2), **sysexits**(3)
+
+<!-- markdownlint-disable-file MD041 -- pandoc's title block comes first -->
