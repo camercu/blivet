@@ -342,9 +342,10 @@ panicking (with a message naming the problem and fix) unless it is exactly
 `unsafe { daemonize_unchecked(config) }`. A count other than 1 — including
 an anomalous 0 a healthy process can never report — fails closed rather than
 forking on an untrusted count. A count above 1 is read again for up
-to 10ms before it is believed: the kernel drops a joined thread from
-its count some microseconds after `pthread_join` returns, so a thread
-the caller joined just before the call would otherwise fail the check.
+to 1s before it is believed: the kernel drops a joined thread from
+its count some time after `pthread_join` returns (microseconds when idle,
+over 10ms on a loaded host), so a thread the caller joined just before
+the call would otherwise fail the check.
 The count is read from the kernel,
 through whichever interface each platform offers; the capability table
 in `build.rs` records which, and the crate front page's "Platform
@@ -1312,7 +1313,7 @@ verification points.
 - R44. Post-fork errors are reported via parent's stderr, not lost.
 - R45. `daemonize()` panics when thread count is not exactly 1, once
   threads already joined have left it (a count above 1 is re-read for
-  up to 10ms).
+  up to 1s).
 - R46. `DaemonConfig` is `Send + Sync`.
 - R47. `DaemonContext` is `Send + Sync`.
 - R48. `DaemonizeError` is `Send + Sync`.

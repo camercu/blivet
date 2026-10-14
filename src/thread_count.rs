@@ -289,23 +289,42 @@ pub(crate) fn assert_single_threaded(caller: &str) {
     }
 }
 
+/// How long a count above the expected one is re-read before it is believed.
+///
+/// The bound is a worst case: the read loop ends the moment the count settles,
+/// so only a thread that is really still running pays it.
+#[cfg(blivet_thread_count)]
+const SETTLE_WINDOW: std::time::Duration = std::time::Duration::from_secs(1);
+
 /// The count from `source`, once threads already joined have left it.
 ///
-/// The kernel drops an exiting thread from its count some microseconds after
-/// `pthread_join` returns (about 30µs measured on macOS; Linux decrements
-/// after the join's wake-up too). A count above `expected` is read again
-/// until it falls to `expected` or 10ms pass, so a thread still running is
-/// reported 10ms later, and a joined one is not reported at all. The checks
-/// expect 1.
+/// The kernel drops an exiting thread from its count some time after
+/// `pthread_join` returns: about 30µs on an idle macOS host, but over 10ms on
+/// a loaded Android emulator. A count above `expected` is read again until it
+/// falls to `expected` or [`SETTLE_WINDOW`] passes, so a thread still running
+/// is reported that much later, and a joined one is not reported at all. The
+/// checks expect 1.
 #[cfg(blivet_thread_count)]
 fn settled_count(source: &ThreadCount, expected: usize) -> std::io::Result<usize> {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(10);
+    settle(|| source.read(), expected, SETTLE_WINDOW)
+}
+
+/// [`settled_count`] over any reading, so a test can supply a slow kernel.
+#[cfg(blivet_thread_count)]
+fn settle(
+    mut read: impl FnMut() -> std::io::Result<usize>,
+    expected: usize,
+    window: std::time::Duration,
+) -> std::io::Result<usize> {
+    let deadline = std::time::Instant::now() + window;
     loop {
-        let n = source.read()?;
+        let n = read()?;
         if n <= expected || std::time::Instant::now() >= deadline {
             return Ok(n);
         }
-        std::thread::yield_now();
+        // A sleep, not a yield: a thread that is really running holds the
+        // loop for the whole window, which a yield would spend spinning.
+        std::thread::sleep(std::time::Duration::from_millis(1));
     }
 }
 
@@ -432,6 +451,26 @@ mod tests {
             Err(DaemonizeError::InitLeftThreads(n)) => assert!(n > 1, "{n}"),
             other => panic!("expected the count to be read, got {other:?}"),
         }
+    }
+
+    // Covers: R45, R126
+    #[test]
+    fn a_count_that_drops_late_still_settles() {
+        let start = std::time::Instant::now();
+        let slow_kernel = || {
+            let late = start.elapsed() < std::time::Duration::from_millis(50);
+            Ok(if late { 3 } else { 1 })
+        };
+        assert_eq!(settle(slow_kernel, 1, SETTLE_WINDOW).unwrap(), 1);
+    }
+
+    // Covers: R45
+    #[test]
+    fn a_count_that_never_drops_is_reported_after_the_window() {
+        let window = std::time::Duration::from_millis(20);
+        let start = std::time::Instant::now();
+        assert_eq!(settle(|| Ok(3), 1, window).unwrap(), 3);
+        assert!(start.elapsed() >= window);
     }
 
     // Covers: R45, R126
