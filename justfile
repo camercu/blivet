@@ -59,11 +59,16 @@ machete:
 doc:
     RUSTDOCFLAGS="-D warnings" cargo doc {{locked}} --no-deps
 
-# Type-check the non-host Unix targets, catching platform type differences
-# (rlim_t is i64 on FreeBSD, u64 elsewhere) and libc constants a platform
-# lacks (bionic has no AT_EACCESS) before push. `cargo check` needs only the
-# target's std (rustup-installable); OpenBSD is tier-3 without one, so CI's
-# OpenBSD smoke remains the backstop there.
+# Type-check and lint the non-host Unix targets, catching platform type
+# differences (rlim_t is i64 on FreeBSD, u64 elsewhere), libc constants a
+# platform lacks (bionic has no AT_EACCESS), and lints on code `cfg`-gated to
+# one OS (the cast lints in each `thread_count::count`), which host clippy never
+# sees. Clippy needs only the target's std (rustup-installable); OpenBSD is
+# tier-3 without one, so CI's OpenBSD smoke remains the backstop there.
+#
+# --all-targets because the test helpers and the shipped example also reach for
+# platform items; -D warnings because a deprecated stub is a warning, and the
+# stubs are what a best-effort target resolves to.
 #
 # "Any other Unix" is not checkable as a class — `x86_64-pc-solaris` does not
 # compile, because `nix` gates `Flock` and `sys::resource` away there. illumos
@@ -71,18 +76,12 @@ doc:
 # every fallback branch, and it has a rustup std to check against.
 check-cross:
     rustup target add x86_64-unknown-linux-gnu x86_64-unknown-freebsd x86_64-unknown-netbsd aarch64-linux-android x86_64-linux-android x86_64-unknown-illumos
-    {{cargo}} check {{locked}} --target x86_64-unknown-linux-gnu
-    {{cargo}} check {{locked}} --target x86_64-unknown-freebsd
-    {{cargo}} check {{locked}} --target x86_64-unknown-netbsd
-    {{cargo}} check {{locked}} --target aarch64-linux-android
-    {{cargo}} check {{locked}} --target x86_64-linux-android
-    # illumos is not in the capability table: it is the best-effort tier's
-    # stand-in, so this is the only gate behind the row promising those targets
-    # compile. --all-targets because what breaks there is the shipped example
-    # and the test helpers reaching for a capability-gated item, not the
-    # library; -D warnings because a deprecated stub is a warning, and the
-    # stubs are what a best-effort target resolves to.
-    RUSTFLAGS="-D warnings" {{cargo}} check {{locked}} --target x86_64-unknown-illumos --all-targets
+    {{cargo}} clippy {{locked}} --all-targets --target x86_64-unknown-linux-gnu -- -D warnings
+    {{cargo}} clippy {{locked}} --all-targets --target x86_64-unknown-freebsd -- -D warnings
+    {{cargo}} clippy {{locked}} --all-targets --target x86_64-unknown-netbsd -- -D warnings
+    {{cargo}} clippy {{locked}} --all-targets --target aarch64-linux-android -- -D warnings
+    {{cargo}} clippy {{locked}} --all-targets --target x86_64-linux-android -- -D warnings
+    {{cargo}} clippy {{locked}} --all-targets --target x86_64-unknown-illumos -- -D warnings
 
 # Lowest rustc that must be able to *resolve* the dev-dependency graph: the
 # rust OpenBSD ships via `pkg_add rust` (Tier 3, no rustup), which the openbsd
