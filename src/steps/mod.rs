@@ -6,12 +6,14 @@
 //! grouping.
 
 mod fds;
+mod opened;
 mod pidfile;
 mod process;
 mod stdio;
 mod undo;
 
 pub(crate) use fds::*;
+pub(crate) use opened::*;
 pub(crate) use pidfile::*;
 pub(crate) use process::*;
 pub(crate) use stdio::*;

@@ -5,8 +5,7 @@
 //! The entry points in `lib.rs` validate and check the thread count, then
 //! call [`daemonize_inner_with`]; the individual steps live in `steps/`.
 
-use std::os::fd::{AsFd, AsRawFd, OwnedFd};
-use std::path::PathBuf;
+use std::os::fd::{AsRawFd, OwnedFd};
 
 use nix::fcntl::Flock;
 use nix::unistd::ForkResult;
@@ -171,8 +170,8 @@ fn panicked(payload: &(dyn std::any::Any + Send)) -> DaemonizeError {
 ///
 /// The pidfile goes while the lock is still held: released first, the lock
 /// would let a second instance in to write its pid into a file this one then
-/// removes. Fields drop after the body of [`Drop::drop`], so `lock` is
-/// released after the body has removed the pidfile.
+/// removes. Fields drop after the body of [`Drop::drop`], so the lock in
+/// `files` is released after the body has removed the pidfile.
 struct AbortGuard<'a> {
     /// `PutBack` in foreground mode, `Skip` in a daemon: the one place the
     /// sequence decides how much a failure undoes.
@@ -185,7 +184,8 @@ struct AbortGuard<'a> {
     /// [`cleanup_on_drop`](crate::DaemonConfig::cleanup_on_drop) says, which
     /// governs only a daemon that started (R145).
     pidfile: Option<&'a std::path::Path>,
-    lock: Option<Flock<OwnedFd>>,
+    /// The files steps 7, 8 and 12 opened, the lock among them.
+    files: steps::OpenedFiles<'a>,
 }
 
 impl AbortGuard<'_> {
@@ -198,7 +198,7 @@ impl AbortGuard<'_> {
             },
             undo: Vec::new(),
             pidfile: None,
-            lock: None,
+            files: steps::OpenedFiles::default(),
         }
     }
 
@@ -249,7 +249,7 @@ impl AbortGuard<'_> {
     fn disarm(&mut self) -> Option<Flock<OwnedFd>> {
         self.undo.drain(..).for_each(steps::Undo::keep);
         self.pidfile = None;
-        self.lock.take()
+        self.files.take_lock()
     }
 }
 
@@ -260,7 +260,7 @@ impl Drop for AbortGuard<'_> {
         if let Some(path) = self.pidfile.take() {
             let _ = std::fs::remove_file(path);
         }
-        // `lock` drops after this body, so the pidfile is gone first.
+        // `files` drops after this body, so the pidfile is gone first.
     }
 }
 
@@ -303,7 +303,8 @@ unsafe fn run_post_fork<T>(
     // unless derivation was opted out)
     let lockfile_path = config.effective_lockfile().map(std::path::PathBuf::as_path);
     if let Some(path) = lockfile_path {
-        abort.lock = Some(steps::open_and_lock(path)?);
+        let lock = steps::open_and_lock(path)?;
+        abort.files.push(path, steps::Role::Lockfile(lock));
     }
 
     // Step 8: Write pidfile. The debt is owed from the moment this process
@@ -317,16 +318,17 @@ unsafe fn run_post_fork<T>(
     // The pidfile goes first: a derived lockfile is the same file, and the
     // user configured it as the pidfile.
     let mut owned = Vec::new();
-    // A standalone pidfile's descriptor, kept for step 16's chown (R163).
-    let mut pidfile_fd = None;
     if let Some(ref pidfile_path) = config.pidfile {
-        let pidfile = steps::open_pidfile(pidfile_path, lockfile_path.zip(abort.lock.as_ref()))?;
+        let pidfile = steps::open_pidfile(pidfile_path, abort.files.lock())?;
         abort.pidfile = Some(pidfile_path);
         let (id, fd) = pidfile.write_pid()?;
         owned.push(("pidfile", id));
-        pidfile_fd = fd;
+        // A standalone pidfile's descriptor, kept for step 16's chown (R163).
+        if let Some(fd) = fd {
+            abort.files.push(pidfile_path, steps::Role::Pidfile(fd));
+        }
     }
-    if let Some(ref lockfile) = abort.lock {
+    if let Some((_, lockfile)) = abort.files.lock() {
         let id = crate::file_identity::file_id(&**lockfile)
             .map_err(|e| DaemonizeError::LockfileError(format!("fstat: {e}")))?;
         owned.push(("lockfile", id));
@@ -344,7 +346,6 @@ unsafe fn run_post_fork<T>(
     // Step 12: Redirect stdout/stderr to configured files. Only a foreground
     // caller sees the slots after a failure, so only it pays for saving them.
     // The files it opened stay held for step 16's chown (R163).
-    let mut streams = Vec::new();
     if config.stdout.is_some() || config.stderr.is_some() {
         let redirected = steps::redirect_output(
             config.stdout.as_deref(),
@@ -354,24 +355,16 @@ unsafe fn run_post_fork<T>(
             abort.rollback(),
         )?;
         abort.record_all(redirected.slots)?;
-        streams = redirected.files;
+        for (path, fd) in redirected.files {
+            abort.files.push(path, steps::Role::Stream(fd));
+        }
     }
 
     // Step 13: Close inherited fds (if enabled)
     if config.close_fds {
-        let mut skip_fds: Vec<i32> = Vec::new();
-        if let Some(ref flock) = abort.lock {
-            skip_fds.push(flock.as_raw_fd());
-        }
-        if let Some(wr) = pipe_wr.as_ref() {
-            skip_fds.push(wr.as_fd().as_raw_fd());
-        }
-        if let Some(ref fd) = pidfile_fd {
-            skip_fds.push(fd.as_raw_fd());
-        }
-        skip_fds.extend(abort.held_fds());
-        skip_fds.extend(streams.iter().map(|(_, fd)| fd.as_raw_fd()));
-        steps::close_inherited_fds(&skip_fds)?;
+        let pipe = pipe_wr.as_ref().map(|wr| wr.as_fd().as_raw_fd());
+        let spared = steps::spared_fds(&abort.files, abort.held_fds(), pipe);
+        steps::close_inherited_fds(&spared)?;
     }
 
     // Step 14: Resolve the target identity before init, so a user or group
@@ -402,20 +395,9 @@ unsafe fn run_post_fork<T>(
     // Steps 16-17: Hand the daemon's files to the target identity while still
     // privileged, then switch to it (R155).
     if let Some(identity) = &identity {
-        if config.chown_paths {
-            // The files as opened, by descriptor (R163); for stdout and
-            // stderr, step 12's, as init may have moved fds 1 and 2.
-            let pidfile = config
-                .pidfile
-                .as_deref()
-                .zip(pidfile_fd.as_ref().map(|fd| fd.as_fd()));
-            let lock = config
-                .effective_lockfile()
-                .map(PathBuf::as_path)
-                .zip(abort.lock.as_ref().map(|flock| flock.as_fd()));
-            let streams = streams.iter().map(|(path, fd)| (*path, fd.as_fd()));
-            identity.chown_files([pidfile, lock].into_iter().flatten().chain(streams))?;
-        }
+        // The files as opened, by descriptor (R163); for stdout and stderr,
+        // step 12's, as init may have moved fds 1 and 2.
+        identity.chown_files(steps::chown_targets(&abort.files, config.chown_paths))?;
     }
     #[cfg(test)]
     if steps::failpoints::BEFORE_SWITCH_FAILS.injected() {
@@ -450,6 +432,7 @@ fn parent_pipe_reader(rd: OwnedFd, forker: &impl Forker) -> ! {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::fd::AsFd;
 
     use crate::forker::null_forker::NullForker;
     use crate::test_support::{is_subprocess, run_in_subprocess};
