@@ -344,7 +344,7 @@ jobs:
           target: default
           script: ./scripts/android-smoke.sh
 
-  # NetBSD 10.1 ships Rust 1.82, below our MSRV (1.85). Cross-compile on the
+  # The NetBSD VM image has no Rust at our MSRV (1.85). Cross-compile on the
   # Ubuntu host and run the binary inside the VM.
   netbsd-smoke:
     runs-on: ubuntu-latest
@@ -358,7 +358,7 @@ jobs:
         run: |
           mkdir -p /tmp/netbsd-sysroot
           for set in base comp; do
-            curl -fL --retry 3 --retry-delay 5 "https://cdn.netbsd.org/pub/NetBSD/NetBSD-10.1/amd64/binary/sets/${set}.tar.xz" \
+            curl -fL --retry 3 --retry-delay 5 "https://cdn.netbsd.org/pub/NetBSD/NetBSD-11.0/amd64/binary/sets/${set}.tar.xz" \
               | sudo tar xJf - -C /tmp/netbsd-sysroot
           done
       - name: Cross-compile for NetBSD
@@ -397,7 +397,7 @@ jobs:
         uses: cross-platform-actions/action@v1
         with:
           operating_system: netbsd
-          version: '10.1'
+          version: '11.0'
           shell: sh
           run: |
             set -eu
