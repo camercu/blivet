@@ -33,7 +33,7 @@ lint:
 # each `run:` block). Its own recipe, not part of `check`: CI's `ci` job runs
 # `check` on hosts that do not carry these tools, and the `lint-text` job runs
 # this in the nix shell, at the versions shell.nix pins.
-lint-text: lint-typos lint-taplo lint-markdown lint-actions
+lint-text: lint-typos lint-taplo lint-markdown lint-actions lint-shell
 
 lint-typos:
     typos
@@ -46,6 +46,10 @@ lint-markdown:
 
 lint-actions:
     actionlint
+
+# The shebang-less scripts run as `sh x.sh` carry `# shellcheck shell=sh`.
+lint-shell:
+    shellcheck scripts/*.sh
 
 # Run cargo-deny checks (advisories, licenses, bans)
 lint-deny:

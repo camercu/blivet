@@ -1,3 +1,4 @@
+# shellcheck shell=sh
 # Publishes blivet <version> to crates.io, unless crates.io already has it.
 #
 # Runs in semantic-release's prepare step, before @semantic-release/git

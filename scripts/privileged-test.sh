@@ -1,3 +1,4 @@
+# shellcheck shell=sh
 # Runs the privileged tier's suite: every test, ignored included, as root.
 #
 # The tier's claim is not "tests ran" — `assert-tests-ran.sh` answers that —

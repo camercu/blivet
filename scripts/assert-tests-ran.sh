@@ -1,3 +1,4 @@
+# shellcheck shell=sh
 # Runs a test command and fails if it reported no tests.
 #
 # `cargo test` prints "test result: ok." and exits 0 when its filter matches

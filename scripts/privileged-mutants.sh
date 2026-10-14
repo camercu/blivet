@@ -1,3 +1,4 @@
+# shellcheck shell=sh
 # Mutation-tests the crate inside the privileged container, as root, with the
 # ignored tests included, so a mutant in code only root can exercise meets the
 # root tests that kill it. On an unprivileged host those tests skip and every
@@ -17,13 +18,14 @@ if [ "$(id -u)" -ne 0 ]; then
     exit 1
 fi
 
+mode="${1:-}"
 # Appended to the profile in .cargo/mutants.toml: the ignored corpus, as
 # privileged-test.sh asks nextest for it.
-ignored="--cargo-test-arg=--run-ignored --cargo-test-arg=all"
+set -- --cargo-test-arg=--run-ignored --cargo-test-arg=all
 
-if [ "${1:-}" = "--in-diff" ]; then
+if [ "$mode" = "--in-diff" ]; then
     diff=$(mktemp)
     cat > "$diff"
-    exec sh scripts/cargo-mutants.sh $ignored --in-diff "$diff"
+    exec sh scripts/cargo-mutants.sh "$@" --in-diff "$diff"
 fi
-exec sh scripts/cargo-mutants.sh $ignored
+exec sh scripts/cargo-mutants.sh "$@"

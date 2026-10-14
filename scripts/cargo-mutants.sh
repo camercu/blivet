@@ -1,3 +1,4 @@
+# shellcheck shell=sh
 # cargo-mutants, with a timed-out mutant counted as caught: its tests did not
 # pass. Exit 3 cannot say that alone, because cargo-mutants returns it whenever
 # any mutant timed out, ahead of the 2 for a missed one; so 3 passes only when
