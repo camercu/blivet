@@ -217,6 +217,80 @@ pub(crate) fn assert_isolated(what: &str) {
     );
 }
 
+/// Linux's `SA_RESTORER`. On x86_64, glibc and bionic add it to every
+/// action they install, so a restored action differs from the original
+/// in this bit alone. It names libc's return trampoline, not behaviour.
+const SA_RESTORER: i32 = 0x0400_0000;
+
+/// Every signal's handler and flags, less `SA_RESTORER`, and the mask.
+pub(crate) fn signal_state() -> (Vec<(i32, usize, i32)>, Vec<i32>) {
+    let mut dispositions = Vec::new();
+    for sig in 1..=64 {
+        if let Ok(now) = crate::signals::disposition(sig) {
+            dispositions.push((sig, now.sa_sigaction, now.sa_flags & !SA_RESTORER));
+        }
+    }
+    let mask = nix::sys::signal::SigSet::thread_get_mask().unwrap();
+    let blocked = (1..32)
+        .filter(|&sig| nix::sys::signal::Signal::try_from(sig).is_ok_and(|s| mask.contains(s)))
+        .collect();
+    (dispositions, blocked)
+}
+
+/// The process state a failed foreground start must leave as it found it
+/// (R164), as the undo walk compares it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ProcessSnapshot {
+    umask: nix::sys::stat::Mode,
+    cwd: std::path::PathBuf,
+    /// What fds 0 to 2 point at, by device and inode; `None` when closed.
+    stdio: [Option<crate::file_identity::FileId>; 3],
+    signals: (Vec<(i32, usize, i32)>, Vec<i32>),
+    /// Sorted; `None` once compared without it.
+    env: Option<Vec<(std::ffi::OsString, std::ffi::OsString)>>,
+    groups: Vec<libc::gid_t>,
+    gid: u32,
+    egid: u32,
+    pidfile_exists: bool,
+}
+
+impl ProcessSnapshot {
+    /// Reads the state now. `pidfile` is the file the start writes.
+    pub(crate) fn take(pidfile: &std::path::Path) -> Self {
+        use nix::sys::stat::{Mode, umask};
+        let mask = umask(Mode::empty());
+        umask(mask);
+        let stdio = [0, 1, 2].map(|fd| {
+            // SAFETY: `fstat` only reads the slot; a closed one is EBADF.
+            #[allow(unsafe_code)]
+            let fd = unsafe { std::os::fd::BorrowedFd::borrow_raw(fd) };
+            crate::file_identity::file_id(fd).ok()
+        });
+        let mut env: Vec<_> = std::env::vars_os().collect();
+        env.sort();
+        let mut groups = supplementary_gids();
+        groups.sort_unstable();
+        Self {
+            umask: mask,
+            cwd: std::env::current_dir().unwrap(),
+            stdio,
+            signals: signal_state(),
+            env: Some(env),
+            groups,
+            gid: nix::unistd::getgid().as_raw(),
+            egid: nix::unistd::getegid().as_raw(),
+            pidfile_exists: pidfile.exists(),
+        }
+    }
+
+    /// This snapshot without the environment, which a failure after `init`
+    /// leaves as step 11 set it (R164).
+    pub(crate) fn without_env(mut self) -> Self {
+        self.env = None;
+        self
+    }
+}
+
 /// This process's supplementary group IDs.
 pub(crate) fn supplementary_gids() -> Vec<libc::gid_t> {
     crate::sys::raw_getgroups().expect("getgroups failed")

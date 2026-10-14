@@ -81,9 +81,11 @@ and whether the pidfile exists.
 
 The walk needs no list of steps. A future step that changes state without
 returning a token changes the snapshot at every N after it, and the test
-fails. A final failpoint just before step 18 covers a change made after the
-last token. The unprivileged tier walks a start with no identity switch. The
-root tier walks one with a user, so steps 14, 16, and 17 run too.
+fails. A final failpoint covers a change made after the last token. It sits
+just before step 17, the last point a failure can be undone: no token
+reverses a completed `setuid`. The unprivileged tier walks a start with no
+identity switch. The root tier walks one with a user, so steps 14 and 16 run
+too.
 
 ### One record of opened files
 
@@ -179,7 +181,7 @@ each decision handles it.
 - **2.8**: The pidfile is removed before the lock is released, in both modes,
   as R164 requires.
 - **2.9**: The walk test fails a foreground start after each token in turn,
-  and after the last step before 18. After each failure, process state equals
+  and just before step 17. After each failure, process state equals
   the state before the start, as the Architecture section's snapshot defines
   it.
 - **2.10**: The walk test runs unprivileged without an identity switch, and in

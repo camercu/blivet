@@ -131,14 +131,20 @@ impl ResolvedIdentity {
     ///
     /// Returns `DaemonizeError::PermissionDenied` if `initgroups` fails, and
     /// `UserNotFound` for a name with a NUL byte.
-    pub(crate) fn join_groups(&self) -> Result<(), DaemonizeError> {
+    pub(crate) fn join_groups(
+        &self,
+        rollback: crate::steps::Rollback,
+    ) -> Result<crate::steps::Undo, DaemonizeError> {
+        use crate::steps::Undo;
         #[cfg(test)]
         crate::test_support::assert_isolated("joining the user's groups");
-        if let Some(info) = self.user() {
-            crate::sys::raw_initgroups(&info.cname()?, info.gid.as_raw())
-                .map_err(|e| DaemonizeError::PermissionDenied(format!("initgroups: {e}")))?;
-        }
-        Ok(())
+        let Some(info) = self.user() else {
+            return Ok(Undo::nothing());
+        };
+        let undo = Undo::saving(rollback, || Groups(crate::sys::raw_getgroups().ok()));
+        crate::sys::raw_initgroups(&info.cname()?, info.gid.as_raw())
+            .map_err(|e| DaemonizeError::PermissionDenied(format!("initgroups: {e}")))?;
+        Ok(undo)
     }
 
     /// Switch the process to this identity.
@@ -231,6 +237,18 @@ fn resolve_group_gid(spec: &str) -> Result<Gid, DaemonizeError> {
             .map_err(|e| DaemonizeError::GroupNotFound(format!("getgrnam({spec}): {e}")))?
             .ok_or_else(|| DaemonizeError::GroupNotFound(spec.to_string()))?;
         Ok(group.gid)
+    }
+}
+
+/// The supplementary groups step 14 replaced. Best-effort, as the working
+/// directory is: a `getgroups` failure must not fail the start (R164).
+struct Groups(Option<Vec<libc::gid_t>>);
+
+impl crate::steps::Restore for Groups {
+    fn restore(self: Box<Self>) {
+        if let Some(groups) = self.0 {
+            let _ = crate::sys::raw_setgroups(&groups);
+        }
     }
 }
 

@@ -9,11 +9,13 @@ mod fds;
 mod pidfile;
 mod process;
 mod stdio;
+mod undo;
 
 pub(crate) use fds::*;
 pub(crate) use pidfile::*;
 pub(crate) use process::*;
 pub(crate) use stdio::*;
+pub(crate) use undo::*;
 
 /// Test-only failure injection for post-fork syscalls that cannot be made to
 /// fail from inside a test process (that would need a missing `/dev/null` or a
@@ -23,7 +25,7 @@ pub(crate) use stdio::*;
 /// in its own process (`test_support::run_in_subprocess`).
 #[cfg(test)]
 pub(crate) mod failpoints {
-    use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicI32, AtomicUsize, Ordering};
 
     /// One injectable failure. Only [`set`](Self::set) writes it, and that
     /// asserts the test runs in its own process.
@@ -71,6 +73,32 @@ pub(crate) mod failpoints {
     /// Fails step 12's truncation of a stream file, the last thing it does:
     /// every stdio slot has moved by then.
     pub(crate) static STREAM_TRUNCATE_FAILS: Failpoint = Failpoint::new();
+
+    /// Fails the sequence just after it records its Nth undo token, counting
+    /// from 1, for the undo walk. 0 fails none.
+    static FAIL_AFTER_TOKEN: AtomicUsize = AtomicUsize::new(0);
+
+    /// The error [`FAIL_AFTER_TOKEN`] injects.
+    pub(crate) const TOKEN_FAILURE: &str = "undo walk: failed after a token";
+
+    /// Sets [`FAIL_AFTER_TOKEN`], in this whole process; asserts the test
+    /// runs in its own process.
+    pub(crate) fn fail_after_token(n: usize) {
+        crate::test_support::assert_isolated("the undo walk");
+        FAIL_AFTER_TOKEN.store(n, Ordering::Relaxed);
+    }
+
+    /// Whether the sequence fails having recorded `count` tokens.
+    pub(crate) fn token_fails(count: usize) -> bool {
+        FAIL_AFTER_TOKEN.load(Ordering::Relaxed) == count
+    }
+
+    /// Fails the sequence at the last point a failure can still be undone:
+    /// after step 16, before step 17's switch, which no token can reverse.
+    pub(crate) static BEFORE_SWITCH_FAILS: Failpoint = Failpoint::new();
+
+    /// The error [`BEFORE_SWITCH_FAILS`] injects.
+    pub(crate) const SWITCH_FAILURE: &str = "undo walk: failed before the switch";
 
     /// Stands in for the fd limit `getrlimit` would report, or 0 to use the
     /// real one.

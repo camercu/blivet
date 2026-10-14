@@ -9,6 +9,7 @@ use nix::fcntl::{OFlag, open};
 use nix::sys::stat::Mode;
 use nix::unistd::{self};
 
+use super::{Restore, Rollback, Undo};
 use crate::error::DaemonizeError;
 use crate::file_identity::FileId;
 use std::os::fd::AsRawFd;
@@ -54,7 +55,7 @@ pub(super) fn open_above_stdio<P: ?Sized + nix::NixPath>(
 pub(crate) fn redirect_to_devnull(
     stdout_stderr: bool,
     rollback: Rollback,
-) -> Result<Vec<SavedSlot>, DaemonizeError> {
+) -> Result<Vec<Undo>, DaemonizeError> {
     #[cfg(test)]
     crate::test_support::assert_isolated("redirect_to_devnull");
     #[cfg(test)]
@@ -164,7 +165,7 @@ fn truncate(stream: &OpenStream) -> Result<(), DaemonizeError> {
 /// truncations, which cannot be undone, come last. A stream file it created
 /// stays, empty, and an I/O error truncating stderr after stdout's truncation
 /// succeeded leaves stdout emptied.
-#[must_use = "the saved slots put stdio back when dropped; keep() them to leave it redirected"]
+#[must_use = "the slot tokens put stdio back when dropped; keep() them to leave it redirected"]
 pub(crate) fn redirect_output<'a>(
     stdout: Option<&'a Path>,
     stderr: Option<&'a Path>,
@@ -224,24 +225,12 @@ pub(crate) fn redirect_output<'a>(
 }
 
 /// What step 12 did: the stdio slots it moved, and the files it opened.
-#[must_use = "the saved slots put stdio back when dropped; keep() them to leave it redirected"]
+#[must_use = "the slot tokens put stdio back when dropped; keep() them to leave it redirected"]
 pub(crate) struct Redirected<'a> {
-    pub(crate) slots: Vec<SavedSlot>,
+    pub(crate) slots: Vec<Undo>,
     /// Each stream's file by the path that names it, once: stderr sharing
     /// stdout's file is not repeated. Close-on-exec, above fd 2.
     pub(crate) files: Vec<(&'a Path, OwnedFd)>,
-}
-
-/// Whether a stdio step saves the slots it moves, so a failure can put them
-/// back (R147, R164).
-#[derive(Clone, Copy)]
-pub(crate) enum Rollback {
-    /// Save each slot before moving it, and restore it on failure. Saving
-    /// needs a free descriptor, so this fails when none is left.
-    PutBack,
-    /// Move the slots without saving them. For a daemon child, which exits on
-    /// any failure, so no one sees the slots afterward.
-    Skip,
 }
 
 /// A stdio slot steps 6 and 12 move a file onto.
@@ -306,17 +295,18 @@ impl SlotError {
     }
 }
 
-/// Moves `source` onto stdio slot `target`, saved in `moved` when `rollback`
-/// asks for it. The choice lives here, not in [`SavedSlot`], so a
-/// `SavedSlot` always holds what it saved.
+/// Moves `source` onto stdio slot `target`, with its token in `moved` when
+/// `rollback` asks for one. Saving a slot needs a free descriptor, so under
+/// [`Rollback::PutBack`] this fails when none is left. The choice lives here,
+/// not in [`SavedSlot`], so a `SavedSlot` always holds what it saved.
 fn move_slot(
     source: &OwnedFd,
     target: StdioSlot,
     rollback: Rollback,
-    moved: &mut Vec<SavedSlot>,
+    moved: &mut Vec<Undo>,
 ) -> Result<(), SlotError> {
     match rollback {
-        Rollback::PutBack => moved.push(SavedSlot::redirect(source, target)?),
+        Rollback::PutBack => moved.push(Undo::new(SavedSlot::redirect(source, target)?)),
         Rollback::Skip => target.dup2(source).map_err(SlotError::Dup2)?,
     }
     Ok(())
@@ -347,14 +337,11 @@ fn open_checked_stderr<'a, 'o>(
     })
 }
 
-/// A stdio slot a step has moved, put back as it was when this is dropped —
-/// on any failure after the move — unless [`keep`](Self::keep) is called.
-#[derive(Debug)]
-pub(crate) struct SavedSlot {
+/// A stdio slot a step has moved, and what it held before.
+struct SavedSlot {
     target: StdioSlot,
     /// What the slot held, or `None` if it was closed.
     was: Option<OwnedFd>,
-    restore: bool,
 }
 
 impl SavedSlot {
@@ -367,35 +354,23 @@ impl SavedSlot {
             Err(e) => return Err(SlotError::Save(e)),
         };
         target.dup2(source).map_err(SlotError::Dup2)?;
-        Ok(Self {
-            target,
-            was,
-            restore: true,
-        })
-    }
-
-    /// Leaves the slot where it was moved.
-    pub(crate) fn keep(mut self) {
-        self.restore = false;
-    }
-
-    /// The descriptor holding the saved copy, which the fd sweep must spare.
-    pub(crate) fn held_fd(&self) -> Option<i32> {
-        self.was.as_ref().map(std::os::fd::AsRawFd::as_raw_fd)
+        Ok(Self { target, was })
     }
 }
 
-impl Drop for SavedSlot {
-    fn drop(&mut self) {
-        if !self.restore {
-            return;
-        }
+impl Restore for SavedSlot {
+    fn restore(self: Box<Self>) {
         match &self.was {
             Some(fd) => {
                 let _ = self.target.dup2(fd);
             }
             None => crate::sys::raw_close(self.target.fd()),
         }
+    }
+
+    /// The saved copy, which the fd sweep must spare.
+    fn held_fd(&self) -> Option<i32> {
+        self.was.as_ref().map(AsRawFd::as_raw_fd)
     }
 }
 
@@ -432,7 +407,7 @@ mod tests {
     fn kept(
         result: Result<super::Redirected<'_>, crate::DaemonizeError>,
     ) -> Result<(), crate::DaemonizeError> {
-        result.map(|done| done.slots.into_iter().for_each(super::SavedSlot::keep))
+        result.map(|done| done.slots.into_iter().for_each(super::Undo::keep))
     }
 
     use crate::file_identity::file_id;
@@ -459,7 +434,10 @@ mod tests {
         }
         let devnull = fstat(open(c"/dev/null", OFlag::O_RDONLY, Mode::empty()).unwrap()).unwrap();
 
-        redirect_to_devnull(true, Rollback::Skip).unwrap();
+        redirect_to_devnull(true, Rollback::Skip)
+            .unwrap()
+            .into_iter()
+            .for_each(super::Undo::keep);
 
         // fd 2 is /dev/null too by now, so a failure here reports only through
         // the exit status.
@@ -496,7 +474,10 @@ mod tests {
         }
         nix::unistd::close(0).unwrap();
 
-        redirect_to_devnull(false, Rollback::Skip).unwrap();
+        redirect_to_devnull(false, Rollback::Skip)
+            .unwrap()
+            .into_iter()
+            .for_each(super::Undo::keep);
 
         let devnull = fstat(open(c"/dev/null", OFlag::O_RDONLY, Mode::empty()).unwrap()).unwrap();
         let stdin = fstat(std::io::stdin()).expect("fd 0 is not open after the redirect");
@@ -525,7 +506,10 @@ mod tests {
 
         let stdout_before = fstat(std::io::stdout()).unwrap();
         let stderr_before = fstat(std::io::stderr()).unwrap();
-        redirect_to_devnull(false, Rollback::Skip).unwrap();
+        redirect_to_devnull(false, Rollback::Skip)
+            .unwrap()
+            .into_iter()
+            .for_each(super::Undo::keep);
 
         // stdin should be /dev/null
         let devnull = fstat(open(c"/dev/null", OFlag::O_RDONLY, Mode::empty()).unwrap()).unwrap();

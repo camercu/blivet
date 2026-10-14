@@ -158,18 +158,16 @@ fn panicked(payload: &(dyn std::any::Any + Send)) -> DaemonizeError {
     DaemonizeError::application(70, format!("daemon panicked during startup: {text}"))
 }
 
-/// What a failed sequence undoes (R164), in the reverse of the order it was
-/// done: the supplementary groups (step 14), stdio slots (steps 12 and 6),
-/// the environment (step 11), the signal mask (step 10), the signal
-/// dispositions (step 9), the working directory (step 5), the umask (step 4),
-/// the pidfile (step 8), and last the lock (step 7). A half-done identity
-/// switch (step 17) undoes itself.
+/// What a failed sequence undoes (R164): each step's [`Undo`](steps::Undo)
+/// token, in the reverse of the order the steps ran, then the pidfile (step 8),
+/// and last the lock (step 7). A half-done identity switch (step 17) undoes
+/// itself.
 ///
 /// In foreground mode the process is the caller's, and it gets back the parts
-/// that can be restored. In daemon mode the process exits on failure, so only
-/// the pidfile is removed. What cannot be restored is in R164.
-/// [`disarm`](Self::disarm) at step 18 keeps every change and hands over the
-/// lock.
+/// that can be restored. In daemon mode the process exits on failure, so the
+/// tokens hold nothing and only the pidfile is removed. What cannot be
+/// restored is in R164. [`disarm`](Self::disarm) at step 18 keeps every change
+/// and hands over the lock.
 ///
 /// The pidfile goes while the lock is still held: released first, the lock
 /// would let a second instance in to write its pid into a file this one then
@@ -179,13 +177,8 @@ struct AbortGuard<'a> {
     /// `PutBack` in foreground mode, `Skip` in a daemon: the one place the
     /// sequence decides how much a failure undoes.
     rollback: steps::Rollback,
-    stdio: Vec<steps::SavedSlot>,
-    cwd: Option<OwnedFd>,
-    umask: Option<nix::sys::stat::Mode>,
-    dispositions: Vec<signals::Disposition>,
-    mask: Option<nix::sys::signal::SigSet>,
-    env: Vec<(String, Option<std::ffi::OsString>)>,
-    groups: Option<Vec<libc::gid_t>>,
+    /// Each step's token, in the order the steps ran.
+    undo: Vec<steps::Undo>,
     /// The pidfile this process owns from the second half of step 8: written
     /// or truncated by it, so a failure must not leave it naming a process
     /// that never started. Removed whatever
@@ -203,96 +196,58 @@ impl AbortGuard<'_> {
             } else {
                 steps::Rollback::Skip
             },
-            stdio: Vec::new(),
-            cwd: None,
-            umask: None,
-            dispositions: Vec::new(),
-            mask: None,
-            env: Vec::new(),
-            groups: None,
+            undo: Vec::new(),
             pidfile: None,
             lock: None,
         }
     }
 
-    /// Where step 9 records the dispositions it replaces, in foreground mode.
-    fn dispositions(&mut self) -> Option<&mut Vec<signals::Disposition>> {
-        match self.rollback {
-            steps::Rollback::PutBack => Some(&mut self.dispositions),
-            steps::Rollback::Skip => None,
-        }
-    }
-
-    /// The signal mask step 10 replaced, to put back in foreground mode.
-    fn note_mask(&mut self, old: nix::sys::signal::SigSet) {
-        if let steps::Rollback::PutBack = self.rollback {
-            self.mask = Some(old);
-        }
-    }
-
-    /// The variables step 11 replaced, to put back in foreground mode.
-    fn note_env(&mut self, old: Vec<(String, Option<std::ffi::OsString>)>) {
-        if let steps::Rollback::PutBack = self.rollback {
-            self.env = old;
-        }
-    }
-
-    /// Stops restoring the env: `init` may start threads (R164).
-    fn forget_env(&mut self) {
-        self.env.clear();
-    }
-
-    /// Saves the supplementary groups before step 14 replaces them, in
-    /// foreground mode. Best-effort, as the working directory is.
-    fn save_groups(&mut self) {
-        if let steps::Rollback::PutBack = self.rollback {
-            self.groups = crate::sys::raw_getgroups().ok();
-        }
-    }
-
-    /// Whether stdio steps save the slots they move.
+    /// Whether steps save what they change.
     fn rollback(&self) -> steps::Rollback {
         self.rollback
     }
 
-    /// The umask step 4 replaced, to put back in foreground mode.
-    fn note_umask(&mut self, old: nix::sys::stat::Mode) {
-        if let steps::Rollback::PutBack = self.rollback {
-            self.umask = Some(old);
+    /// Holds a step's token, to drop on failure.
+    fn record(&mut self, undo: steps::Undo) -> Result<(), DaemonizeError> {
+        self.undo.push(undo);
+        #[cfg(test)]
+        if steps::failpoints::token_fails(self.undo.len()) {
+            return Err(DaemonizeError::SystemError(
+                steps::failpoints::TOKEN_FAILURE.into(),
+            ));
         }
+        Ok(())
     }
 
-    /// Holds a descriptor of the working directory, to `fchdir` back to, in
-    /// foreground mode.
-    ///
-    /// Best-effort: a directory the caller may enter but not read cannot be
-    /// opened, and an undo aid must not fail the start (R164).
-    fn save_cwd(&mut self) {
-        if let steps::Rollback::PutBack = self.rollback {
-            self.cwd = std::fs::File::open(".")
-                .map(OwnedFd::from)
-                .and_then(steps::above_stdio)
-                .ok();
+    /// As [`record`](Self::record), for each of a step's tokens.
+    fn record_all(&mut self, undo: Vec<steps::Undo>) -> Result<(), DaemonizeError> {
+        let mut undo = undo.into_iter();
+        while let Some(next) = undo.next() {
+            if let Err(e) = self.record(next) {
+                // The rest restore now, latest first, before the recorded.
+                undo.rev().for_each(drop);
+                return Err(e);
+            }
         }
+        Ok(())
     }
 
-    /// The descriptors it holds, which the fd sweep must spare.
+    /// From `init` on other threads may run, so a token whose restore is
+    /// unsafe then (the env's `setenv`) restores nothing (R164).
+    fn threads_may_start(&mut self) {
+        self.undo
+            .iter_mut()
+            .for_each(steps::Undo::threads_may_start);
+    }
+
+    /// The descriptors the tokens hold, which the fd sweep must spare.
     fn held_fds(&self) -> impl Iterator<Item = i32> + '_ {
-        self.stdio
-            .iter()
-            .filter_map(steps::SavedSlot::held_fd)
-            .chain(self.cwd.as_ref().map(AsRawFd::as_raw_fd))
+        self.undo.iter().filter_map(steps::Undo::held_fd)
     }
 
     /// The sequence finished: keep every change, and hand over the lock.
     fn disarm(&mut self) -> Option<Flock<OwnedFd>> {
-        self.stdio.drain(..).for_each(steps::SavedSlot::keep);
-        self.cwd = None;
-        self.umask = None;
-        self.dispositions.clear();
-        self.mask = None;
-        self.env.clear();
-        self.groups = None;
+        self.undo.drain(..).for_each(steps::Undo::keep);
         self.pidfile = None;
         self.lock.take()
     }
@@ -300,22 +255,8 @@ impl AbortGuard<'_> {
 
 impl Drop for AbortGuard<'_> {
     fn drop(&mut self) {
-        if let Some(groups) = self.groups.take() {
-            let _ = crate::sys::raw_setgroups(&groups);
-        }
-        // Each saved slot puts itself back when dropped; latest first.
-        while self.stdio.pop().is_some() {}
-        steps::restore_env_vars(&mut self.env);
-        if let Some(mask) = self.mask.take() {
-            let _ = mask.thread_set_mask();
-        }
-        signals::restore_dispositions(&mut self.dispositions);
-        if let Some(cwd) = self.cwd.take() {
-            let _ = nix::unistd::fchdir(cwd.as_fd());
-        }
-        if let Some(mask) = self.umask.take() {
-            nix::sys::stat::umask(mask);
-        }
+        // Latest first: each token restores as it drops.
+        while self.undo.pop().is_some() {}
         if let Some(path) = self.pidfile.take() {
             let _ = std::fs::remove_file(path);
         }
@@ -345,19 +286,18 @@ unsafe fn run_post_fork<T>(
     let mut abort = AbortGuard::new(config.foreground);
 
     // Step 4: Set umask
-    abort.note_umask(steps::set_umask(config.umask));
+    abort.record(steps::set_umask(config.umask, abort.rollback()))?;
 
     // Step 5: chdir
-    abort.save_cwd();
-    steps::change_dir(&config.chdir)?;
+    abort.record(steps::change_dir(&config.chdir, abort.rollback())?)?;
 
     // Step 6: Redirect stdin to /dev/null (always); redirect stdout/stderr
     // to /dev/null only when not in foreground mode (foreground leaves them
     // inherited so output reaches the terminal or supervisor).
-    abort.stdio.extend(steps::redirect_to_devnull(
+    abort.record_all(steps::redirect_to_devnull(
         !config.foreground,
         abort.rollback(),
-    )?);
+    )?)?;
 
     // Step 7: Open and lock lockfile (explicit path, or the pidfile itself
     // unless derivation was opted out)
@@ -393,13 +333,13 @@ unsafe fn run_post_fork<T>(
     }
 
     // Step 9: Reset signal dispositions
-    signals::reset_signal_dispositions(abort.dispositions())?;
+    abort.record(signals::reset_signal_dispositions(abort.rollback())?)?;
 
     // Step 10: Clear signal mask
-    abort.note_mask(steps::clear_signal_mask()?);
+    abort.record(steps::clear_signal_mask(abort.rollback())?)?;
 
     // Step 11: Set environment variables
-    abort.note_env(steps::set_env_vars(&config.env));
+    abort.record(steps::set_env_vars(&config.env, abort.rollback()))?;
 
     // Step 12: Redirect stdout/stderr to configured files. Only a foreground
     // caller sees the slots after a failure, so only it pays for saving them.
@@ -413,7 +353,7 @@ unsafe fn run_post_fork<T>(
             &owned,
             abort.rollback(),
         )?;
-        abort.stdio.extend(redirected.slots);
+        abort.record_all(redirected.slots)?;
         streams = redirected.files;
     }
 
@@ -447,8 +387,7 @@ unsafe fn run_post_fork<T>(
     // The supplementary groups too, from the real group database, before
     // init can change root (R162).
     if let Some(identity) = &identity {
-        abort.save_groups();
-        identity.join_groups()?;
+        abort.record(identity.join_groups(abort.rollback())?)?;
     }
 
     // Step 15: The caller's privileged init (R153). After the lock, so only
@@ -457,12 +396,12 @@ unsafe fn run_post_fork<T>(
     // pidfile (R154). From here other threads may run, and `setenv` with one
     // alive is undefined behaviour, so a failure leaves the env as step 11
     // set it.
-    abort.forget_env();
+    abort.threads_may_start();
     let value = init()?;
 
     // Steps 16-17: Hand the daemon's files to the target identity while still
     // privileged, then switch to it (R155).
-    if let Some(identity) = identity {
+    if let Some(identity) = &identity {
         if config.chown_paths {
             // The files as opened, by descriptor (R163); for stdout and
             // stderr, step 12's, as init may have moved fds 1 and 2.
@@ -477,6 +416,14 @@ unsafe fn run_post_fork<T>(
             let streams = streams.iter().map(|(path, fd)| (*path, fd.as_fd()));
             identity.chown_files([pidfile, lock].into_iter().flatten().chain(streams))?;
         }
+    }
+    #[cfg(test)]
+    if steps::failpoints::BEFORE_SWITCH_FAILS.injected() {
+        return Err(DaemonizeError::SystemError(
+            steps::failpoints::SWITCH_FAILURE.into(),
+        ));
+    }
+    if let Some(identity) = identity {
         // SAFETY: this function's contract requires a single thread, and the
         // checked entry points verify it again after init (R126).
         unsafe { identity.switch_to() }?;
@@ -665,25 +612,7 @@ mod tests {
         assert!(!pidfile.exists(), "a failed start left its pidfile");
     }
 
-    /// Linux's `SA_RESTORER`. On x86_64, glibc and bionic add it to every
-    /// action they install, so a restored action differs from the original
-    /// in this bit alone. It names libc's return trampoline, not behaviour.
-    const SA_RESTORER: i32 = 0x0400_0000;
-
-    /// Every signal's handler and flags, less `SA_RESTORER`, and the mask.
-    fn signal_state() -> (Vec<(i32, usize, i32)>, Vec<i32>) {
-        let mut dispositions = Vec::new();
-        for sig in 1..=64 {
-            if let Ok(now) = crate::signals::disposition(sig) {
-                dispositions.push((sig, now.sa_sigaction, now.sa_flags & !SA_RESTORER));
-            }
-        }
-        let mask = nix::sys::signal::SigSet::thread_get_mask().unwrap();
-        let blocked = (1..32)
-            .filter(|&sig| nix::sys::signal::Signal::try_from(sig).is_ok_and(|s| mask.contains(s)))
-            .collect();
-        (dispositions, blocked)
-    }
+    use crate::test_support::signal_state;
 
     extern "C" fn caller_handler(_: libc::c_int) {}
 

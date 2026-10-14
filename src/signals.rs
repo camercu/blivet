@@ -7,6 +7,8 @@
 
 #![allow(unsafe_code)]
 
+use crate::steps::{Restore, Rollback, Undo};
+
 /// Reset signal dispositions from 1 through the signal ceiling to SIG_DFL.
 ///
 /// On Linux, iterates standard signals (1..32) then real-time signals
@@ -28,11 +30,11 @@
 /// to the parent rather than panicking. `EINVAL` — an uncatchable or invalid
 /// signal number — is skipped silently.
 ///
-/// With `saved`, each disposition it replaces is pushed there as it goes, so
-/// a foreground failure, this one's included, can put them back (R164).
+/// The token puts back each disposition it replaced, latest first (R164). A
+/// failure part way puts back those already replaced before it returns.
 pub(crate) fn reset_signal_dispositions(
-    mut saved: Option<&mut Vec<Disposition>>,
-) -> Result<(), crate::error::DaemonizeError> {
+    rollback: Rollback,
+) -> Result<Undo, crate::error::DaemonizeError> {
     #[cfg(test)]
     crate::test_support::assert_isolated("reset_signal_dispositions");
     #[cfg(test)]
@@ -41,6 +43,7 @@ pub(crate) fn reset_signal_dispositions(
             "sigaction(1): injected failure".into(),
         ));
     }
+    let mut saved = Dispositions(Vec::new());
     let signals = signal_range();
     for sig in signals {
         if matches!(sig, libc::SIGKILL | libc::SIGSTOP | libc::SIGPIPE) {
@@ -53,12 +56,13 @@ pub(crate) fn reset_signal_dispositions(
         // sigaction for the kernel to fill.
         let ret = unsafe { libc::sigaction(sig, &sa, &mut was) };
         if ret == 0 {
-            if let Some(saved) = saved.as_deref_mut() {
-                saved.push(Disposition { sig, was });
+            if let Rollback::PutBack = rollback {
+                saved.0.push(Disposition { sig, was });
             }
         } else {
             let err = std::io::Error::last_os_error();
             if err.raw_os_error() != Some(libc::EINVAL) {
+                drop(Undo::new(saved));
                 return Err(crate::error::DaemonizeError::SystemError(format!(
                     "sigaction({sig}): {err}"
                 )));
@@ -66,20 +70,25 @@ pub(crate) fn reset_signal_dispositions(
             // EINVAL: signal cannot be caught, skip
         }
     }
-    Ok(())
+    Ok(Undo::saving(rollback, || saved))
 }
 
 /// A signal's disposition as step 9 found it.
-pub(crate) struct Disposition {
+struct Disposition {
     sig: i32,
     was: libc::sigaction,
 }
 
-/// Puts back what [`reset_signal_dispositions`] replaced, latest first.
-pub(crate) fn restore_dispositions(saved: &mut Vec<Disposition>) {
-    while let Some(Disposition { sig, was }) = saved.pop() {
-        // SAFETY: `was` is a disposition sigaction itself reported for `sig`.
-        unsafe { libc::sigaction(sig, &was, std::ptr::null_mut()) };
+/// The dispositions step 9 replaced, in the order it replaced them.
+struct Dispositions(Vec<Disposition>);
+
+impl Restore for Dispositions {
+    fn restore(self: Box<Self>) {
+        for Disposition { sig, was } in self.0.into_iter().rev() {
+            // SAFETY: `was` is a disposition sigaction itself reported for
+            // `sig`.
+            unsafe { libc::sigaction(sig, &was, std::ptr::null_mut()) };
+        }
     }
 }
 
@@ -339,7 +348,7 @@ mod tests {
         );
 
         // Reset all dispositions
-        reset_signal_dispositions(None).unwrap();
+        reset_signal_dispositions(Rollback::Skip).unwrap().keep();
 
         // Read back SIGUSR1 disposition — should be SIG_DFL now
         // SAFETY: SIG_IGN and SIG_DFL install no handler, so no code runs.
@@ -373,7 +382,7 @@ mod tests {
         let ign = SigAction::new(SigHandler::SigIgn, SaFlags::empty(), SigSet::empty());
         // SAFETY: SIG_IGN and SIG_DFL install no handler, so no code runs.
         unsafe { sigaction(Signal::SIGPIPE, &ign) }.unwrap();
-        reset_signal_dispositions(None).unwrap();
+        reset_signal_dispositions(Rollback::Skip).unwrap().keep();
         // SAFETY: SIG_IGN and SIG_DFL install no handler, so no code runs.
         let after = unsafe { sigaction(Signal::SIGPIPE, &ign) }.unwrap();
         assert!(
@@ -386,7 +395,7 @@ mod tests {
         let dfl = SigAction::new(SigHandler::SigDfl, SaFlags::empty(), SigSet::empty());
         // SAFETY: SIG_IGN and SIG_DFL install no handler, so no code runs.
         unsafe { sigaction(Signal::SIGPIPE, &dfl) }.unwrap();
-        reset_signal_dispositions(None).unwrap();
+        reset_signal_dispositions(Rollback::Skip).unwrap().keep();
         // SAFETY: SIG_IGN and SIG_DFL install no handler, so no code runs.
         let after = unsafe { sigaction(Signal::SIGPIPE, &dfl) }.unwrap();
         assert!(

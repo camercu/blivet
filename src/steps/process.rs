@@ -1,11 +1,15 @@
 //! Steps that set process-wide state: umask (step 4), working directory
-//! (step 5), signal mask (step 10), and environment (step 11).
+//! (step 5), signal mask (step 10), and environment (step 11). Each returns
+//! the [`Undo`] that puts its change back.
 
 use std::ffi::OsString;
+use std::os::fd::{AsFd, AsRawFd, OwnedFd};
 use std::path::Path;
 
+use nix::sys::signal::SigSet;
 use nix::sys::stat::Mode;
 
+use super::{Restore, Rollback, Undo};
 use crate::error::DaemonizeError;
 
 /// Step 4: Set process umask.
@@ -13,29 +17,68 @@ use crate::error::DaemonizeError;
 /// `mode` is an octal permission value (validated `<= 0o7777` by
 /// [`DaemonConfig::validate`](crate::DaemonConfig::validate)); the cast to
 /// `mode_t` is therefore lossless.
-/// Returns the umask it replaced, for a foreground failure to put back.
 #[allow(clippy::cast_possible_truncation)] // validated <= 0o7777; mode_t is u16 on macOS and FreeBSD
-pub(crate) fn set_umask(mode: u32) -> Mode {
+pub(crate) fn set_umask(mode: u32, rollback: Rollback) -> Undo {
     #[cfg(test)]
     crate::test_support::assert_isolated("set_umask");
-    nix::sys::stat::umask(Mode::from_bits_truncate(mode as libc::mode_t))
+    let was = nix::sys::stat::umask(Mode::from_bits_truncate(mode as libc::mode_t));
+    Undo::saving(rollback, || Umask(was))
+}
+
+/// The umask step 4 replaced.
+struct Umask(Mode);
+
+impl Restore for Umask {
+    fn restore(self: Box<Self>) {
+        nix::sys::stat::umask(self.0);
+    }
 }
 
 /// Step 5: Change working directory.
-pub(crate) fn change_dir(path: &Path) -> Result<(), DaemonizeError> {
+pub(crate) fn change_dir(path: &Path, rollback: Rollback) -> Result<Undo, DaemonizeError> {
     #[cfg(test)]
     crate::test_support::assert_isolated("change_dir");
+    let undo = Undo::saving(rollback, Cwd::save);
     nix::unistd::chdir(path)
-        .map_err(|e| DaemonizeError::ChdirFailed(format!("{}: {e}", path.display())))
+        .map_err(|e| DaemonizeError::ChdirFailed(format!("{}: {e}", path.display())))?;
+    Ok(undo)
+}
+
+/// A descriptor of the working directory step 5 left, to `fchdir` back to.
+///
+/// Best-effort: a directory the caller may enter but not read cannot be
+/// opened, and an undo aid must not fail the start (R164).
+struct Cwd(Option<OwnedFd>);
+
+impl Cwd {
+    fn save() -> Self {
+        Self(
+            std::fs::File::open(".")
+                .map(OwnedFd::from)
+                .and_then(super::above_stdio)
+                .ok(),
+        )
+    }
+}
+
+impl Restore for Cwd {
+    fn restore(self: Box<Self>) {
+        if let Some(cwd) = self.0 {
+            let _ = nix::unistd::fchdir(cwd.as_fd());
+        }
+    }
+
+    fn held_fd(&self) -> Option<i32> {
+        self.0.as_ref().map(AsRawFd::as_raw_fd)
+    }
 }
 
 /// Step 10: Clear the signal mask.
 ///
 /// Returns [`SystemError`](DaemonizeError::SystemError) if `sigprocmask` fails
-/// (e.g. blocked by a seccomp filter) so the caller can report it. Returns
-/// the mask it replaced, for a foreground failure to put back (R164).
-pub(crate) fn clear_signal_mask() -> Result<nix::sys::signal::SigSet, DaemonizeError> {
-    use nix::sys::signal::{SigSet, SigmaskHow};
+/// (e.g. blocked by a seccomp filter) so the caller can report it.
+pub(crate) fn clear_signal_mask(rollback: Rollback) -> Result<Undo, DaemonizeError> {
+    use nix::sys::signal::SigmaskHow;
     #[cfg(test)]
     if crate::steps::failpoints::SIGPROCMASK_FAILS.injected() {
         return Err(DaemonizeError::SystemError(
@@ -49,7 +92,16 @@ pub(crate) fn clear_signal_mask() -> Result<nix::sys::signal::SigSet, DaemonizeE
         Some(&mut was),
     )
     .map_err(|e| DaemonizeError::SystemError(format!("sigprocmask: {e}")))?;
-    Ok(was)
+    Ok(Undo::saving(rollback, || SignalMask(was)))
+}
+
+/// The signal mask step 10 replaced.
+struct SignalMask(SigSet);
+
+impl Restore for SignalMask {
+    fn restore(self: Box<Self>) {
+        let _ = self.0.thread_set_mask();
+    }
 }
 
 /// Step 11: Set environment variables in insertion order.
@@ -65,11 +117,10 @@ pub(crate) fn clear_signal_mask() -> Result<nix::sys::signal::SigSet, DaemonizeE
 /// `=` or NUL in the key, or NUL in the value — all rejected by
 /// [`DaemonConfig::validate`](crate::DaemonConfig::validate) (R36, R138).
 ///
-/// Returns each variable's previous value, in the order set, for
-/// [`restore_env_vars`] to put back after a foreground failure (R164).
+/// The token restores only before `init`: it calls `setenv` too.
 #[allow(unsafe_code)]
 #[allow(clippy::disallowed_methods)] // setenv thread safety: single thread, per the contract
-pub(crate) fn set_env_vars(env: &[(String, String)]) -> Vec<(String, Option<OsString>)> {
+pub(crate) fn set_env_vars(env: &[(String, String)], rollback: Rollback) -> Undo {
     #[cfg(test)]
     crate::test_support::assert_isolated("set_env_vars");
     let mut was = Vec::with_capacity(env.len());
@@ -79,21 +130,27 @@ pub(crate) fn set_env_vars(env: &[(String, String)]) -> Vec<(String, Option<OsSt
         // foreground entry gate), so the `setenv` cannot race.
         unsafe { std::env::set_var(key, value) };
     }
-    was
+    Undo::saving(rollback, || EnvVars(was)).single_threaded()
 }
 
-/// Puts back what [`set_env_vars`] replaced, latest first, so a key set twice
-/// ends at the value it had before either. Single-threaded, as `set_env_vars`.
-#[allow(unsafe_code)]
-#[allow(clippy::disallowed_methods)] // setenv thread safety: before init, single thread
-pub(crate) fn restore_env_vars(was: &mut Vec<(String, Option<OsString>)>) {
-    while let Some((key, value)) = was.pop() {
-        match value {
-            // SAFETY: callers run this before init, on a single thread, so
-            // the `setenv` cannot race another thread's `environ` read.
-            Some(value) => unsafe { std::env::set_var(&key, value) },
-            // SAFETY: as above, for `unsetenv`.
-            None => unsafe { std::env::remove_var(&key) },
+/// Each variable step 11 set, with the value it had before, in the order set.
+struct EnvVars(Vec<(String, Option<OsString>)>);
+
+impl Restore for EnvVars {
+    /// Latest first, so a key set twice ends at the value it had before
+    /// either. Single-threaded, as `set_env_vars`.
+    #[allow(unsafe_code)]
+    #[allow(clippy::disallowed_methods)] // setenv thread safety: before init, single thread
+    fn restore(self: Box<Self>) {
+        for (key, value) in self.0.into_iter().rev() {
+            match value {
+                // SAFETY: the sequence restores this token only before init,
+                // on a single thread, so the `setenv` cannot race another
+                // thread's `environ` read.
+                Some(value) => unsafe { std::env::set_var(&key, value) },
+                // SAFETY: as above, for `unsetenv`.
+                None => unsafe { std::env::remove_var(&key) },
+            }
         }
     }
 }
@@ -118,7 +175,7 @@ mod tests {
         }
         // Start from a different umask, so a set_umask that did nothing fails.
         nix::sys::stat::umask(Mode::from_bits_truncate(0o077));
-        set_umask(0o022);
+        set_umask(0o022, Rollback::Skip).keep();
         let readback = nix::sys::stat::umask(Mode::from_bits_truncate(0o077));
         assert_eq!(readback, Mode::from_bits_truncate(0o022));
     }
@@ -137,7 +194,7 @@ mod tests {
             return;
         }
         let tmp = tempfile::tempdir().unwrap();
-        let result = change_dir(tmp.path());
+        let result = change_dir(tmp.path(), Rollback::Skip).map(Undo::keep);
         assert!(result.is_ok());
         let cwd = std::env::current_dir().unwrap();
         assert_eq!(cwd, std::fs::canonicalize(tmp.path()).unwrap());
@@ -156,7 +213,11 @@ mod tests {
         if !crate::test_support::is_subprocess() {
             return;
         }
-        let result = change_dir(Path::new("/nonexistent_daemonize_test_path"));
+        let result = change_dir(
+            Path::new("/nonexistent_daemonize_test_path"),
+            Rollback::Skip,
+        )
+        .map(Undo::keep);
         assert!(matches!(result, Err(DaemonizeError::ChdirFailed(_))));
     }
 
@@ -170,7 +231,7 @@ mod tests {
         set.add(Signal::SIGUSR1);
         nix::sys::signal::sigprocmask(SigmaskHow::SIG_BLOCK, Some(&set), None).unwrap();
 
-        clear_signal_mask().unwrap();
+        clear_signal_mask(Rollback::Skip).unwrap().keep();
 
         let mut current = SigSet::empty();
         nix::sys::signal::sigprocmask(SigmaskHow::SIG_SETMASK, None, Some(&mut current)).unwrap();
@@ -195,7 +256,7 @@ mod tests {
             ("DAEMONIZE_TEST_A".into(), "1".into()),
             ("DAEMONIZE_TEST_B".into(), "2".into()),
         ];
-        set_env_vars(&vars);
+        set_env_vars(&vars, Rollback::Skip).keep();
         assert_eq!(std::env::var("DAEMONIZE_TEST_A").unwrap(), "1");
         assert_eq!(std::env::var("DAEMONIZE_TEST_B").unwrap(), "2");
     }
@@ -218,7 +279,7 @@ mod tests {
             ("DAEMONIZE_TEST_DUP".into(), "first".into()),
             ("DAEMONIZE_TEST_DUP".into(), "second".into()),
         ];
-        set_env_vars(&vars);
+        set_env_vars(&vars, Rollback::Skip).keep();
         assert_eq!(std::env::var("DAEMONIZE_TEST_DUP").unwrap(), "second");
     }
 }

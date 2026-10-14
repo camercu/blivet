@@ -127,7 +127,7 @@ The context-dependent sites, each carrying the single-threaded contract:
 - `steps/process.rs`: `set_env_vars` calls `setenv` in the post-fork
   sequence, sound because the child is single-threaded by `fork` (or, in
   foreground mode, the entry point required single-threadedness).
-  `restore_env_vars` calls `setenv` and `unsetenv` when a foreground start
+  Its undo token calls `setenv` and `unsetenv` when a foreground start
   fails, and only before `init`, so the same contract holds (R164).
 
 ---
