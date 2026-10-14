@@ -1,3 +1,79 @@
+## [0.15.0](https://github.com/camercu/blivet/compare/v0.14.1...v0.15.0) (2026-10-14)
+
+### ⚠ BREAKING CHANGES
+
+* **pidfile:** cleanup_on_drop(false) no longer keeps the pidfile
+of a start that fails: a failed sequence, or report_error or drop
+while the launcher still waits.
+* cleanup_on_signals and cleanup_on_term_signals
+now refuse SIGIO, SIGPWR, and any other signal outside the POSIX
+terminating set.
+* DaemonContext::drop_privileges,
+DaemonContext::drop_privileges_unchecked, and
+DaemonizeError::PrivilegesNotDropped (exit 70) are removed. daemonize()
+with user() or group() set now switches before it returns; move work
+that needs the original privileges into daemonize_with's init.
+* a library daemon that execs another program without
+calling notify_parent() now makes the launcher exit 1. Set
+DaemonConfig::exec_notifies(true) to keep the old behavior.
+* **context:** cleanup_on_signals and cleanup_on_term_signals return
+ValidationError for a signal that already has a handler or is ignored,
+where they used to replace it.
+
+### Features
+
+* add daemonize_with, which runs privileged init inside the sequence ([55da440](https://github.com/camercu/blivet/commit/55da4402e62942aaf0a59b0f1970bb209b567893))
+* add WithExitCode, so ? works on io::Error inside init ([88a1eea](https://github.com/camercu/blivet/commit/88a1eeaa6c5400205217f86180e54abd27f493fa))
+* **context:** refuse to replace a signal's existing handler in cleanup_on_signals ([b4ba10d](https://github.com/camercu/blivet/commit/b4ba10d40491760297e8d9d336d1d0517cbfd4eb))
+* replace exec_notifies with an exec marker and DaemonContext::exec ([c90a36e](https://github.com/camercu/blivet/commit/c90a36ea1be19b3707b0aa558eecd6f7d8934754))
+* report a daemon that ends without notifying as a failure ([1e9ff2a](https://github.com/camercu/blivet/commit/1e9ff2aecf25cb3f54f70110b5a8484229884d7b))
+* switch identity inside the daemonize call, after init ([925e641](https://github.com/camercu/blivet/commit/925e64194920392c52926ca573d03bd6f8a4a289))
+
+### Bug Fixes
+
+* a failed exec exits with its code, not by SIGPIPE, with the launcher gone ([0a9815e](https://github.com/camercu/blivet/commit/0a9815e74a7fc0c7d09177aa024fa18bd2e66433))
+* accept only POSIX-terminating signals in cleanup_on_signals ([a206f9c](https://github.com/camercu/blivet/commit/a206f9c62aae2c8e098c62556850b9c73d7c2d02))
+* chown the files the sequence opened, by descriptor ([e5c9915](https://github.com/camercu/blivet/commit/e5c991525b76f672e8b4855fd4ec7186e4222170))
+* **ci:** give cargo-mutants only the Rust part of the diff ([4bd5438](https://github.com/camercu/blivet/commit/4bd543815ea6b457d54287af431019c55539c528))
+* **cli:** make a relative argv[0] absolute ([e35f2d6](https://github.com/camercu/blivet/commit/e35f2d6d7a24ced6aa46ffb9f9a5d2632c1877d2))
+* **cli:** pass the program as the user gave it in argv[0] ([755768b](https://github.com/camercu/blivet/commit/755768ba3271bcb7dc5a2583765c1ff843134d1e))
+* **context:** refuse exec with an empty argv ([a9b9af9](https://github.com/camercu/blivet/commit/a9b9af9543bc3d96e63625bc08300568e3131bdf))
+* **context:** remove the pidfile when notify_parent_or_report exits ([d4f7ff2](https://github.com/camercu/blivet/commit/d4f7ff253060c69fecabfa0fb84f87443756e9d9))
+* **context:** word a cleanup_on_signals refusal as a refusal ([908e2a8](https://github.com/camercu/blivet/commit/908e2a8b56474dac361980a5c8c9607cf7d4d9e5))
+* exec runs the program even when the launcher is gone ([383abd3](https://github.com/camercu/blivet/commit/383abd3cc99a8d339bcc488ec4f918fa9d9b088e))
+* frame error messages so the launcher stops at their end ([4c6840a](https://github.com/camercu/blivet/commit/4c6840abcb4425d975482dc41a7d427039f03531))
+* give a foreground caller its group back when setuid fails ([6cf0ff5](https://github.com/camercu/blivet/commit/6cf0ff5340f474a6c41c4871e8f1e3e9b00b1784))
+* keep the notification pipe above descriptor 2 ([3a0f209](https://github.com/camercu/blivet/commit/3a0f209c9553179db35810bafbd47be7a829335c))
+* let joined threads leave the thread count before checking it ([d3218dc](https://github.com/camercu/blivet/commit/d3218dccb0d317d533dc5a53f68c413ffa4b8e67))
+* move a notification pipe end only when it landed on stdio ([c46a1cd](https://github.com/camercu/blivet/commit/c46a1cd9e7571fe4f7bad9e68af87c014b8fb812))
+* never panic while printing an error report ([825903a](https://github.com/camercu/blivet/commit/825903afa823b4f15ad5a1fd4527ec764a86e7b2))
+* **notify:** create the channel close-on-exec where possible ([0b429cd](https://github.com/camercu/blivet/commit/0b429cd2d9d0775652796f52a06ab2aa5ec3a0ad))
+* open the lockfile and pidfile above descriptor 2 ([9aca9f0](https://github.com/camercu/blivet/commit/9aca9f01fd3edc5d9bfd5d6798cd173995bb56de))
+* **pidfile:** remove a failed start's pidfile whatever cleanup_on_drop says ([51646e4](https://github.com/camercu/blivet/commit/51646e4183df2146dc72c053690cf20ddea8ae9c))
+* print an error report on stderr when the launcher is gone ([fa7db87](https://github.com/camercu/blivet/commit/fa7db87e1218fa95d86ab9f065ba8c363b203dec))
+* read the thread count after init even when init changed root ([940d611](https://github.com/camercu/blivet/commit/940d611baf6f48cd16af8e46d7f16407c82e6559))
+* refuse cleanup_on_signals for a signal that does not end the process ([9b13a5a](https://github.com/camercu/blivet/commit/9b13a5aa31b31b0f7842dc08ee8cd39e2de2cc41))
+* release the launcher on the success byte without waiting for EOF ([1692209](https://github.com/camercu/blivet/commit/1692209d650e5b4dd717c764645d924b50c9b24d))
+* **release:** publish the crate before the release commit and tag ([a778e8f](https://github.com/camercu/blivet/commit/a778e8f35fc6b80c63ea4c3f5edfbdf25b032918))
+* **release:** resume only when crates.io holds this commit's crate ([0713dfb](https://github.com/camercu/blivet/commit/0713dfb1aec8f57ec5a48169fab1e3f8081d9db6))
+* remove a failed sequence's pidfile before releasing its lock ([f1ec031](https://github.com/camercu/blivet/commit/f1ec031a9390c97825ce4e88067952db9bfc4ef5))
+* report an error on stderr when there is no launcher to tell ([fe6ed25](https://github.com/camercu/blivet/commit/fe6ed25263044acd75eb01e0ce31e9c85b2fb6fe))
+* report threads left by init as an error the launcher prints ([cd9bc5f](https://github.com/camercu/blivet/commit/cd9bc5f3ab6683d17a058bece1d8cb4556ccfd02))
+* **security:** chown only regular files before the user switch ([87700e6](https://github.com/camercu/blivet/commit/87700e673e2228f972b6f2e2229784565d3150cc))
+* send launcher messages over a socket pair with MSG_NOSIGNAL ([ac7a1bd](https://github.com/camercu/blivet/commit/ac7a1bd02690ba5a5691fcc0ced1484f53215c69))
+* **sequence:** chown the stream files step 12 opened ([90a6ef3](https://github.com/camercu/blivet/commit/90a6ef3a75a55258663ba4dc6ef9759a812b8294))
+* **sequence:** end the daemon on a panic during startup ([cc43af7](https://github.com/camercu/blivet/commit/cc43af72fedbc537386e56add728a8c2cdc85ab0))
+* **sequence:** leave the env alone when init fails ([2e7a8cf](https://github.com/camercu/blivet/commit/2e7a8cf9fb4eb441ee66ce913e8517b9f079d5df))
+* **sequence:** restore signals, env and groups after a failed foreground start ([d5381db](https://github.com/camercu/blivet/commit/d5381db466e1cd506afc5026812d9293011913f3))
+* set supplementary groups before init can change root ([dad25a5](https://github.com/camercu/blivet/commit/dad25a57c776587c481f0cabc77d9c51d76f9bab))
+* start in foreground from a directory the caller cannot read ([12ddb93](https://github.com/camercu/blivet/commit/12ddb938ff80ff611ecc80fe9be8d2485e882b13))
+* survive a gone launcher when the caller kept SIGPIPE at its default ([416b020](https://github.com/camercu/blivet/commit/416b0201c0b597e048697d545b4e9a5019f41768))
+* the launcher rejects a malformed readiness header ([6c51013](https://github.com/camercu/blivet/commit/6c51013b498ae7bfb599e375493719d757fe8466))
+* the launcher retries a pipe read a signal interrupts ([a33f5c5](https://github.com/camercu/blivet/commit/a33f5c57d91543d6022cdefadfdbac7298e25005))
+* **thread-count:** wait up to 1s for a joined thread to leave the count ([a8449d8](https://github.com/camercu/blivet/commit/a8449d8a9942deb5222cc77a36dabf1645d3c180))
+* undo a failed foreground sequence's changes to the caller's process ([aa45943](https://github.com/camercu/blivet/commit/aa45943bd32fe9ce8daca3e2da6fdd1a332967d6))
+* write the exec marker without taking a descriptor ([21884eb](https://github.com/camercu/blivet/commit/21884ebda9c4f052832a1c92650c33d494914e1e))
+
 ## [0.14.1](https://github.com/camercu/blivet/compare/v0.14.0...v0.14.1) (2026-09-30)
 
 ### Bug Fixes
