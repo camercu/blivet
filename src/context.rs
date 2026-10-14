@@ -320,7 +320,7 @@ impl DaemonContext {
             ));
         }
         if let Some(lockfile) = self.lockfile_fd() {
-            use nix::fcntl::{fcntl, FcntlArg, FdFlag};
+            use nix::fcntl::{FcntlArg, FdFlag, fcntl};
             if let Err(e) = fcntl(lockfile, FcntlArg::F_SETFD(FdFlag::empty())) {
                 return DaemonizeError::ExecFailed(format!(
                     "clear close-on-exec on the lockfile: {e}"
@@ -871,7 +871,7 @@ mod tests {
     #[ignore]
     #[allow(unsafe_code)]
     fn cleanup_on_signals_refuses_a_signal_that_already_has_a_handler_subprocess() {
-        use nix::sys::signal::{sigaction, SaFlags, SigAction, SigHandler, SigSet, Signal};
+        use nix::sys::signal::{SaFlags, SigAction, SigHandler, SigSet, Signal, sigaction};
 
         if !crate::test_support::is_subprocess() {
             return;
@@ -923,7 +923,7 @@ mod tests {
     #[ignore]
     #[allow(unsafe_code)]
     fn cleanup_on_signals_refuses_an_ignored_signal_subprocess() {
-        use nix::sys::signal::{sigaction, SaFlags, SigAction, SigHandler, SigSet, Signal};
+        use nix::sys::signal::{SaFlags, SigAction, SigHandler, SigSet, Signal, sigaction};
 
         if !crate::test_support::is_subprocess() {
             return;
@@ -1277,7 +1277,7 @@ mod tests {
     #[test]
     #[allow(clippy::disallowed_methods)] // a test probe; no stdio slot is in play
     fn lockfile_fd_returns_some_with_lockfile() {
-        use nix::fcntl::{open, Flock, FlockArg, OFlag};
+        use nix::fcntl::{Flock, FlockArg, OFlag, open};
         use nix::sys::stat::Mode;
 
         let dir = tempfile::tempdir().unwrap();
@@ -1299,7 +1299,7 @@ mod tests {
     #[test]
     #[allow(clippy::disallowed_methods)] // a test probe; no stdio slot is in play
     fn drop_releases_lockfile() {
-        use nix::fcntl::{open, Flock, FlockArg, OFlag};
+        use nix::fcntl::{Flock, FlockArg, OFlag, open};
         use nix::sys::stat::Mode;
 
         let dir = tempfile::tempdir().unwrap();

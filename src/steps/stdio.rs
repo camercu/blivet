@@ -5,7 +5,7 @@
 use std::os::fd::{AsFd, OwnedFd};
 use std::path::Path;
 
-use nix::fcntl::{open, OFlag};
+use nix::fcntl::{OFlag, open};
 use nix::sys::stat::Mode;
 use nix::unistd::{self};
 
@@ -966,7 +966,9 @@ mod tests {
     // Covers: R146
     #[test]
     fn execute_redirect_stderr_onto_dev_stdout_follows_the_redirected_stdout() {
-        run_in_subprocess("steps::stdio::tests::execute_redirect_stderr_onto_dev_stdout_follows_the_redirected_stdout_subprocess");
+        run_in_subprocess(
+            "steps::stdio::tests::execute_redirect_stderr_onto_dev_stdout_follows_the_redirected_stdout_subprocess",
+        );
     }
 
     #[test]

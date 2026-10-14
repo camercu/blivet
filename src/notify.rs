@@ -147,7 +147,7 @@ pub(crate) fn channel() -> io::Result<(OwnedFd, OwnedFd)> {
     let [launcher, daemon] = fds.map(|fd| unsafe { OwnedFd::from_raw_fd(fd) });
     #[cfg(not(blivet_sock_cloexec))]
     for end in [&launcher, &daemon] {
-        use nix::fcntl::{fcntl, FcntlArg, FdFlag};
+        use nix::fcntl::{FcntlArg, FdFlag, fcntl};
         fcntl(end, FcntlArg::F_SETFD(FdFlag::FD_CLOEXEC))?;
     }
     // In this order: macOS fails a shutdown with ENOTCONN once the peer has
@@ -226,8 +226,7 @@ const UNNOTIFIED_CODE: u8 = 1;
 const UNNOTIFIED_MSG: &[u8] = b"daemon exited without signaling readiness";
 
 /// Message for a pipe that closed with no message and no exec marker.
-const EOF_UNNOTIFIED_MSG: &str =
-    "daemon ended without signaling readiness (killed by a signal, or exited without dropping its DaemonContext)";
+const EOF_UNNOTIFIED_MSG: &str = "daemon ended without signaling readiness (killed by a signal, or exited without dropping its DaemonContext)";
 
 /// Readiness: the daemon is up.
 pub(crate) const SUCCESS: [u8; 2] = [0x00, 0x00];
@@ -284,7 +283,7 @@ pub(crate) fn read_outcome(pipe: &mut impl io::Read) -> Outcome {
             return Outcome::Failure {
                 code: UNNOTIFIED_CODE as i32,
                 message: EOF_UNNOTIFIED_MSG.into(),
-            }
+            };
         }
         // Only SUCCESS and EXEC_PENDING start with 0x00 (R159). The second
         // byte went out in the same send, so it is already here.

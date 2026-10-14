@@ -1,7 +1,7 @@
 [package]
 name = "blivet"
 version = "0.15.0"
-edition = "2021"
+edition = "2024"
 rust-version = "1.85"
 description = "A correct, full-featured Unix daemon library and CLI for Rust"
 license = "MIT OR Apache-2.0"

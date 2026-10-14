@@ -260,7 +260,9 @@ pub(crate) fn install_pidfile_cleanup_signals(
         if !may_clean_up_on(sig) {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
-                format!("signal {sig} is not one cleanup_on_signals accepts: it takes only catchable signals whose default action ends the process, SIGPIPE aside"),
+                format!(
+                    "signal {sig} is not one cleanup_on_signals accepts: it takes only catchable signals whose default action ends the process, SIGPIPE aside"
+                ),
             ));
         }
         let theirs = disposition(sig).map(|now| now.sa_sigaction);
@@ -321,7 +323,7 @@ mod tests {
         if !crate::test_support::is_subprocess() {
             return;
         }
-        use nix::sys::signal::{sigaction, SaFlags, SigAction, SigHandler, SigSet, Signal};
+        use nix::sys::signal::{SaFlags, SigAction, SigHandler, SigSet, Signal, sigaction};
 
         // Install SIG_IGN handler for SIGUSR1
         let handler = SigAction::new(SigHandler::SigIgn, SaFlags::empty(), SigSet::empty());
@@ -363,7 +365,7 @@ mod tests {
         if !crate::test_support::is_subprocess() {
             return;
         }
-        use nix::sys::signal::{sigaction, SaFlags, SigAction, SigHandler, SigSet, Signal};
+        use nix::sys::signal::{SaFlags, SigAction, SigHandler, SigSet, Signal, sigaction};
 
         // SIG_IGN (what the Rust runtime installs) must survive the reset:
         // resetting it would turn every write to a closed pipe/socket into

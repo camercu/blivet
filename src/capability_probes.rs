@@ -233,7 +233,7 @@ fn faccessat_rejects_at_eaccess() {
 #[allow(unsafe_code)]
 #[allow(clippy::disallowed_methods)] // probes the raw call the channel makes
 fn socketpair_takes_sock_cloexec() {
-    use nix::fcntl::{fcntl, FcntlArg, FdFlag};
+    use nix::fcntl::{FcntlArg, FdFlag, fcntl};
     use std::os::fd::{FromRawFd, OwnedFd};
     let mut fds = [0; 2];
     let kind = libc::SOCK_STREAM | libc::SOCK_CLOEXEC;

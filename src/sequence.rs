@@ -14,7 +14,7 @@ use nix::unistd::ForkResult;
 use crate::forker::Forker;
 use crate::identity::ResolvedIdentity;
 use crate::notify::{self, NotifyPipe};
-use crate::{signals, steps, DaemonConfig, DaemonContext, DaemonizeError};
+use crate::{DaemonConfig, DaemonContext, DaemonizeError, signals, steps};
 
 /// Internal daemonization logic, generic over the Forker trait for testability.
 ///
@@ -423,7 +423,7 @@ unsafe fn run_post_fork<T>(
         if let Some(ref flock) = abort.lock {
             skip_fds.push(flock.as_raw_fd());
         }
-        if let Some(ref wr) = pipe_wr {
+        if let Some(wr) = pipe_wr.as_ref() {
             skip_fds.push(wr.as_fd().as_raw_fd());
         }
         if let Some(ref fd) = pidfile_fd {
@@ -701,7 +701,7 @@ mod tests {
     #[ignore]
     #[allow(unsafe_code)]
     fn a_failed_foreground_start_restores_signals_subprocess() {
-        use nix::sys::signal::{sigaction, SaFlags, SigAction, SigHandler, SigSet, Signal};
+        use nix::sys::signal::{SaFlags, SigAction, SigHandler, SigSet, Signal, sigaction};
         if !is_subprocess() {
             return;
         }
@@ -1249,7 +1249,7 @@ mod tests {
     #[test]
     #[ignore]
     fn a_failed_foreground_sequence_puts_the_callers_process_back_subprocess() {
-        use nix::sys::stat::{fstat, umask, Mode};
+        use nix::sys::stat::{Mode, fstat, umask};
         if !is_subprocess() {
             return;
         }

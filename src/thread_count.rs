@@ -341,10 +341,10 @@ fn settle(
 ///
 /// A group-only switch calls no `setenv`, so it is not checked.
 #[cfg(blivet_thread_count)]
-pub(crate) fn checked_init<T>(
+pub(crate) fn checked_init<T, F: FnOnce() -> Result<T, DaemonizeError>>(
     config: &DaemonConfig,
-    init: impl FnOnce() -> Result<T, DaemonizeError>,
-) -> impl FnOnce() -> Result<T, DaemonizeError> {
+    init: F,
+) -> impl FnOnce() -> Result<T, DaemonizeError> + use<T, F> {
     let switches_user = config.user.is_some();
     move || {
         // Opened before init, which may change root to a jail without /proc.

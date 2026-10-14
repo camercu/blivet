@@ -46,7 +46,9 @@ impl Forker for RealForker {
     }
 
     unsafe fn fork(&mut self) -> Result<ForkResult, DaemonizeError> {
-        match nix::unistd::fork() {
+        // SAFETY: the caller upholds this method's contract, which is
+        // `fork`'s: no other threads exist.
+        match unsafe { nix::unistd::fork() } {
             Ok(result) => Ok(result),
             Err(e) => Err(DaemonizeError::ForkFailed(e.to_string())),
         }
@@ -235,7 +237,7 @@ pub(crate) mod null_forker {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nix::fcntl::{fcntl, FcntlArg, FdFlag};
+    use nix::fcntl::{FcntlArg, FdFlag, fcntl};
     use std::os::fd::AsFd;
 
     // setsid fails with EPERM when the caller already leads a process group,
