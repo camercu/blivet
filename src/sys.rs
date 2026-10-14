@@ -27,6 +27,9 @@ pub(crate) fn raw_close(fd: i32) {
 /// Safe wrapper around `libc::initgroups`.
 ///
 /// `nix::unistd::initgroups` is not available on macOS, so we call libc directly.
+// macOS takes the group as `int`, others as `gid_t`. The kernel reads the bits
+// back as a `gid_t`, so the wrap is the C API's own: nobody's -2 is 4294967294.
+#[allow(clippy::as_underscore, clippy::cast_possible_wrap)]
 pub(crate) fn raw_initgroups(
     user: &std::ffi::CStr,
     group: libc::gid_t,
@@ -42,17 +45,23 @@ pub(crate) fn raw_initgroups(
 pub(crate) fn raw_getgroups() -> Result<Vec<libc::gid_t>, nix::errno::Errno> {
     // SAFETY: a zero size with a null buffer only asks for the count.
     let n = nix::errno::Errno::result(unsafe { libc::getgroups(0, std::ptr::null_mut()) })?;
-    let mut groups = vec![0; n as usize];
+    // `getgroups` returns -1, which `Errno::result` took, or a count.
+    let mut groups = vec![0; n.unsigned_abs() as usize];
     // SAFETY: `groups` holds `n` elements, the size passed.
     let n = nix::errno::Errno::result(unsafe { libc::getgroups(n, groups.as_mut_ptr()) })?;
-    groups.truncate(n as usize);
+    groups.truncate(n.unsigned_abs() as usize);
     Ok(groups)
 }
 
 /// Sets the supplementary groups (`setgroups`); needs privilege.
+#[allow(clippy::useless_conversion)] // the count is a `size_t` on Linux, an `int` elsewhere
 pub(crate) fn raw_setgroups(groups: &[libc::gid_t]) -> Result<(), nix::errno::Errno> {
+    let len = groups
+        .len()
+        .try_into()
+        .map_err(|_| nix::errno::Errno::EINVAL)?;
     // SAFETY: the pointer and length come from one slice.
-    let ret = unsafe { libc::setgroups(groups.len() as _, groups.as_ptr()) };
+    let ret = unsafe { libc::setgroups(len, groups.as_ptr()) };
     nix::errno::Errno::result(ret).map(drop)
 }
 
@@ -71,4 +80,35 @@ pub(crate) fn at_fdcwd() -> std::os::fd::BorrowedFd<'static> {
     // SAFETY: AT_FDCWD is a well-known sentinel value (-100 on Linux, -2 on
     // macOS) that the kernel recognises; it does not alias any real fd.
     unsafe { std::os::fd::BorrowedFd::borrow_raw(libc::AT_FDCWD) }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The unprivileged twin of the root tier's group tests: without
+    /// privilege the kernel refuses, and the wrapper must say so.
+    #[test]
+    fn setgroups_without_privilege_fails() {
+        if nix::unistd::geteuid().is_root() {
+            return;
+        }
+        assert_eq!(raw_setgroups(&[]), Err(nix::errno::Errno::EPERM));
+    }
+
+    /// procfs lists the same supplementary groups the kernel holds.
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    #[test]
+    fn getgroups_matches_procfs() {
+        let status = std::fs::read_to_string("/proc/self/status").unwrap();
+        let line = status.lines().find(|l| l.starts_with("Groups:")).unwrap();
+        let mut procfs: Vec<libc::gid_t> = line["Groups:".len()..]
+            .split_whitespace()
+            .map(|g| g.parse().unwrap())
+            .collect();
+        let mut ours = raw_getgroups().unwrap();
+        procfs.sort_unstable();
+        ours.sort_unstable();
+        assert_eq!(ours, procfs);
+    }
 }

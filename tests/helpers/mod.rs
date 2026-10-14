@@ -206,7 +206,7 @@ pub fn wait_for_daemon(pidfile: &Path) -> Option<Daemon> {
 /// had already gone.
 fn kill_process(pid: u32) {
     use nix::sys::signal::{kill, Signal};
-    let pid = nix::unistd::Pid::from_raw(pid as i32);
+    let pid = nix::unistd::Pid::from_raw(i32::try_from(pid).expect("a pid fits pid_t"));
     let _ = kill(pid, Signal::SIGTERM);
     let gone = poll_for(TERM_GRACE, || kill(pid, None).is_err().then_some(()));
     if gone.is_none() {

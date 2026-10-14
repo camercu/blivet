@@ -73,6 +73,10 @@ signal-hook = "0.4"
 mutants = "0.0.4"
 
 [lints.clippy]
+as_underscore = "deny"
+cast_possible_truncation = "deny"
+cast_possible_wrap = "deny"
+cast_sign_loss = "deny"
 disallowed_methods = "deny"
 disallowed_macros = "deny"
 undocumented_unsafe_blocks = "deny"

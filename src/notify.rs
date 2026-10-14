@@ -186,7 +186,8 @@ impl Write for ChannelWriter<'_> {
                 libc::MSG_NOSIGNAL,
             )
         };
-        Ok(nix::errno::Errno::result(sent)? as usize)
+        // `send` returns -1 or the byte count, so a count is never negative.
+        Ok(nix::errno::Errno::result(sent)?.unsigned_abs())
     }
 
     fn flush(&mut self) -> io::Result<()> {
@@ -251,10 +252,11 @@ pub(crate) fn unnotified_bytes() -> Vec<u8> {
 /// big-endian bytes, then the message (R160). The length lets the launcher
 /// stop at the message's end instead of waiting for EOF.
 fn encode(code: u8, msg: &[u8]) -> Vec<u8> {
-    let msg = &msg[..msg.len().min(u16::MAX as usize)];
+    let len = u16::try_from(msg.len()).unwrap_or(u16::MAX);
+    let msg = &msg[..usize::from(len)];
     let mut buf = Vec::with_capacity(3 + msg.len());
     buf.push(code);
-    buf.extend_from_slice(&(msg.len() as u16).to_be_bytes());
+    buf.extend_from_slice(&len.to_be_bytes());
     buf.extend_from_slice(msg);
     buf
 }

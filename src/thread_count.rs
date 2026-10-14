@@ -88,6 +88,7 @@ fn parse_threads_line(status: &str) -> std::io::Result<usize> {
 // probes (`thread_count_is_readable`) in the tier that runs that OS.
 #[cfg(target_os = "macos")]
 #[cfg_attr(test, mutants::skip)] // not compiled on the Linux mutation run
+#[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)] // a struct size or mib length: a small constant
 pub(crate) fn count() -> std::io::Result<usize> {
     // SAFETY: `proc_taskinfo` is a C struct of integers and arrays, for which
     // all-zero bytes are valid.
@@ -109,11 +110,13 @@ pub(crate) fn count() -> std::io::Result<usize> {
     if written < size {
         return Err(std::io::Error::last_os_error());
     }
-    Ok(info.pti_threadnum.max(0) as usize)
+    // A negative count is not a count; zero fails the one-thread check.
+    Ok(usize::try_from(info.pti_threadnum).unwrap_or(0))
 }
 
 #[cfg(target_os = "freebsd")]
 #[cfg_attr(test, mutants::skip)] // see the note above the macOS query
+#[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)] // a struct size or mib length: a small constant
 pub(crate) fn count() -> std::io::Result<usize> {
     // SAFETY: `kinfo_proc` is a C struct of integers and arrays, for which
     // all-zero bytes are valid.
@@ -140,11 +143,13 @@ pub(crate) fn count() -> std::io::Result<usize> {
     if rc != 0 {
         return Err(std::io::Error::last_os_error());
     }
-    Ok(kp.ki_numthreads.max(0) as usize)
+    // A negative count is not a count; zero fails the one-thread check.
+    Ok(usize::try_from(kp.ki_numthreads).unwrap_or(0))
 }
 
 #[cfg(target_os = "netbsd")]
 #[cfg_attr(test, mutants::skip)] // see the note above the macOS query
+#[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)] // a struct size or mib length: a small constant
 pub(crate) fn count() -> std::io::Result<usize> {
     // SAFETY: `kinfo_proc2` is a C struct of integers and arrays, for which
     // all-zero bytes are valid.
@@ -173,11 +178,13 @@ pub(crate) fn count() -> std::io::Result<usize> {
     if rc != 0 {
         return Err(std::io::Error::last_os_error());
     }
-    Ok(kp.p_nlwps as usize) // p_nlwps is u64
+    // p_nlwps is u64; a count past usize fails the one-thread check anyway.
+    Ok(usize::try_from(kp.p_nlwps).unwrap_or(usize::MAX))
 }
 
 #[cfg(target_os = "openbsd")]
 #[cfg_attr(test, mutants::skip)] // see the note above the macOS query
+#[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)] // a struct size or mib length: a small constant
 pub(crate) fn count() -> std::io::Result<usize> {
     let elem = std::mem::size_of::<libc::kinfo_proc>();
 
@@ -233,7 +240,9 @@ pub(crate) fn count() -> std::io::Result<usize> {
     // OpenBSD is a tier-3 target without CI coverage of that path, so it is
     // documented rather than hardened here.
     let mut buf = vec![0u8; size];
-    mib[5] = (size / elem) as libc::c_int;
+    mib[5] = libc::c_int::try_from(size / elem).map_err(|_| {
+        std::io::Error::other("sysctl sized more thread records than an int counts")
+    })?;
     // SAFETY: `mib` holds `mib.len()` names, and `buf` is writable for `size`
     // bytes, so the kernel writes only inside it.
     let rc = unsafe {

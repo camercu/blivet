@@ -14,6 +14,7 @@ use crate::error::DaemonizeError;
 /// [`DaemonConfig::validate`](crate::DaemonConfig::validate)); the cast to
 /// `mode_t` is therefore lossless.
 /// Returns the umask it replaced, for a foreground failure to put back.
+#[allow(clippy::cast_possible_truncation)] // validated <= 0o7777; mode_t is u16 on macOS and FreeBSD
 pub(crate) fn set_umask(mode: u32) -> Mode {
     #[cfg(test)]
     crate::test_support::assert_isolated("set_umask");
