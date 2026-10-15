@@ -717,6 +717,71 @@ mod tests {
         );
     }
 
+    // Covers: R154
+    //
+    // Once the launcher was told, the daemon started: its pidfile stays when
+    // cleanup_on_drop is off.
+    #[test]
+    fn a_notified_daemon_keeps_its_pidfile_without_cleanup_on_drop() {
+        let dir = tempfile::tempdir().unwrap();
+        let pidfile = dir.path().join("test.pid");
+        std::fs::write(&pidfile, "12345\n").unwrap();
+        let (rd, wr) = make_pipe();
+        let mut ctx = ctx(&pidfile_config(&pidfile), None, Some(NotifyPipe::new(wr)));
+        ctx.notify_parent().unwrap();
+
+        drop(ctx);
+
+        drop(rd);
+        assert!(pidfile.exists());
+    }
+
+    // Covers: R154
+    //
+    // A failed notify_parent hands its error to a caller that may keep
+    // running, so the daemon counts as released: dropping it later honours
+    // cleanup_on_drop instead of reporting a start that never succeeded.
+    #[test]
+    fn a_failed_notify_parent_releases_the_launcher() {
+        let dir = tempfile::tempdir().unwrap();
+        let pidfile = dir.path().join("test.pid");
+        std::fs::write(&pidfile, "12345\n").unwrap();
+        let (rd, wr) = make_pipe();
+        drop(rd);
+        let mut ctx = ctx(&pidfile_config(&pidfile), None, Some(NotifyPipe::new(wr)));
+        assert!(ctx.notify_parent().is_err());
+
+        drop(ctx);
+
+        assert!(pidfile.exists());
+    }
+
+    // Covers: R161
+    //
+    // The launcher already read success, so an error after it has no one to
+    // reach but stderr.
+    #[test]
+    fn report_error_after_notify_prints_the_error() {
+        const MARKER: &str = "__BLIVET_REPORT_AFTER_NOTIFY";
+        const NAME: &str = "context::tests::report_error_after_notify_prints_the_error";
+
+        if std::env::var(MARKER).is_ok() {
+            let (rd, wr) = make_pipe();
+            let mut ctx = ctx(&DaemonConfig::new(), None, Some(NotifyPipe::new(wr)));
+            ctx.notify_parent().unwrap();
+            drop(rd);
+            ctx.report_error(&DaemonizeError::application(75, "database unreachable"));
+        }
+
+        let output = crate::test_support::rerun_in_subprocess(NAME, MARKER, "1");
+        assert!(
+            String::from_utf8_lossy(&output.stderr)
+                .contains("application error: database unreachable"),
+            "{}",
+            crate::test_support::subprocess_report(NAME, &output)
+        );
+    }
+
     // Covers: R161
     //
     // The failed send spent the pipe, so the report that follows has nothing
