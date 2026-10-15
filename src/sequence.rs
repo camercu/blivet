@@ -176,6 +176,9 @@ struct AbortGuard<'a> {
     rollback: steps::Rollback,
     /// Each step's token, in the order the steps ran.
     undo: Vec<steps::Undo>,
+    /// The checkpoints passed, where the undo walk may fail the sequence.
+    #[cfg(test)]
+    checkpoints: usize,
     /// The pidfile this process owns from the second half of step 8: written
     /// or truncated by it, so a failure must not leave it naming a process
     /// that never started. Removed whatever
@@ -195,6 +198,8 @@ impl AbortGuard<'_> {
                 steps::Rollback::Skip
             },
             undo: Vec::new(),
+            #[cfg(test)]
+            checkpoints: 0,
             pidfile: None,
             files: steps::OpenedFiles::default(),
         }
@@ -208,11 +213,19 @@ impl AbortGuard<'_> {
     /// Holds a step's token, to drop on failure.
     fn record(&mut self, undo: steps::Undo) -> Result<(), DaemonizeError> {
         self.undo.push(undo);
+        self.checkpoint()
+    }
+
+    /// A point the undo walk may fail the sequence at; nothing outside tests.
+    fn checkpoint(&mut self) -> Result<(), DaemonizeError> {
         #[cfg(test)]
-        if steps::failpoints::token_fails(self.undo.len()) {
-            return Err(DaemonizeError::SystemError(
-                steps::failpoints::TOKEN_FAILURE.into(),
-            ));
+        {
+            self.checkpoints += 1;
+            if steps::failpoints::checkpoint_fails(self.checkpoints) {
+                return Err(DaemonizeError::SystemError(
+                    steps::failpoints::CHECKPOINT_FAILURE.into(),
+                ));
+            }
         }
         Ok(())
     }
@@ -387,6 +400,8 @@ unsafe fn run_post_fork<T>(
     // pidfile (R154). From here other threads may run, and `setenv` with one
     // alive is undefined behaviour, so a failure leaves the env as step 11
     // set it.
+    // A change between the last token and here, not undone, fails the walk.
+    abort.checkpoint()?;
     abort.threads_may_start();
     let value = init()?;
 

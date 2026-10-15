@@ -1,5 +1,5 @@
-//! The undo walk: fails a foreground start after each undo token in turn, and
-//! once more just before the identity switch, and checks after each failure
+//! The undo walk: fails a foreground start after each undo token in turn,
+//! just before `init`, and once more just before the identity switch, and checks after each failure
 //! that the process is as it was before the start (R164).
 //!
 //! The walk holds no list of steps. A step that changes the snapshot's state
@@ -36,7 +36,7 @@ fn walk(config: &DaemonConfig, pidfile: &std::path::Path) {
     failpoints::BEFORE_SWITCH_FAILS.set();
     let before = ProcessSnapshot::take(pidfile);
     for n in 1.. {
-        failpoints::fail_after_token(n);
+        failpoints::fail_at_checkpoint(n);
         let mut init_ran = false;
         // SAFETY: NullForker does not fork.
         #[allow(unsafe_code)]
@@ -54,7 +54,7 @@ fn walk(config: &DaemonConfig, pidfile: &std::path::Path) {
             panic!("the start succeeded with failpoints set")
         };
         let last = match &e {
-            DaemonizeError::SystemError(m) if m == failpoints::TOKEN_FAILURE => false,
+            DaemonizeError::SystemError(m) if m == failpoints::CHECKPOINT_FAILURE => false,
             DaemonizeError::SystemError(m) if m == failpoints::SWITCH_FAILURE => true,
             other => panic!("failure {n} is not a failpoint's: {other:?}"),
         };

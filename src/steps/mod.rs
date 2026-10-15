@@ -76,23 +76,24 @@ pub(crate) mod failpoints {
     /// every stdio slot has moved by then.
     pub(crate) static STREAM_TRUNCATE_FAILS: Failpoint = Failpoint::new();
 
-    /// Fails the sequence just after it records its Nth undo token, counting
-    /// from 1, for the undo walk. 0 fails none.
-    static FAIL_AFTER_TOKEN: AtomicUsize = AtomicUsize::new(0);
+    /// Fails the sequence at its Nth checkpoint, counting from 1, for the
+    /// undo walk. A checkpoint follows each undo token, and one sits just
+    /// before `init`. 0 fails none.
+    static FAIL_AT_CHECKPOINT: AtomicUsize = AtomicUsize::new(0);
 
-    /// The error [`FAIL_AFTER_TOKEN`] injects.
-    pub(crate) const TOKEN_FAILURE: &str = "undo walk: failed after a token";
+    /// The error [`FAIL_AT_CHECKPOINT`] injects.
+    pub(crate) const CHECKPOINT_FAILURE: &str = "undo walk: failed at a checkpoint";
 
-    /// Sets [`FAIL_AFTER_TOKEN`], in this whole process; asserts the test
+    /// Sets [`FAIL_AT_CHECKPOINT`], in this whole process; asserts the test
     /// runs in its own process.
-    pub(crate) fn fail_after_token(n: usize) {
+    pub(crate) fn fail_at_checkpoint(n: usize) {
         crate::test_support::assert_isolated("the undo walk");
-        FAIL_AFTER_TOKEN.store(n, Ordering::Relaxed);
+        FAIL_AT_CHECKPOINT.store(n, Ordering::Relaxed);
     }
 
-    /// Whether the sequence fails having recorded `count` tokens.
-    pub(crate) fn token_fails(count: usize) -> bool {
-        FAIL_AFTER_TOKEN.load(Ordering::Relaxed) == count
+    /// Whether the sequence fails at its `n`th checkpoint.
+    pub(crate) fn checkpoint_fails(n: usize) -> bool {
+        FAIL_AT_CHECKPOINT.load(Ordering::Relaxed) == n
     }
 
     /// Fails the sequence at the last point a failure can still be undone:
