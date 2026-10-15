@@ -47,8 +47,26 @@ pub struct DaemonContext {
     /// mirroring each one into a parallel field set.
     config: DaemonConfig,
     lockfile: Option<Flock<OwnedFd>>,
-    notify_pipe: Option<NotifyPipe>,
+    launcher: Launcher,
     cleaned_up: bool,
+}
+
+/// Whether a launcher waits on this daemon's start.
+///
+/// Three decisions read it: whether a failure removes the pidfile whatever
+/// `cleanup_on_drop` says (R154), whether an error goes to stderr (R161), and
+/// whether `Drop` writes to the pipe. Each matches every variant, so a new one
+/// fails to compile until each decision handles it.
+enum Launcher {
+    /// The launcher reads the pipe for the outcome. After a failed readiness
+    /// send from `notify_parent_or_report` the pipe is spent but the start
+    /// still never succeeded, so the state stays here.
+    Waiting(NotifyPipe),
+    /// The launcher was told the start succeeded, or `notify_parent` handed
+    /// its failure to a caller that may keep running.
+    Released,
+    /// Foreground mode: there is no launcher.
+    Foreground,
 }
 
 impl fmt::Debug for DaemonContext {
@@ -68,7 +86,10 @@ impl fmt::Debug for DaemonContext {
             .field("lockfile", &OptFmt(&self.lockfile.as_ref().map(|_| "held")))
             .field(
                 "notify_pipe",
-                &OptFmt(&self.notify_pipe.as_ref().map(|_| "open")),
+                &OptFmt(&match self.launcher {
+                    Launcher::Waiting(_) => Some("open"),
+                    Launcher::Released | Launcher::Foreground => None,
+                }),
             )
             .field("pidfile", &OptFmt(&self.config.pidfile))
             .field(
@@ -87,8 +108,8 @@ impl fmt::Debug for DaemonContext {
 impl DaemonContext {
     /// Builds a context from the validated config plus the two runtime
     /// resources acquired during daemonization: the held lockfile and the
-    /// notification pipe's write end. The config-derived fields are cloned
-    /// from `config`.
+    /// notification pipe's write end, `None` in foreground mode. The
+    /// config-derived fields are cloned from `config`.
     pub(crate) fn new(
         config: &DaemonConfig,
         lockfile: Option<Flock<OwnedFd>>,
@@ -97,7 +118,7 @@ impl DaemonContext {
         Self {
             config: config.clone(),
             lockfile,
-            notify_pipe,
+            launcher: notify_pipe.map_or(Launcher::Foreground, Launcher::Waiting),
             cleaned_up: false,
         }
     }
@@ -258,10 +279,16 @@ impl DaemonContext {
     /// [`exit_code`](DaemonizeError::exit_code).
     #[must_use = "the parent process blocks until notified; ignoring this Result may leave it waiting"]
     pub fn notify_parent(&mut self) -> Result<(), DaemonizeError> {
-        if let Some(pipe) = self.notify_pipe.take() {
-            pipe.signal_ready().map_err(DaemonizeError::NotifyFailed)?;
+        match &mut self.launcher {
+            Launcher::Waiting(pipe) => {
+                let sent = pipe.signal_ready();
+                // Told, or the failure goes to a caller that may keep
+                // running: either way this daemon reports nothing more.
+                self.launcher = Launcher::Released;
+                sent.map_err(DaemonizeError::NotifyFailed)
+            }
+            Launcher::Released | Launcher::Foreground => Ok(()),
         }
-        Ok(())
     }
 
     /// Signals readiness like [`notify_parent`](Self::notify_parent), but on
@@ -277,14 +304,14 @@ impl DaemonContext {
     /// the pidfile is removed whatever `cleanup_on_drop` says (R154), and a
     /// launcher still waiting reads the closed pipe as a failure and exits 1.
     pub fn notify_parent_or_report(&mut self) {
-        if let Some(pipe) = self.notify_pipe.take() {
-            if let Err(e) = pipe.signal_ready() {
-                // The pipe is spent, but this daemon never started and is
-                // about to exit: its pidfile goes whatever cleanup_on_drop
-                // says (R154).
-                self.cleanup();
-                self.report_error(&DaemonizeError::NotifyFailed(e));
-            }
+        match &mut self.launcher {
+            Launcher::Waiting(pipe) => match pipe.signal_ready() {
+                Ok(()) => self.launcher = Launcher::Released,
+                // Still waiting, with the pipe spent: the report sees a start
+                // that never succeeded (R154) and prints its error (R161).
+                Err(e) => self.report_error(&DaemonizeError::NotifyFailed(e)),
+            },
+            Launcher::Released | Launcher::Foreground => {}
         }
     }
 
@@ -329,13 +356,14 @@ impl DaemonContext {
         }
         // A broken pipe here means only that the launcher is gone: run the
         // program anyway (R157). The send cannot raise SIGPIPE (R165).
-        if let Some(pipe) = self.notify_pipe.as_mut() {
-            match pipe.signal_exec_pending() {
+        match &mut self.launcher {
+            Launcher::Waiting(pipe) => match pipe.signal_exec_pending() {
                 Err(e) if e.kind() != std::io::ErrorKind::BrokenPipe => {
                     return DaemonizeError::NotifyFailed(e);
                 }
                 _ => {}
-            }
+            },
+            Launcher::Released | Launcher::Foreground => {}
         }
         let caller_sigpipe = crate::signals::restore_default_sigpipe();
         let Err(errno) = nix::unistd::execvp(program, args);
@@ -380,11 +408,13 @@ impl DaemonContext {
     /// first. Signaling before cleanup let an observer see the parent exit
     /// while the pidfile was still being removed — a race.
     fn cleanup_and_signal_error(&mut self, err: &DaemonizeError) -> u8 {
-        if self.notify_pipe.is_none() {
-            // No launcher to tell (foreground mode, or the pipe was used):
-            // say it on stderr instead of exiting with only a code (R161).
-            // A launcher that is gone is `signal_error`'s to handle.
-            crate::notify::print_on_stderr(err);
+        match self.launcher {
+            // `signal_error` writes it, or prints it when the launcher is
+            // gone or the pipe already spent.
+            Launcher::Waiting(_) => {}
+            // No launcher to tell: say it on stderr instead of exiting with
+            // only a code (R161).
+            Launcher::Released | Launcher::Foreground => crate::notify::print_on_stderr(err),
         }
         self.cleanup_then_signal(|pipe| pipe.signal_error(err));
         err.exit_code()
@@ -402,11 +432,17 @@ impl DaemonContext {
     /// A launcher still waiting means the start never succeeded, so the
     /// pidfile goes whatever `cleanup_on_drop` says (R154).
     fn cleanup_then_signal(&mut self, signal: impl FnOnce(NotifyPipe)) {
-        if self.config.cleanup_on_drop || self.notify_pipe.is_some() {
+        let waiting = match self.launcher {
+            Launcher::Waiting(_) => true,
+            Launcher::Released | Launcher::Foreground => false,
+        };
+        if self.config.cleanup_on_drop || waiting {
             self.cleanup();
         }
-        if let Some(pipe) = self.notify_pipe.take() {
-            signal(pipe);
+        match std::mem::replace(&mut self.launcher, Launcher::Released) {
+            Launcher::Waiting(pipe) => signal(pipe),
+            Launcher::Released => {}
+            Launcher::Foreground => self.launcher = Launcher::Foreground,
         }
     }
 
@@ -676,6 +712,32 @@ mod tests {
         assert_eq!(
             (output.status.code(), pidfile.exists()),
             (Some(71), false),
+            "{}",
+            crate::test_support::subprocess_report(NAME, &output)
+        );
+    }
+
+    // Covers: R161
+    //
+    // The failed send spent the pipe, so the report that follows has nothing
+    // to write into: the error must reach stderr instead of vanishing.
+    #[test]
+    fn notify_parent_or_report_prints_the_error_when_the_launcher_is_gone() {
+        const MARKER: &str = "__BLIVET_NOR_NO_LAUNCHER_STDERR";
+        const NAME: &str =
+            "context::tests::notify_parent_or_report_prints_the_error_when_the_launcher_is_gone";
+
+        if std::env::var(MARKER).is_ok() {
+            let (rd, wr) = make_pipe();
+            drop(rd);
+            let mut ctx = ctx(&DaemonConfig::new(), None, Some(NotifyPipe::new(wr)));
+            ctx.notify_parent_or_report();
+            std::process::exit(0);
+        }
+
+        let output = crate::test_support::rerun_in_subprocess(NAME, MARKER, "1");
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("failed to notify parent"),
             "{}",
             crate::test_support::subprocess_report(NAME, &output)
         );

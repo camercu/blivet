@@ -29,14 +29,12 @@ use crate::error::DaemonizeError;
 ///
 /// Owns the single act of writing one wire-protocol message (see the module
 /// docs) and closing the pipe. The pipe is **one-shot**: each `signal_*` method
-/// consumes `self`, after which the write end is closed (the parent reads the
-/// message, then EOF).
-///
-/// Holding this in an `Option` lets a caller treat "still `Some`" as "the daemon
-/// has not signalled yet" — which is exactly how [`DaemonContext`] decides, on
-/// drop, whether to report an unnotified exit.
+/// spends it, after which the write end is closed (the parent reads the
+/// message, then EOF). Whether a launcher still waits is
+/// [`DaemonContext`]'s launcher state to say, not this.
 ///
 /// [`DaemonContext`]: crate::DaemonContext
+///
 /// The fd is held in an `Option` so the type can distinguish "already spoke on
 /// the wire" (`None`) from "never spoke" (`Some`). Every consuming method takes
 /// the fd out before writing; [`Drop`] uses the leftover `Some` as the signal
@@ -73,8 +71,10 @@ impl NotifyPipe {
     /// # Errors
     ///
     /// Returns `io::Error` if writing to the pipe fails.
+    ///
+    /// Spends the pipe whether or not the write succeeds.
     #[must_use = "the parent process blocks until notified; ignoring this Result may leave it waiting"]
-    pub(crate) fn signal_ready(mut self) -> io::Result<()> {
+    pub(crate) fn signal_ready(&mut self) -> io::Result<()> {
         self.write_all(&SUCCESS)
     }
 
@@ -86,10 +86,7 @@ impl NotifyPipe {
     ///
     /// Returns `io::Error` if writing to the pipe fails.
     pub(crate) fn signal_exec_pending(&mut self) -> io::Result<()> {
-        let fd = self
-            .0
-            .as_ref()
-            .expect("exec marker written after the pipe was consumed");
+        let fd = self.0.as_ref().ok_or_else(spent)?;
         // Through the borrowed fd: a `dup` to get a `File` would need a free
         // descriptor, and a daemon at its limit must still be able to exec.
         ChannelWriter(fd.as_fd()).write_all(&EXEC_PENDING)
@@ -97,8 +94,9 @@ impl NotifyPipe {
 
     /// Signal a daemonization failure: write the error's exit-code byte and
     /// message, then close the pipe. If the write fails, most likely because
-    /// the launcher is gone, the message goes to stderr instead, so it is not
-    /// lost with the pipe (R161). The process is aborting either way.
+    /// the launcher is gone, or a failed send already spent the pipe, the
+    /// message goes to stderr instead, so it is not lost with the pipe (R161).
+    /// The process is aborting either way.
     pub(crate) fn signal_error(mut self, err: &DaemonizeError) {
         if self.write_all(&error_bytes(err)).is_err() {
             print_on_stderr(err);
@@ -111,15 +109,20 @@ impl NotifyPipe {
         let _ = self.write_all(&unnotified_bytes());
     }
 
-    /// Take the fd (if still present) and write `bytes` through it, closing it.
-    /// A no-op once the fd has been taken, so it is safe to call again from
-    /// [`Drop`] after a `signal_*`/`close` has already consumed the pipe.
+    /// Take the fd and write `bytes` through it, closing it. Fails without
+    /// writing once the fd has been taken: nothing reached the launcher.
     fn write_all(&mut self, bytes: &[u8]) -> io::Result<()> {
-        let Some(fd) = self.0.take() else {
-            return Ok(());
-        };
+        let fd = self.0.take().ok_or_else(spent)?;
         ChannelWriter(fd.as_fd()).write_all(bytes)
     }
+}
+
+/// The error for a write to a pipe an earlier send already spent.
+fn spent() -> io::Error {
+    io::Error::new(
+        io::ErrorKind::NotConnected,
+        "the notification pipe is already spent",
+    )
 }
 
 /// The notification channel: a connected `AF_UNIX` stream pair, returned as
