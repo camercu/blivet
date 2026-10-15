@@ -1,5 +1,6 @@
 //! The files the sequence opened at steps 7, 8 and 12: one record, which step
-//! 13's fd sweep (R152) and step 16's chown (R163) both read.
+//! 12's collision check (R146), step 13's fd sweep (R152) and step 16's chown
+//! (R163) all read.
 //!
 //! Each list was assembled by hand before, and a file added to one was missed
 //! in the other. Both now derive from the record, and only the steps that
@@ -10,6 +11,8 @@ use std::os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd, RawFd};
 use std::path::Path;
 
 use nix::fcntl::Flock;
+
+use crate::file_identity::FileId;
 
 /// What a file is to the sequence, with the descriptor that holds it.
 pub(crate) enum Role {
@@ -36,10 +39,11 @@ impl AsFd for Role {
     }
 }
 
-/// One opened file: the path it was opened by, and its role.
+/// One opened file: the path it was opened by, its role, and its identity.
 struct Opened<'a> {
     path: &'a Path,
     role: Role,
+    id: FileId,
 }
 
 /// The files the sequence opened, in the order it opened them.
@@ -47,9 +51,27 @@ struct Opened<'a> {
 pub(crate) struct OpenedFiles<'a>(Vec<Opened<'a>>);
 
 impl<'a> OpenedFiles<'a> {
-    /// Records a file a step opened.
-    pub(crate) fn push(&mut self, path: &'a Path, role: Role) {
-        self.0.push(Opened { path, role });
+    /// Records a file a step opened, with the identity `fstat` gave it.
+    pub(crate) fn push(&mut self, path: &'a Path, role: Role, id: FileId) {
+        self.0.push(Opened { path, role, id });
+    }
+
+    /// Step 12: the files a stream must not be (R146), by the name to report
+    /// them under. The file with the `pidfile` identity is the pidfile even
+    /// when step 7 opened it as the lock: the user configured it so.
+    pub(crate) fn owned(&self, pidfile: Option<FileId>) -> Vec<(&'static str, FileId)> {
+        self.0
+            .iter()
+            .filter_map(|o| {
+                let name = match o.role {
+                    _ if Some(o.id) == pidfile => "pidfile",
+                    Role::Lockfile(_) => "lockfile",
+                    Role::Pidfile(_) => "pidfile",
+                    Role::Stream(_) => return None,
+                };
+                Some((name, o.id))
+            })
+            .collect()
     }
 
     /// The lock step 7 holds, with the path it was opened by.
@@ -117,6 +139,64 @@ mod tests {
         crate::steps::open_and_lock(&dir.join(name)).unwrap()
     }
 
+    /// Records `role` under `path`, by the identity its descriptor has.
+    fn push<'a>(files: &mut OpenedFiles<'a>, path: &'a Path, role: Role) {
+        let id = crate::file_identity::file_id(role.as_fd()).unwrap();
+        files.push(path, role, id);
+    }
+
+    #[test]
+    fn the_owned_files_are_named_by_role() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut files = OpenedFiles::default();
+        let lockfile = dir.path().join("app.lock");
+        let pidfile = dir.path().join("app.pid");
+        push(
+            &mut files,
+            &lockfile,
+            Role::Lockfile(lock(dir.path(), "app.lock")),
+        );
+        push(
+            &mut files,
+            &pidfile,
+            Role::Pidfile(file(dir.path(), "app.pid")),
+        );
+        let names: Vec<_> = files
+            .owned(None)
+            .into_iter()
+            .map(|(name, _)| name)
+            .collect();
+
+        assert_eq!(names, ["lockfile", "pidfile"]);
+    }
+
+    /// The user configured that file as the pidfile, so a collision names it
+    /// so, though step 7 opened it as the lock.
+    #[test]
+    fn a_lockfile_that_is_the_pidfile_is_named_the_pidfile() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut files = OpenedFiles::default();
+        let pidfile = dir.path().join("app.pid");
+        push(
+            &mut files,
+            &pidfile,
+            Role::Lockfile(lock(dir.path(), "app.pid")),
+        );
+        let id = files.owned(None)[0].1;
+
+        assert_eq!(files.owned(Some(id))[0].0, "pidfile");
+    }
+
+    #[test]
+    fn stream_files_are_not_owned() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut files = OpenedFiles::default();
+        let out = dir.path().join("out.log");
+        push(&mut files, &out, Role::Stream(file(dir.path(), "out.log")));
+
+        assert!(files.owned(None).is_empty());
+    }
+
     #[test]
     fn an_empty_record_spares_only_the_held_and_the_pipe() {
         let files = OpenedFiles::default();
@@ -130,9 +210,17 @@ mod tests {
         let lockfile = dir.path().join("app.lock");
         let pidfile = dir.path().join("app.pid");
         let out = dir.path().join("out.log");
-        files.push(&lockfile, Role::Lockfile(lock(dir.path(), "app.lock")));
-        files.push(&pidfile, Role::Pidfile(file(dir.path(), "app.pid")));
-        files.push(&out, Role::Stream(file(dir.path(), "out.log")));
+        push(
+            &mut files,
+            &lockfile,
+            Role::Lockfile(lock(dir.path(), "app.lock")),
+        );
+        push(
+            &mut files,
+            &pidfile,
+            Role::Pidfile(file(dir.path(), "app.pid")),
+        );
+        push(&mut files, &out, Role::Stream(file(dir.path(), "out.log")));
         let expected: Vec<i32> = files.0.iter().map(|o| o.role.as_raw_fd()).collect();
 
         assert_eq!(spared_fds(&files, [], None), expected);
@@ -144,8 +232,12 @@ mod tests {
         let mut files = OpenedFiles::default();
         let lockfile = dir.path().join("app.lock");
         let out = dir.path().join("out.log");
-        files.push(&lockfile, Role::Lockfile(lock(dir.path(), "app.lock")));
-        files.push(&out, Role::Stream(file(dir.path(), "out.log")));
+        push(
+            &mut files,
+            &lockfile,
+            Role::Lockfile(lock(dir.path(), "app.lock")),
+        );
+        push(&mut files, &out, Role::Stream(file(dir.path(), "out.log")));
 
         let targets: Vec<_> = chown_targets(&files, true)
             .into_iter()
@@ -165,7 +257,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut files = OpenedFiles::default();
         let out = dir.path().join("out.log");
-        files.push(&out, Role::Stream(file(dir.path(), "out.log")));
+        push(&mut files, &out, Role::Stream(file(dir.path(), "out.log")));
 
         assert!(chown_targets(&files, false).is_empty());
     }
@@ -176,8 +268,16 @@ mod tests {
         let mut files = OpenedFiles::default();
         let pidfile = dir.path().join("app.pid");
         let lockfile = dir.path().join("app.lock");
-        files.push(&pidfile, Role::Pidfile(file(dir.path(), "app.pid")));
-        files.push(&lockfile, Role::Lockfile(lock(dir.path(), "app.lock")));
+        push(
+            &mut files,
+            &pidfile,
+            Role::Pidfile(file(dir.path(), "app.pid")),
+        );
+        push(
+            &mut files,
+            &lockfile,
+            Role::Lockfile(lock(dir.path(), "app.lock")),
+        );
         let raw = files.0[1].role.as_raw_fd();
 
         assert_eq!(files.take_lock().map(|l| l.as_raw_fd()), Some(raw));
@@ -188,7 +288,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut files = OpenedFiles::default();
         let out = dir.path().join("out.log");
-        files.push(&out, Role::Stream(file(dir.path(), "out.log")));
+        push(&mut files, &out, Role::Stream(file(dir.path(), "out.log")));
 
         assert!(files.lock().is_none());
     }

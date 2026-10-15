@@ -212,11 +212,11 @@ pub(crate) fn redirect_output<'a>(
     }
     let files = err
         .and_then(|err| match err {
-            Stderr::Own(err) => Some((err.path, err.fd)),
+            Stderr::Own(err) => Some((err.path, err.fd, err.id)),
             Stderr::SharesStdout(_) => None,
         })
         .into_iter()
-        .chain(out.map(|out| (out.path, out.fd)))
+        .chain(out.map(|out| (out.path, out.fd, out.id)))
         .collect();
     Ok(Redirected {
         slots: moved,
@@ -229,8 +229,9 @@ pub(crate) fn redirect_output<'a>(
 pub(crate) struct Redirected<'a> {
     pub(crate) slots: Vec<Undo>,
     /// Each stream's file by the path that names it, once: stderr sharing
-    /// stdout's file is not repeated. Close-on-exec, above fd 2.
-    pub(crate) files: Vec<(&'a Path, OwnedFd)>,
+    /// stdout's file is not repeated, with its identity. Close-on-exec, above
+    /// fd 2.
+    pub(crate) files: Vec<(&'a Path, OwnedFd, FileId)>,
 }
 
 /// A stdio slot steps 6 and 12 move a file onto.

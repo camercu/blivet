@@ -315,7 +315,9 @@ unsafe fn run_post_fork<T>(
     let lockfile_path = config.effective_lockfile().map(std::path::PathBuf::as_path);
     if let Some(path) = lockfile_path {
         let lock = steps::open_and_lock(path)?;
-        abort.files.push(path, steps::Role::Lockfile(lock));
+        let id = crate::file_identity::file_id(&*lock)
+            .map_err(|e| DaemonizeError::LockfileError(format!("fstat: {e}")))?;
+        abort.files.push(path, steps::Role::Lockfile(lock), id);
     }
 
     // Step 8: Write pidfile. The debt is owed from the moment this process
@@ -325,24 +327,16 @@ unsafe fn run_post_fork<T>(
     // no process at all. Nor any earlier: an `open_pidfile` that fails, or a
     // lock conflict at step 7, leaves a file that belongs to someone else.
     // The abort guard removes the pidfile from the second half of step 8 on.
-    // The files the sequence now holds, which step 12 must not redirect into.
-    // The pidfile goes first: a derived lockfile is the same file, and the
-    // user configured it as the pidfile.
-    let mut owned = Vec::new();
+    let mut pidfile_id = None;
     if let Some(ref pidfile_path) = config.pidfile {
         let pidfile = steps::open_pidfile(pidfile_path, abort.files.lock())?;
         abort.pidfile = Some(pidfile_path);
         let (id, fd) = pidfile.write_pid()?;
-        owned.push(("pidfile", id));
+        pidfile_id = Some(id);
         // A standalone pidfile's descriptor, kept for step 16's chown (R163).
         if let Some(fd) = fd {
-            abort.files.push(pidfile_path, steps::Role::Pidfile(fd));
+            abort.files.push(pidfile_path, steps::Role::Pidfile(fd), id);
         }
-    }
-    if let Some((_, lockfile)) = abort.files.lock() {
-        let id = crate::file_identity::file_id(&**lockfile)
-            .map_err(|e| DaemonizeError::LockfileError(format!("fstat: {e}")))?;
-        owned.push(("lockfile", id));
     }
 
     // Step 9: Reset signal dispositions
@@ -362,12 +356,12 @@ unsafe fn run_post_fork<T>(
             config.stdout.as_deref(),
             config.stderr.as_deref(),
             config.append,
-            &owned,
+            &abort.files.owned(pidfile_id),
             abort.rollback(),
         )?;
         abort.record_all(redirected.slots)?;
-        for (path, fd) in redirected.files {
-            abort.files.push(path, steps::Role::Stream(fd));
+        for (path, fd, id) in redirected.files {
+            abort.files.push(path, steps::Role::Stream(fd), id);
         }
     }
 
