@@ -1,6 +1,6 @@
 # Testability seams: specification
 
-Status: approved, 2026-10-08. Lands before 0.15.0.
+Status: approved 2026-10-08. Implemented after 0.15.0 shipped without it.
 
 ## Summary
 
