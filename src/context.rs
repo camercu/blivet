@@ -58,8 +58,8 @@ pub struct DaemonContext {
 /// whether `Drop` writes to the pipe. Each matches every variant, so a new one
 /// fails to compile until each decision handles it.
 enum Launcher {
-    /// The launcher reads the pipe for the outcome. After a failed readiness
-    /// send from `notify_parent_or_report` the pipe is spent but the start
+    /// The launcher reads the channel for the outcome. After a failed readiness
+    /// send from `notify_parent_or_report` the channel is spent but the start
     /// still never succeeded, so the state stays here.
     Waiting(NotifyPipe),
     /// The launcher was told the start succeeded, or `notify_parent` handed
@@ -108,7 +108,7 @@ impl fmt::Debug for DaemonContext {
 impl DaemonContext {
     /// Builds a context from the validated config plus the two runtime
     /// resources acquired during daemonization: the held lockfile and the
-    /// notification pipe's write end, `None` in foreground mode. The
+    /// notification channel's write end, `None` in foreground mode. The
     /// config-derived fields are cloned from `config`.
     pub(crate) fn new(
         config: &DaemonConfig,
@@ -307,7 +307,7 @@ impl DaemonContext {
         match &mut self.launcher {
             Launcher::Waiting(pipe) => match pipe.signal_ready() {
                 Ok(()) => self.launcher = Launcher::Released,
-                // Still waiting, with the pipe spent: the report sees a start
+                // Still waiting, with the channel spent: the report sees a start
                 // that never succeeded (R154) and prints its error (R161).
                 Err(e) => self.report_error(&DaemonizeError::NotifyFailed(e)),
             },
@@ -410,7 +410,7 @@ impl DaemonContext {
     fn cleanup_and_signal_error(&mut self, err: &DaemonizeError) -> u8 {
         match self.launcher {
             // `signal_error` writes it, or prints it when the launcher is
-            // gone or the pipe already spent.
+            // gone or the channel already spent.
             Launcher::Waiting(_) => {}
             // No launcher to tell: say it on stderr instead of exiting with
             // only a code (R161).
@@ -784,7 +784,7 @@ mod tests {
 
     // Covers: R161
     //
-    // The failed send spent the pipe, so the report that follows has nothing
+    // The failed send spent the channel, so the report that follows has nothing
     // to write into: the error must reach stderr instead of vanishing.
     #[test]
     fn notify_parent_or_report_prints_the_error_when_the_launcher_is_gone() {

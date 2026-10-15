@@ -72,7 +72,7 @@ impl NotifyPipe {
     ///
     /// Returns `io::Error` if writing to the pipe fails.
     ///
-    /// Spends the pipe whether or not the write succeeds.
+    /// Spends the channel whether or not the write succeeds.
     #[must_use = "the parent process blocks until notified; ignoring this Result may leave it waiting"]
     pub(crate) fn signal_ready(&mut self) -> io::Result<()> {
         self.write_all(&SUCCESS)
@@ -94,8 +94,9 @@ impl NotifyPipe {
 
     /// Signal a daemonization failure: write the error's exit-code byte and
     /// message, then close the pipe. If the write fails, most likely because
-    /// the launcher is gone, or a failed send already spent the pipe, the
-    /// message goes to stderr instead, so it is not lost with the pipe (R161).
+    /// the launcher is gone, or a failed send already spent the channel, the
+    /// message goes to stderr instead, so it is not lost with the channel
+    /// (R161).
     /// The process is aborting either way.
     pub(crate) fn signal_error(mut self, err: &DaemonizeError) {
         if self.write_all(&error_bytes(err)).is_err() {
@@ -117,11 +118,11 @@ impl NotifyPipe {
     }
 }
 
-/// The error for a write to a pipe an earlier send already spent.
+/// The error for a write to a channel an earlier send already spent.
 fn spent() -> io::Error {
     io::Error::new(
         io::ErrorKind::NotConnected,
-        "the notification pipe is already spent",
+        "the notification channel is already spent",
     )
 }
 

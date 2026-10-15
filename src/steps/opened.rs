@@ -97,7 +97,7 @@ impl<'a> OpenedFiles<'a> {
 }
 
 /// Step 13: the descriptors the sweep spares (R152). Every file in the
-/// record, each descriptor an undo token holds, and the notification pipe's
+/// record, each descriptor an undo token holds, and the notification channel's
 /// write end.
 pub(crate) fn spared_fds(
     files: &OpenedFiles,
