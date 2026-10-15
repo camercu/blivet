@@ -214,12 +214,13 @@ pidfile, lockfile, stdout, stderr, user, group, `cleanup_on_drop`, and
 | -------------------- | ------------------- | -------------------------------------------------- |
 | `config`             | `DaemonConfig`      | The validated config, cloned in whole. Single source of truth for pidfile, lockfile, stdout/stderr, user/group, `cleanup_on_drop`, and `chown_paths`. |
 | `lockfile`           | `Option<Flock>`     | Owned lock (`nix::fcntl`); drop releases.          |
-| `notify_pipe`        | `Option<NotifyPipe>`| Write end of notification pipe; see below.         |
+| `launcher`           | `Launcher`          | `Waiting` (holds the pipe's write end), `Released`, or `Foreground`; see below. |
 | `cleaned_up`         | `bool`              | Internal flag; prevents double cleanup.            |
 
 **Debug output:** the manual `impl` does not print `config` verbatim.
-It renders `lockfile` as `held`/`none` and `notify_pipe` as
-`open`/`none` (never the raw fd), then flattens the relevant config
+It renders `lockfile` as `held`/`none` and the launcher as a
+`notify_pipe` pseudo-field, `open` while `Waiting` and `none` otherwise
+(never the raw fd), then flattens the relevant config
 values as pseudo-fields for readability: `pidfile`, `lockfile_path`
 (the effective lockfile), `stdout`, `stderr`, `user`, `group`, and
 `cleanup_on_drop`.
@@ -251,16 +252,21 @@ write error is returned as `DaemonizeError::NotifyFailed` (exit code 71) so
 callers get one error type with a preserved exit code. The companion
 `notify_parent_or_report(&mut self)` does the same but reports the error to the
 parent and `_exit`s instead of returning it. The parent reads the readiness
-message and exits 0. After this call, `notify_pipe` is `None`. This is the API
-for library consumers to signal readiness.
+message and exits 0. A successful send moves the launcher to `Released`; so
+does a failed one in `notify_parent`, which hands the error to a caller that
+may keep running. A failed one in `notify_parent_or_report` leaves it
+`Waiting`, with the pipe spent, so the report that follows removes the
+pidfile (R154) and prints the error on stderr (R161). This is the API for
+library consumers to signal readiness.
 
 `report_error(&mut self, err: &DaemonizeError) -> !` writes the error
 to the notification pipe (exit code byte, two-byte length, `Display`
 message; see the notification pipe protocol), closes it, then calls
-`_exit()` with the mapped exit code. With no pipe it prints the error
-to stderr first (R161). `exec` uses it to report an exec failure.
+`_exit()` with the mapped exit code. With no launcher waiting it prints
+the error to stderr first (R161); with one waiting whose pipe is gone or
+spent, the failed write prints it instead. `exec` uses it to report an exec failure.
 
-**Drop behavior:** if `notify_pipe` is still `Some` when `DaemonContext`
+**Drop behavior:** if the launcher is still `Waiting` when `DaemonContext`
 is dropped, the `Drop` impl removes the pidfile (whatever
 `cleanup_on_drop` says: the start never succeeded, R154), then writes an error
 with exit code `1` and the message "daemon exited without signaling readiness"
@@ -385,7 +391,7 @@ on success (or in the current process when `foreground` is true).
 In foreground mode, the function skips both forks, `setsid`, and the
 notification pipe. All other steps (umask, chdir, redirect, signal
 reset, env vars, lockfile, pidfile) still execute. The returned
-`DaemonContext` has `notify_pipe: None`, making `notify_parent()` a
+`DaemonContext` has its launcher `Foreground`, making `notify_parent()` a
 no-op.
 
 **Error paths:**
@@ -543,7 +549,8 @@ exact order. The ordering is load-bearing.
 
 When `foreground` is true, steps 1–3 (pipe creation, both forks,
 setsid) are skipped entirely. Execution continues from step 4 in the
-current process. The returned `DaemonContext` has `notify_pipe: None`.
+current process. The returned `DaemonContext` has its launcher
+`Foreground`.
 
 In foreground mode, step 6 only redirects stdin to `/dev/null`.
 Stdout and stderr are left inherited so output reaches the parent
@@ -1433,7 +1440,7 @@ verification points.
 - R116. `ProgramNotFound` and `ExecFailed` come only from
   `DaemonContext::exec` and the CLI's checks.
 - R117. `DaemonContext::Drop` writes exit code `1` and failure message
-  to pipe if `notify_pipe` is still `Some`.
+  to pipe if the launcher is still `Waiting`.
 - R118. `DaemonContext::Drop` calls `cleanup()` when `cleanup_on_drop`
   is true.
 - R119. Parent-side pipe reader is implemented inside `daemonize()`'s
