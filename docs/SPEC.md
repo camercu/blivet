@@ -1430,7 +1430,8 @@ verification points.
   comparing, whether or not the file exists yet: `canonicalize()` when
   it does, canonical parent directory plus file name when it does not,
   byte equality only when neither is available.
-- R116. `ProgramNotFound` and `ExecFailed` are produced only by CLI.
+- R116. `ProgramNotFound` and `ExecFailed` come only from
+  `DaemonContext::exec` and the CLI's checks.
 - R117. `DaemonContext::Drop` writes exit code `1` and failure message
   to pipe if `notify_pipe` is still `Some`.
 - R118. `DaemonContext::Drop` calls `cleanup()` when `cleanup_on_drop`
