@@ -52,6 +52,8 @@ pub(crate) mod failpoints {
     }
 
     pub(crate) static DEVNULL_OPEN_FAILS: Failpoint = Failpoint::new();
+    /// Fails step 9's `sigaction` for SIGTERM, after it has replaced the
+    /// dispositions of the signals below it.
     pub(crate) static SIGACTION_FAILS: Failpoint = Failpoint::new();
     pub(crate) static SIGPROCMASK_FAILS: Failpoint = Failpoint::new();
     pub(crate) static GETRLIMIT_FAILS: Failpoint = Failpoint::new();

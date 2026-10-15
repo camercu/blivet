@@ -37,12 +37,6 @@ pub(crate) fn reset_signal_dispositions(
 ) -> Result<Undo, crate::error::DaemonizeError> {
     #[cfg(test)]
     crate::test_support::assert_isolated("reset_signal_dispositions");
-    #[cfg(test)]
-    if crate::steps::failpoints::SIGACTION_FAILS.injected() {
-        return Err(crate::error::DaemonizeError::SystemError(
-            "sigaction(1): injected failure".into(),
-        ));
-    }
     let mut saved = Dispositions(Vec::new());
     let signals = signal_range();
     for sig in signals {
@@ -50,27 +44,38 @@ pub(crate) fn reset_signal_dispositions(
             continue;
         }
 
-        let sa = new_sigaction(libc::SIG_DFL, 0);
         let mut was = zeroed_sigaction();
-        // SAFETY: `sa` is an initialised SIG_DFL action, and `was` is a valid
-        // sigaction for the kernel to fill.
-        let ret = unsafe { libc::sigaction(sig, &sa, &mut was) };
-        if ret == 0 {
-            if let Rollback::PutBack = rollback {
-                saved.0.push(Disposition { sig, was });
+        match reset(sig, &mut was) {
+            Ok(()) => {
+                if let Rollback::PutBack = rollback {
+                    saved.0.push(Disposition { sig, was });
+                }
             }
-        } else {
-            let err = std::io::Error::last_os_error();
-            if err.raw_os_error() != Some(libc::EINVAL) {
+            // EINVAL: signal cannot be caught, skip
+            Err(err) if err.raw_os_error() == Some(libc::EINVAL) => {}
+            Err(err) => {
                 drop(Undo::new(saved));
                 return Err(crate::error::DaemonizeError::SystemError(format!(
                     "sigaction({sig}): {err}"
                 )));
             }
-            // EINVAL: signal cannot be caught, skip
         }
     }
     Ok(Undo::saving(rollback, || saved))
+}
+
+/// Sets `sig` to SIG_DFL, reporting what it replaced in `was`.
+fn reset(sig: i32, was: &mut libc::sigaction) -> std::io::Result<()> {
+    #[cfg(test)]
+    if sig == libc::SIGTERM && crate::steps::failpoints::SIGACTION_FAILS.injected() {
+        return Err(std::io::Error::other("injected failure"));
+    }
+    let sa = new_sigaction(libc::SIG_DFL, 0);
+    // SAFETY: `sa` is an initialised SIG_DFL action, and `was` is a valid
+    // sigaction for the kernel to fill.
+    let ret = unsafe { libc::sigaction(sig, &sa, was) };
+    nix::errno::Errno::result(ret)?;
+    Ok(())
 }
 
 /// A signal's disposition as step 9 found it.
@@ -316,6 +321,38 @@ pub(crate) fn install_pidfile_cleanup_signals(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Covers: R164
+    #[test]
+    fn a_reset_failing_part_way_puts_back_what_it_replaced() {
+        crate::test_support::run_in_subprocess(
+            "signals::tests::a_reset_failing_part_way_puts_back_what_it_replaced_subprocess",
+        );
+    }
+
+    /// SIGHUP and SIGUSR1 sit below SIGTERM, where the failpoint fails, so
+    /// the step has replaced both before it fails.
+    #[test]
+    #[ignore]
+    #[allow(unsafe_code)]
+    fn a_reset_failing_part_way_puts_back_what_it_replaced_subprocess() {
+        if !crate::test_support::is_subprocess() {
+            return;
+        }
+        use nix::sys::signal::{SaFlags, SigAction, SigHandler, SigSet, Signal, sigaction};
+        let ignore = SigAction::new(SigHandler::SigIgn, SaFlags::empty(), SigSet::empty());
+        for sig in [Signal::SIGHUP, Signal::SIGUSR1] {
+            // SAFETY: SIG_IGN installs no handler, so no code runs.
+            unsafe { sigaction(sig, &ignore) }.unwrap();
+        }
+        let before = crate::test_support::signal_state();
+        crate::steps::failpoints::SIGACTION_FAILS.set();
+
+        let result = reset_signal_dispositions(Rollback::PutBack);
+
+        assert!(result.is_err());
+        assert_eq!(crate::test_support::signal_state(), before);
+    }
 
     // Covers: R99
     #[test]
