@@ -207,6 +207,9 @@ mod test_support;
 mod capability_probes;
 
 #[cfg(test)]
+mod kernel_facts;
+
+#[cfg(test)]
 mod undo_walk;
 
 /// Compile-checks every `rust` code block in the README as a doctest, so a
