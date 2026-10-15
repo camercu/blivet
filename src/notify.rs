@@ -218,7 +218,9 @@ impl Drop for NotifyPipe {
     /// fd first, leaving this a no-op. Never panics, so it is safe during an
     /// unwind.
     fn drop(&mut self) {
-        let _ = self.write_all(&unnotified_bytes());
+        if self.0.is_some() {
+            let _ = self.write_all(&unnotified_bytes());
+        }
     }
 }
 
