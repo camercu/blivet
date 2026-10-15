@@ -51,6 +51,7 @@ impl ThreadCount {
 
     /// The count now.
     #[cfg(not(blivet_thread_count_procfs))]
+    #[cfg_attr(test, mutants::skip)] // see the note above the macOS query
     pub(crate) fn read(&self) -> std::io::Result<usize> {
         count()
     }
