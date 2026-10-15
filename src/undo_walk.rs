@@ -74,12 +74,13 @@ fn walk(config: &DaemonConfig, pidfile: &std::path::Path) {
 }
 
 /// The config every step with a token acts on: umask, cwd, the stdio slots,
-/// signals, env, and with `user` the groups.
+/// signals, env, and with `user` the groups. The fd sweep runs too, so a
+/// token whose descriptor it does not spare loses what it saved.
 fn full_config(dir: &std::path::Path) -> DaemonConfig {
     let mut config = DaemonConfig::new();
     config
         .foreground(true)
-        .close_fds(false)
+        .close_fds(true)
         .umask(0o077)
         .chdir(dir)
         .pidfile(dir.join("app.pid"))
