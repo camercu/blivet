@@ -1621,6 +1621,12 @@ fn stdout_hard_linked_to_the_pidfile_is_rejected() {
         .unwrap();
 
     assert_rejected_as_same_file(&output);
+    // The lock is derived from the pidfile, but the user named a pidfile.
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("pidfile and stdout"),
+        "stderr should name the pidfile: {stderr}"
+    );
 }
 
 // Covers: R146
