@@ -1,6 +1,7 @@
 //! The undo walk: fails a foreground start after each undo token in turn,
-//! just before `init`, and once more just before the identity switch, and checks after each failure
-//! that the process is as it was before the start (R164).
+//! just before `init`, and once more just before the identity switch, and
+//! checks after each failure that the process is as it was before the start
+//! (R164).
 //!
 //! The walk holds no list of steps. A step that changes the snapshot's state
 //! without returning a token leaves that change behind at every failure after
