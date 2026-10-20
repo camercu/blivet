@@ -1043,6 +1043,51 @@ mod tests {
         );
     }
 
+    // Covers: R97
+    #[test]
+    fn a_derived_lock_pidfile_is_written_through_the_lock() {
+        run_in_subprocess(
+            "sequence::tests::a_derived_lock_pidfile_is_written_through_the_lock_subprocess",
+        );
+    }
+
+    /// Step 8 writes the pid through the descriptor step 7 locked, not one
+    /// it opens anew by path: a file swapped in between would take the pid
+    /// unlocked. So while init runs, one descriptor holds the pidfile.
+    #[test]
+    #[ignore]
+    #[allow(unsafe_code)]
+    fn a_derived_lock_pidfile_is_written_through_the_lock_subprocess() {
+        if !is_subprocess() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let pidfile = dir.path().join("app.pid");
+        let mut config = DaemonConfig::new();
+        config.foreground(true).close_fds(false).pidfile(&pidfile);
+
+        let (_ctx, holding) = run_inner_with(&config, &mut NullForker::new(vec![], Ok(())), || {
+            let id = crate::file_identity::FileId::of(&nix::sys::stat::stat(&pidfile).unwrap());
+            let holding = (0..256)
+                .filter(|&fd| {
+                    let mut st = std::mem::MaybeUninit::<libc::stat>::uninit();
+                    // SAFETY: `st` is valid for `fstat` to fill; a closed
+                    // `fd` returns EBADF without touching it.
+                    if unsafe { libc::fstat(fd, st.as_mut_ptr()) } != 0 {
+                        return false;
+                    }
+                    // SAFETY: `fstat` succeeded, so it filled `st`.
+                    let st = unsafe { st.assume_init() };
+                    (st.st_dev, st.st_ino) == (id.dev, id.ino)
+                })
+                .count();
+            Ok(holding)
+        })
+        .unwrap();
+
+        assert_eq!(holding, 1);
+    }
+
     // Covers: R162
     #[test]
     fn supplementary_groups_are_set_before_init_runs() {
