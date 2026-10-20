@@ -222,18 +222,35 @@ pub(crate) fn assert_isolated(what: &str) {
 /// in this bit alone. It names libc's return trampoline, not behaviour.
 const SA_RESTORER: i32 = 0x0400_0000;
 
-/// Every signal's handler and flags, less `SA_RESTORER`, and the mask.
-pub(crate) fn signal_state() -> (Vec<(i32, usize, i32)>, Vec<i32>) {
+/// One signal's action: handler, flags less `SA_RESTORER`, and the signals
+/// its handler blocks.
+pub(crate) type SignalAction = (i32, usize, i32, Vec<i32>);
+
+/// Every signal's action, and the signals the thread blocks, real-time ones
+/// included.
+#[allow(unsafe_code)]
+pub(crate) fn signal_state() -> (Vec<SignalAction>, Vec<i32>) {
+    // The members of `set` among 1..=64; `sigismember` rejects the rest.
+    let members = |set: &libc::sigset_t| -> Vec<i32> {
+        // SAFETY: `set` is an initialised signal set.
+        (1..=64)
+            .filter(|&sig| unsafe { libc::sigismember(set, sig) } == 1)
+            .collect()
+    };
     let mut dispositions = Vec::new();
     for sig in 1..=64 {
         if let Ok(now) = crate::signals::disposition(sig) {
-            dispositions.push((sig, now.sa_sigaction, now.sa_flags & !SA_RESTORER));
+            let flags = now.sa_flags & !SA_RESTORER;
+            dispositions.push((sig, now.sa_sigaction, flags, members(&now.sa_mask)));
         }
     }
-    let mask = nix::sys::signal::SigSet::thread_get_mask().unwrap();
-    let blocked = (1..32)
-        .filter(|&sig| nix::sys::signal::Signal::try_from(sig).is_ok_and(|s| mask.contains(s)))
-        .collect();
+    let mut mask = std::mem::MaybeUninit::<libc::sigset_t>::uninit();
+    // SAFETY: a null new set only reads the thread's mask into `mask`.
+    let ret =
+        unsafe { libc::pthread_sigmask(libc::SIG_BLOCK, std::ptr::null(), mask.as_mut_ptr()) };
+    assert_eq!(ret, 0, "pthread_sigmask");
+    // SAFETY: `pthread_sigmask` succeeded, so it filled `mask`.
+    let blocked = members(unsafe { mask.assume_init_ref() });
     (dispositions, blocked)
 }
 
@@ -245,7 +262,7 @@ pub(crate) struct ProcessSnapshot {
     cwd: std::path::PathBuf,
     /// What fds 0 to 2 point at, by device and inode; `None` when closed.
     stdio: [Option<crate::file_identity::FileId>; 3],
-    signals: (Vec<(i32, usize, i32)>, Vec<i32>),
+    signals: (Vec<SignalAction>, Vec<i32>),
     /// Sorted; `None` once compared without it.
     env: Option<Vec<(std::ffi::OsString, std::ffi::OsString)>>,
     groups: Vec<libc::gid_t>,
