@@ -123,9 +123,11 @@ impl Restore for SignalMask {
 pub(crate) fn set_env_vars(env: &[(String, String)], rollback: Rollback) -> Undo {
     #[cfg(test)]
     crate::test_support::assert_isolated("set_env_vars");
-    let mut was = Vec::with_capacity(env.len());
+    let mut was = Vec::new();
     for (key, value) in env {
-        was.push((key.clone(), std::env::var_os(key)));
+        if let Rollback::PutBack = rollback {
+            was.push((key.clone(), std::env::var_os(key)));
+        }
         // SAFETY: single-threaded per this fn's contract (post-fork child or
         // foreground entry gate), so the `setenv` cannot race.
         unsafe { std::env::set_var(key, value) };
