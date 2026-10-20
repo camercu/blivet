@@ -748,6 +748,7 @@ fn parent_waits_for_exec_before_exiting() {
     // Non-blocking, and held until the parent has gone, so a failing run
     // neither hangs here nor strands the daemon on the FIFO. Every assertion
     // waits until after this, the one on the pidfile included.
+    #[allow(clippy::disallowed_methods)] // the test's FIFO reader, not the sequence's
     let reader = std::fs::OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_NONBLOCK)

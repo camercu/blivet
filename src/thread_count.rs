@@ -34,7 +34,12 @@ impl ThreadCount {
     pub(crate) fn open() -> std::io::Result<Self> {
         Ok(Self {
             #[cfg(blivet_thread_count_procfs)]
-            status: std::fs::File::open("/proc/self/status")?,
+            status: crate::steps::open_above_stdio(
+                "/proc/self/status",
+                nix::fcntl::OFlag::O_RDONLY | nix::fcntl::OFlag::O_CLOEXEC,
+                nix::sys::stat::Mode::empty(),
+            )?
+            .into(),
         })
     }
 
@@ -427,6 +432,32 @@ mod tests {
     }
 
     use crate::test_support::{is_subprocess, run_in_subprocess};
+
+    // Covers: R152
+    #[cfg(blivet_thread_count_procfs)]
+    #[test]
+    fn the_status_file_stays_clear_of_stdio() {
+        run_in_subprocess("thread_count::tests::the_status_file_stays_clear_of_stdio_subprocess");
+    }
+
+    /// A foreground start leaves a closed stdout closed, and the count is
+    /// open while init runs, so an init that `dup2`s onto fd 1 would close
+    /// it under the check after init.
+    #[cfg(blivet_thread_count_procfs)]
+    #[test]
+    #[ignore]
+    fn the_status_file_stays_clear_of_stdio_subprocess() {
+        use std::os::fd::AsRawFd;
+        if !is_subprocess() {
+            return;
+        }
+        let count = crate::test_support::with_fds_closed(&[1, 2], ThreadCount::open).unwrap();
+        assert!(
+            count.status.as_raw_fd() > 2,
+            "fd {}",
+            count.status.as_raw_fd()
+        );
+    }
 
     // Covers: R126
     #[test]

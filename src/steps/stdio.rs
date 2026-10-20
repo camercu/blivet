@@ -31,10 +31,10 @@ pub(crate) struct Collision {
 }
 
 /// Opens `path`, never on fd 0, 1 or 2 (see [`above_stdio`]). Every file the
-/// sequence opens goes through here; clippy.toml bans a bare
-/// `nix::fcntl::open`.
+/// sequence opens and holds goes through here; clippy.toml bans a bare
+/// `nix::fcntl::open` and the `std::fs` opens.
 #[allow(clippy::disallowed_methods)] // the one place a bare open is allowed
-pub(super) fn open_above_stdio<P: ?Sized + nix::NixPath>(
+pub(crate) fn open_above_stdio<P: ?Sized + nix::NixPath>(
     path: &P,
     flags: OFlag,
     mode: Mode,
@@ -1132,6 +1132,7 @@ mod tests {
 
     #[test]
     #[ignore]
+    #[allow(clippy::disallowed_methods)] // a test's own descriptor, not the sequence's
     fn execute_redirect_refuses_an_owned_file_before_truncating_it_subprocess() {
         if !is_subprocess() {
             return;

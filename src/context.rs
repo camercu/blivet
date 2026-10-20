@@ -842,6 +842,7 @@ mod tests {
     // failed start, so running the program anyway would put a live daemon
     // behind a reported failure.
     #[test]
+    #[allow(clippy::disallowed_methods)] // a test's own descriptor, not the sequence's
     fn exec_stops_when_the_marker_cannot_be_written() {
         const MARKER: &str = "__BLIVET_EXEC_MARKER_FAILS";
         const NAME: &str = "context::tests::exec_stops_when_the_marker_cannot_be_written";

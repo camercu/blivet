@@ -1,5 +1,8 @@
 disallowed-methods = [
     { path = "nix::fcntl::open", reason = "may return a closed stdio slot that a later dup2 replaces; use steps::open_above_stdio (tests: allow it)" },
+    { path = "std::fs::File::open", reason = "may return a closed stdio slot that a later dup2 replaces; use steps::open_above_stdio (tests: allow it)" },
+    { path = "std::fs::File::create", reason = "may return a closed stdio slot that a later dup2 replaces; use steps::open_above_stdio (tests: allow it)" },
+    { path = "std::fs::OpenOptions::open", reason = "may return a closed stdio slot that a later dup2 replaces; use steps::open_above_stdio (tests: allow it)" },
     { path = "nix::unistd::pipe", reason = "leaves both ends inheritable; use notify::channel (tests: test_support::make_pipe)" },
     { path = "libc::pipe", reason = "leaves both ends inheritable; use notify::channel (tests: test_support::make_pipe)" },
     { path = "libc::socketpair", reason = "only notify::channel makes the notification channel, close-on-exec (capability and kernel-fact probes: allow it)" },

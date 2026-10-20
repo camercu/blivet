@@ -6,6 +6,7 @@ use std::ffi::OsString;
 use std::os::fd::{AsFd, AsRawFd, OwnedFd};
 use std::path::Path;
 
+use nix::fcntl::OFlag;
 use nix::sys::signal::SigSet;
 use nix::sys::stat::Mode;
 
@@ -52,12 +53,7 @@ struct Cwd(Option<OwnedFd>);
 
 impl Cwd {
     fn save() -> Self {
-        Self(
-            std::fs::File::open(".")
-                .map(OwnedFd::from)
-                .and_then(super::above_stdio)
-                .ok(),
-        )
+        Self(super::open_above_stdio(".", OFlag::O_RDONLY | OFlag::O_CLOEXEC, Mode::empty()).ok())
     }
 }
 

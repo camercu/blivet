@@ -131,6 +131,7 @@ mod tests {
     use std::os::fd::{AsRawFd, OwnedFd};
     use std::path::Path;
 
+    #[allow(clippy::disallowed_methods)] // a test's own descriptor, not the sequence's
     fn file(dir: &Path, name: &str) -> OwnedFd {
         std::fs::File::create(dir.join(name)).unwrap().into()
     }
