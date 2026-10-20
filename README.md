@@ -181,7 +181,7 @@ it returns.
 
 The checked entry points enforce this. `daemonize()` and `daemonize_with()`
 read the kernel thread count and panic unless exactly one thread is running.
-With a user switch, `daemonize_with()` checks again after `init` and, if `init`
+With an identity switch, `daemonize_with()` checks again after `init` and, if `init`
 left threads running, fails with `InitLeftThreads` (exit 70), which reaches the
 launcher. A group-only switch calls no `setenv`, so that second check is
 skipped. The `unsafe` forms
@@ -215,11 +215,11 @@ the shell with a meaningful status:
 | `ForkFailed`       | 71          | `fork()` error                           |
 | `SetsidFailed`     | 71          | `setsid()` error                         |
 | `ChdirFailed`      | 71          | `chdir()` error                          |
-| `SystemError`      | 71          | Syscall failed (notification pipe, `/dev/null` open or `dup2`, `sigaction`, `sigprocmask`, `getrlimit`, thread count around init) |
+| `SystemError`      | 71          | Syscall failed (notification channel, `/dev/null` open or `dup2`, `sigaction`, `sigprocmask`, `getrlimit`, thread count around init) |
 | `PermissionDenied` | 77          | Not root, or initgroups/setgid/setuid failed |
 | `ExecFailed`       | 71          | `exec` failed (other than `ENOENT`/`EACCES`) |
 | `NotifyFailed`     | 71          | Can't write readiness to launcher        |
-| `InitLeftThreads`  | 70          | `daemonize_with` init left threads running before a user switch |
+| `InitLeftThreads`  | 70          | `daemonize_with` init left threads running before an identity switch |
 | `Application`      | caller's    | App-level failure you report yourself    |
 
 ## Recipes

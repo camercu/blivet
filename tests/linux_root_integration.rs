@@ -72,7 +72,7 @@ fn is_root_on_linux() -> bool {
 }
 
 // ============================================================
-// User switching tests (R27, R28, R29, R35)
+// Identity switch tests (R27, R28, R29, R35)
 // ============================================================
 
 // Covers: R27
@@ -204,7 +204,7 @@ fn user_switch_sets_env_vars() {
 }
 
 // ============================================================
-// Output file ownership after user switch (R10, R82)
+// Output file ownership after the identity switch (R10, R82)
 // ============================================================
 
 // Covers: R10, R64, R71
@@ -342,7 +342,7 @@ fn daemon_cwd_via_proc() {
 }
 
 // ============================================================
-// User switch with supplementary groups (R27)
+// Identity switch with supplementary groups (R27)
 // ============================================================
 
 // Covers: R27, R59
@@ -408,7 +408,7 @@ fn user_switch_sets_supplementary_groups() {
 }
 
 // ============================================================
-// Non-root user switch validation (R35) — runs as root, validates
+// Non-root identity switch validation (R35) — runs as root, validates
 // that the error path works for non-existent users
 // ============================================================
 

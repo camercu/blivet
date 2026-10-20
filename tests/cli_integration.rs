@@ -744,7 +744,7 @@ fn parent_waits_for_exec_before_exiting() {
     let while_held = parent.0.try_wait().unwrap();
 
     // Release the daemon: with a reader present its open returns, it execs
-    // `true`, and the exec closes the notification pipe the parent waits on.
+    // `true`, and the exec closes the notification channel the launcher waits on.
     // Non-blocking, and held until the parent has gone, so a failing run
     // neither hangs here nor strands the daemon on the FIFO. Every assertion
     // waits until after this, the one on the pidfile included.
