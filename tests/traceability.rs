@@ -211,7 +211,7 @@ fn a_tag_above_a_test_counts() {
 
 #[test]
 fn a_tag_among_the_test_attributes_counts() {
-    // src/steps.rs writes its tag between the attributes and the fn.
+    // A tag may sit between the attributes and the fn.
     let text = "#[test]\n#[serial]\n// Covers: R9\nfn t() {}\n";
     assert_eq!(tags(text), [9]);
 }

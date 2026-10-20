@@ -131,8 +131,8 @@ fn generated_doc_cells_are_current() {
 /// `#[ignore]` is not enough on its own: `scripts/privileged-test.sh` runs the
 /// suite with `--run-ignored all`, which is the whole point of that tier, and
 /// this test would then rewrite whatever the developer had in their working
-/// tree and leave `git status` clean. `src/steps.rs` guards the same hazard the
-/// same way for its subprocess-only body.
+/// tree and leave `git status` clean. The subprocess-only tests under `src/`
+/// guard the same hazard the same way.
 const BLESS_ENV: &str = "__BLIVET_DOCS_BLESS";
 
 /// Rewrite the machine-owned cells. Run by `just docs-bless`.
