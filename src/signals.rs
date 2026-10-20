@@ -330,8 +330,8 @@ mod tests {
         );
     }
 
-    /// SIGHUP and SIGUSR1 sit below SIGTERM, where the failpoint fails, so
-    /// the step has replaced both before it fails.
+    /// SIGHUP and SIGINT sit below SIGTERM on every platform, and the
+    /// failpoint fails at SIGTERM, so the step has replaced both first.
     #[test]
     #[ignore]
     #[allow(unsafe_code)]
@@ -341,7 +341,7 @@ mod tests {
         }
         use nix::sys::signal::{SaFlags, SigAction, SigHandler, SigSet, Signal, sigaction};
         let ignore = SigAction::new(SigHandler::SigIgn, SaFlags::empty(), SigSet::empty());
-        for sig in [Signal::SIGHUP, Signal::SIGUSR1] {
+        for sig in [Signal::SIGHUP, Signal::SIGINT] {
             // SAFETY: SIG_IGN installs no handler, so no code runs.
             unsafe { sigaction(sig, &ignore) }.unwrap();
         }
@@ -350,7 +350,11 @@ mod tests {
 
         let result = reset_signal_dispositions(Rollback::PutBack);
 
-        assert!(result.is_err());
+        let failed_at_sigterm = matches!(
+            &result,
+            Err(crate::error::DaemonizeError::SystemError(m)) if m.starts_with("sigaction(15)")
+        );
+        assert!(failed_at_sigterm, "{:?}", result.err());
         assert_eq!(crate::test_support::signal_state(), before);
     }
 
