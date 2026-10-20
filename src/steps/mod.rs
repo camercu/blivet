@@ -55,6 +55,9 @@ pub(crate) mod failpoints {
     /// Fails step 9's `sigaction` for SIGTERM, after it has replaced the
     /// dispositions of the signals below it.
     pub(crate) static SIGACTION_FAILS: Failpoint = Failpoint::new();
+    /// Makes step 9's `sigaction` for SIGTERM return `EINVAL`, as it does
+    /// for an invalid signal number, without changing the disposition.
+    pub(crate) static SIGACTION_REFUSES: Failpoint = Failpoint::new();
     pub(crate) static SIGPROCMASK_FAILS: Failpoint = Failpoint::new();
     pub(crate) static GETRLIMIT_FAILS: Failpoint = Failpoint::new();
     pub(crate) static FD_LISTING_UNAVAILABLE: Failpoint = Failpoint::new();

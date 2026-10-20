@@ -67,8 +67,14 @@ pub(crate) fn reset_signal_dispositions(
 /// Sets `sig` to SIG_DFL, reporting what it replaced in `was`.
 fn reset(sig: i32, was: &mut libc::sigaction) -> std::io::Result<()> {
     #[cfg(test)]
-    if sig == libc::SIGTERM && crate::steps::failpoints::SIGACTION_FAILS.injected() {
-        return Err(std::io::Error::other("injected failure"));
+    if sig == libc::SIGTERM {
+        use crate::steps::failpoints::{SIGACTION_FAILS, SIGACTION_REFUSES};
+        if SIGACTION_FAILS.injected() {
+            return Err(std::io::Error::other("injected failure"));
+        }
+        if SIGACTION_REFUSES.injected() {
+            return Err(std::io::Error::from_raw_os_error(libc::EINVAL));
+        }
     }
     let sa = new_sigaction(libc::SIG_DFL, 0);
     // SAFETY: `sa` is an initialised SIG_DFL action, and `was` is a valid
@@ -356,6 +362,39 @@ mod tests {
         );
         assert!(failed_at_sigterm, "{:?}", result.err());
         assert_eq!(crate::test_support::signal_state(), before);
+    }
+
+    // Covers: R99
+    #[test]
+    fn a_signal_refused_with_einval_is_skipped() {
+        crate::test_support::run_in_subprocess(
+            "signals::tests::a_signal_refused_with_einval_is_skipped_subprocess",
+        );
+    }
+
+    /// Linux never returns `EINVAL` in the range, so the failpoint stands in
+    /// for the invalid numbers BSD and macOS meet. SIGTTIN sits above
+    /// SIGTERM on every platform, so its reset shows the step went on.
+    #[test]
+    #[ignore]
+    #[allow(unsafe_code)]
+    fn a_signal_refused_with_einval_is_skipped_subprocess() {
+        if !crate::test_support::is_subprocess() {
+            return;
+        }
+        use nix::sys::signal::{SaFlags, SigAction, SigHandler, SigSet, Signal, sigaction};
+        let ignore = SigAction::new(SigHandler::SigIgn, SaFlags::empty(), SigSet::empty());
+        for sig in [Signal::SIGTERM, Signal::SIGTTIN] {
+            // SAFETY: SIG_IGN installs no handler, so no code runs.
+            unsafe { sigaction(sig, &ignore) }.unwrap();
+        }
+        crate::steps::failpoints::SIGACTION_REFUSES.set();
+
+        reset_signal_dispositions(Rollback::Skip).unwrap().keep();
+
+        let handler = |sig| disposition(sig).unwrap().sa_sigaction;
+        assert_eq!(handler(libc::SIGTERM), libc::SIG_IGN);
+        assert_eq!(handler(libc::SIGTTIN), libc::SIG_DFL);
     }
 
     // Covers: R99
