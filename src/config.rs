@@ -196,7 +196,7 @@ impl DaemonConfig {
         }
     }
 
-    /// Sets the user to run the daemon as. Default: none (no user switch).
+    /// Sets the user to run the daemon as. Default: none (no identity switch).
     ///
     /// Accepts a username string or a numeric UID (as a string, e.g. `"1000"`).
     /// The daemonize call resolves it before any init runs and switches to it
@@ -221,7 +221,7 @@ impl DaemonConfig {
     /// Sets foreground mode. Default: `false`.
     ///
     /// When `true`, daemonization skips both forks, `setsid`, and the
-    /// notification pipe. Stdout and stderr are left inherited (not
+    /// notification channel. Stdout and stderr are left inherited (not
     /// redirected to `/dev/null`) unless explicitly configured with
     /// [`stdout`](DaemonConfig::stdout)/[`stderr`](DaemonConfig::stderr).
     /// All other steps (umask, chdir, signal reset, etc.) still execute.
@@ -292,7 +292,7 @@ impl DaemonConfig {
     /// while still attached to a terminal).
     ///
     /// Performs minimal I/O: checks path existence, directory writability
-    /// (via `faccessat`), and queries the effective UID when a user switch is
+    /// (via `faccessat`), and queries the effective UID when an identity switch is
     /// configured. No files are created or modified.
     ///
     /// The writability probe passes `AT_EACCESS`, so it answers for the
@@ -1025,7 +1025,7 @@ mod tests {
 
     #[test]
     fn validate_default_config_ok() {
-        // Default config should validate (we're not root, no user switch)
+        // Default config should validate (we're not root, no identity switch)
         assert!(DaemonConfig::new().validate().is_ok());
     }
 

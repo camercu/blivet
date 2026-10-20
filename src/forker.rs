@@ -324,7 +324,7 @@ mod tests {
         }
     }
 
-    // Covers: R107 — both notification pipe ends are created with O_CLOEXEC, so
+    // Covers: R107 — both notification channel ends are created with O_CLOEXEC, so
     // the daemon's exec does not leak them to the target program.
     #[test]
     fn notification_pipe_ends_have_cloexec() {

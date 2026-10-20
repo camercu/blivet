@@ -1,4 +1,4 @@
-//! Wire protocol for the parent-readiness notification pipe.
+//! Wire protocol for the notification channel.
 //!
 //! After the double fork, the grandchild (the daemon) writes to the pipe; the
 //! original parent reads it, and both exit. A message starts with an
@@ -25,7 +25,7 @@ use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd};
 
 use crate::error::DaemonizeError;
 
-/// The write end of the parent-readiness notification pipe.
+/// The write end of the notification channel.
 ///
 /// Owns the single act of writing one wire-protocol message (see the module
 /// docs) and closing the pipe. The pipe is **one-shot**: each `signal_*` method
@@ -42,7 +42,7 @@ use crate::error::DaemonizeError;
 pub(crate) struct NotifyPipe(Option<OwnedFd>);
 
 impl NotifyPipe {
-    /// Wrap the write end of a notification pipe.
+    /// Wrap the write end of a notification channel.
     pub(crate) fn new(fd: OwnedFd) -> Self {
         NotifyPipe(Some(fd))
     }
@@ -266,7 +266,7 @@ fn encode(code: u8, msg: &[u8]) -> Vec<u8> {
     buf
 }
 
-/// The decoded result of a message read from the notification pipe.
+/// The decoded result of a message read from the notification channel.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum Outcome {
     /// Daemon is ready, or exec'd after the exec marker.

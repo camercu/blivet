@@ -1,6 +1,6 @@
 //! The daemonize sequence: the forks, the post-fork steps in order, the
 //! guard that undoes them when the sequence aborts, and the
-//! launcher's side of the notification pipe.
+//! launcher's side of the notification channel.
 //!
 //! The entry points in `lib.rs` validate and check the thread count, then
 //! call [`daemonize_inner_with`]; the individual steps live in `steps/`.
@@ -51,7 +51,7 @@ pub(crate) unsafe fn daemonize_inner_with<T>(
     let mut pipe_wr = if foreground {
         None
     } else {
-        // Step 1: Create notification pipe and first fork
+        // Step 1: Create the notification channel and first fork
         // Made in the caller's process, before any fork, so a failure
         // returns to the caller.
         let (pipe_rd, pipe_wr) = forker.create_notification_pipe()?;
@@ -278,8 +278,8 @@ impl Drop for AbortGuard<'_> {
 /// Steps 4–18: apply the configuration in the final daemon process.
 ///
 /// Forker-free and fallible: every step returns its error rather than touching
-/// the notification pipe, leaving the single error-to-parent seam in
-/// [`daemonize_inner_with`]. On success the notification pipe write end is moved into
+/// the notification channel, leaving the single error-to-parent seam in
+/// [`daemonize_inner_with`]. On success the notification channel's write end is moved into
 /// the returned [`DaemonContext`]; `pipe_wr` is left `None`.
 ///
 /// # Safety
@@ -1736,7 +1736,7 @@ mod tests {
         let mut forker = NullForker::both_child();
 
         // Fill every descriptor under a small limit, then free two, which the
-        // notification pipe's ends take. The child drops its read end, freeing
+        // notification channel's ends take. The child drops its read end, freeing
         // one; step 6 borrows it for /dev/null and gives it back, and the
         // stdout file then takes it, so saving fd 1 would find none.
         let held = crate::test_support::fill_fd_table(2);

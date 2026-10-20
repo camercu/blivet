@@ -6,7 +6,7 @@
 //!
 //! This crate provides a library and CLI tool for daemonizing processes on Unix
 //! systems. It performs a double-fork, resets signal dispositions and
-//! mask, and uses a notification pipe so the parent can wait for daemon
+//! mask, and uses a notification channel so the parent can wait for daemon
 //! readiness. When a user or group is configured, the daemon switches to it
 //! before `daemonize()` returns; work that needs the original privileges runs
 //! inside the call, through [`daemonize_with`].
@@ -34,7 +34,7 @@
 //!
 //! There are two entry points, each with a `_with` form that also runs a
 //! privileged `init` closure inside the call, after the fork and before the
-//! user switch ([`daemonize_with`], [`daemonize_with_unchecked`]):
+//! identity switch ([`daemonize_with`], [`daemonize_with_unchecked`]):
 //!
 //! - [`daemonize`] is the safe default: it verifies the process is
 //!   single-threaded for you, so no `unsafe` is needed. It exists wherever the
@@ -78,7 +78,7 @@
 //! ```
 //!
 //! [`daemonize`] and [`daemonize_with`] check for you: at the call they panic
-//! if threads are running, and after `init`, when a user switch follows, they
+//! if threads are running, and after `init`, when an identity switch follows, they
 //! fail with [`DaemonizeError::InitLeftThreads`], which reaches the launcher.
 //! An `init` may start threads only if it joins them before it returns.
 //! [`daemonize_unchecked`] and [`daemonize_with_unchecked`] are the `unsafe`
@@ -250,10 +250,10 @@ use forker::RealForker;
 ///
 /// Returns `DaemonizeError` on validation failure or any syscall error
 /// during the daemonization sequence. Pre-fork errors are returned
-/// directly; post-fork errors are reported via the notification pipe.
+/// directly; post-fork errors are reported via the notification channel.
 /// In foreground mode every error is returned directly — the library
 /// never exits the caller's process. A system call that fails with no more
-/// specific variant, such as creating the notification pipe with no
+/// specific variant, such as creating the notification channel with no
 /// descriptor free, returns `SystemError`.
 #[cfg(unix)]
 #[allow(unsafe_code)]
@@ -321,7 +321,7 @@ pub fn daemonize(config: &DaemonConfig) -> Result<DaemonContext, DaemonizeError>
     thread_count::assert_single_threaded("daemonize");
     #[allow(unsafe_code)]
     // SAFETY: verified single-threaded above, and there is no init to start a
-    // thread before the user switch.
+    // thread before the identity switch.
     unsafe {
         daemonize_unchecked(config)
     }
@@ -381,7 +381,7 @@ pub fn daemonize_with<T>(
     thread_count::assert_single_threaded("daemonize_with");
     #[allow(unsafe_code)]
     // SAFETY: verified single-threaded above, and `checked_init` verifies it
-    // again after init, before the user switch's `setenv`.
+    // again after init, before the identity switch's `setenv`.
     unsafe {
         daemonize_with_unchecked(config, thread_count::checked_init(config, init))
     }

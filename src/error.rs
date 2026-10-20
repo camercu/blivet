@@ -26,7 +26,7 @@ pub enum DaemonizeError {
     #[error("program not found: {0}")]
     ProgramNotFound(String),
 
-    /// User does not exist at runtime during user switching.
+    /// User does not exist at runtime during the identity switch.
     #[error("user not found: {0}")]
     UserNotFound(String),
 
@@ -61,7 +61,7 @@ pub enum DaemonizeError {
     ChdirFailed(String),
 
     /// A required system call with no more specific variant failed: creating
-    /// the notification pipe, opening `/dev/null` or `dup2` onto it,
+    /// the notification channel, opening `/dev/null` or `dup2` onto it,
     /// `sigaction` (resetting signal dispositions), `sigprocmask` (clearing the
     /// signal mask), `getrlimit` (querying the fd limit before closing
     /// inherited descriptors), or reading the thread count around a
@@ -69,7 +69,7 @@ pub enum DaemonizeError {
     #[error("system error: {0}")]
     SystemError(String),
 
-    /// Non-root caller with user switch, or an `initgroups`, `setgid`, or
+    /// Non-root caller with an identity switch, or an `initgroups`, `setgid`, or
     /// `setuid` failure.
     #[error("permission denied: {0}")]
     PermissionDenied(String),
@@ -93,7 +93,7 @@ pub enum DaemonizeError {
     #[error("exec failed: {0}")]
     ExecFailed(String),
 
-    /// Writing the readiness message to the parent notification pipe failed.
+    /// Writing the readiness message to the notification channel failed.
     ///
     /// Produced by [`notify_parent`](crate::DaemonContext::notify_parent) when
     /// the pipe write returns an `io::Error`, and by
@@ -103,7 +103,7 @@ pub enum DaemonizeError {
     NotifyFailed(#[source] std::io::Error),
 
     /// The [`daemonize_with`](crate::daemonize_with) init left threads
-    /// running before a user switch, whose `setenv` is not thread-safe. Holds
+    /// running before an identity switch, whose `setenv` is not thread-safe. Holds
     /// the thread count. The checked entry point reports it instead of
     /// switching (R126).
     #[error(
