@@ -962,7 +962,11 @@ remains valid after `chdir` changes the working directory:
   exec, and for argv[0] the path made absolute against the current
   directory without resolving symlinks (`std::path::absolute`, R111).
 - **Bare name without `/`** (e.g., `my-app`): leave as-is. `execvp`
-  searches PATH, which works regardless of CWD. A bare name that is
+  searches PATH from the daemon's working directory (`/` unless
+  `chdir` is set). An absolute PATH entry finds the same file from
+  there; a relative or empty entry resolves against that directory,
+  not the caller's, so a program found only through one exits
+  `ProgramNotFound`. A bare name that is
   missing or not executable is therefore only discovered at exec time;
   the resulting `ENOENT`/`EACCES` still exits `ProgramNotFound` (66) —
   see Program execution.

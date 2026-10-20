@@ -248,7 +248,9 @@ struct Program {
 
 fn resolve_program(program: &str) -> Result<Program, DaemonizeError> {
     if !program.contains('/') {
-        // Bare name: execvp searches PATH, which means the same from `/`.
+        // Bare name: execvp searches PATH at exec time. An absolute entry
+        // means the same from the daemon's directory; a relative or empty
+        // one resolves against that directory, `/` by default (R56).
         return Ok(Program {
             path: program.to_string(),
             argv0: program.to_string(),
