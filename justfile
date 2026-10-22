@@ -38,11 +38,16 @@ lint-text: lint-typos lint-taplo lint-markdown lint-actions lint-shell
 lint-typos:
     typos
 
+# Files come from git: taplo's own globbing ignores .git/info/exclude.
 lint-taplo:
-    taplo format --check
+    git ls-files -z --cached --others --exclude-standard -- '*.toml' \
+        | xargs -0 taplo format --check
 
+# Files come from git, not markdownlint's own globbing, which ignores
+# .git/info/exclude and so linted local working dirs such as .scratch/.
 lint-markdown:
-    markdownlint-cli2
+    git ls-files -z --cached --others --exclude-standard -- '*.md' \
+        | xargs -0 markdownlint-cli2
 
 lint-actions:
     actionlint

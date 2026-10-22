@@ -15,8 +15,6 @@ config:
   # duplicates among direct siblings.
   MD024:
     siblings_only: true
-globs:
-  - "**/*.md"
 ignores:
   - node_modules
   - target
