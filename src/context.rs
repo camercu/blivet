@@ -17,12 +17,12 @@ use crate::notify::NotifyPipe;
 /// Returned by [`daemonize`](crate::daemonize) and
 /// [`daemonize_with`](crate::daemonize_with) in the daemon, already running as
 /// the configured user and group. Holds the lockfile (if configured) and the
-/// notification pipe's write end.
+/// notification channel's write end.
 ///
 /// Dropping this without calling [`notify_parent`](DaemonContext::notify_parent)
-/// writes a failure message to the notification pipe, causing the parent to
+/// writes a failure message to the notification channel, causing the parent to
 /// exit non-zero. Ending without dropping it, because a signal killed the
-/// daemon or it called [`std::process::exit`], closes the pipe with no
+/// daemon or it called [`std::process::exit`], closes the channel with no
 /// message, which the parent also reads as a failure. Only
 /// [`exec`](DaemonContext::exec) tells the parent to read that close as
 /// success. Dropping also removes the pidfile from disk: always while the
@@ -55,8 +55,8 @@ pub struct DaemonContext {
 ///
 /// Three decisions read it: whether a failure removes the pidfile whatever
 /// `cleanup_on_drop` says (R154), whether an error goes to stderr (R161), and
-/// whether `Drop` writes to the pipe. Each matches every variant, so a new one
-/// fails to compile until each decision handles it.
+/// whether `Drop` writes to the channel. Each matches every variant, so a new
+/// one fails to compile until each decision handles it.
 enum Launcher {
     /// The launcher reads the channel for the outcome. After a failed readiness
     /// send from `notify_parent_or_report` the channel is spent but the start
@@ -261,16 +261,15 @@ impl DaemonContext {
 
     /// Signals the parent that the daemon is ready.
     ///
-    /// Writes the readiness message (`0x00 0x00`) to the notification pipe and
-    /// closes it.
-    /// The parent reads this and exits 0.
+    /// Writes the readiness message (`0x00 0x00`) to the notification channel
+    /// and closes it. The parent reads this and exits 0.
     ///
-    /// After this call, subsequent calls are no-ops (the pipe is consumed).
+    /// After this call, subsequent calls are no-ops (the channel is consumed).
     ///
     /// # Errors
     ///
     /// Returns [`DaemonizeError::NotifyFailed`] (exit code 71, `EX_OSERR`) if
-    /// writing to the pipe fails — e.g. the parent was killed before the
+    /// writing to the channel fails — e.g. the parent was killed before the
     /// daemon signalled. The write cannot raise SIGPIPE, whatever disposition
     /// the process has, so this is an error and not a death by signal.
     /// Returning `DaemonizeError` — rather than a
@@ -299,10 +298,10 @@ impl DaemonContext {
     /// abort — it never returns on error, so the caller need not thread a
     /// `Result` through `main`. On success it returns normally.
     ///
-    /// A failed readiness write closes the notification pipe, and usually
-    /// means the launcher is gone. The error goes to stderr instead (R161),
-    /// the pidfile is removed whatever `cleanup_on_drop` says (R154), and a
-    /// launcher still waiting reads the closed pipe as a failure and exits 1.
+    /// A failed readiness write closes the notification channel, and usually
+    /// means the launcher is gone. The error goes to stderr instead (R161), the
+    /// pidfile is removed whatever `cleanup_on_drop` says (R154), and a
+    /// launcher still waiting exits 1, reading the closed channel as a failure.
     pub fn notify_parent_or_report(&mut self) {
         match &mut self.launcher {
             Launcher::Waiting(pipe) => match pipe.signal_ready() {
@@ -319,12 +318,12 @@ impl DaemonContext {
     ///
     /// Before `execvp`, it clears close-on-exec on the lockfile so the program
     /// keeps the lock, restores the default `SIGPIPE` disposition (daemonizing
-    /// keeps the Rust runtime's ignored one, which would survive the exec),
-    /// and tells the launcher an exec is pending. A successful exec closes the
-    /// notification pipe and the launcher exits 0. A process the daemon forked
-    /// earlier, and that has not exec'd, holds the pipe open too: the launcher
-    /// then waits for it to exit. `args` is the full argv, `args[0]` included;
-    /// `execvp` searches `PATH` for a bare `program`.
+    /// keeps the Rust runtime's ignored one, which would survive the exec), and
+    /// tells the launcher an exec is pending. A successful exec closes the
+    /// notification channel and the launcher exits 0. A process the daemon
+    /// forked earlier, and that has not exec'd, holds the channel open too: the
+    /// launcher then waits for it to exit. `args` is the full argv, `args[0]`
+    /// included; `execvp` searches `PATH` for a bare `program`.
     ///
     /// Never returns. If the exec fails, this reports the error like
     /// [`report_error`](Self::report_error): `ENOENT` and `EACCES` as
@@ -378,7 +377,7 @@ impl DaemonContext {
     /// Reports an error to the parent process and exits.
     ///
     /// Removes the pidfile, then writes the error's exit code byte followed by
-    /// the `Display` message to the notification pipe, then calls `_exit()`.
+    /// the `Display` message to the notification channel, then calls `_exit()`.
     /// The parent reads this, prints the message to stderr, and exits with the
     /// code.
     ///
@@ -422,7 +421,7 @@ impl DaemonContext {
 
     /// Removes the pidfile, then tells the parent what happened.
     ///
-    /// Both paths that write to the notification pipe without a successful
+    /// Both paths that write to the notification channel without a successful
     /// `notify_parent` — [`report_error`](Self::report_error) and [`Drop`] —
     /// go through here, so there is one ordering to get right instead of two
     /// that can drift apart. They did drift: `Drop` signalled first for long
@@ -550,8 +549,8 @@ mod tests {
     // Covers: R157
     //
     // A launcher that is gone must not stop the hand-off: the daemon runs the
-    // program anyway. Writing the exec marker into a pipe with no reader, after
-    // SIGPIPE was restored to its default, killed the daemon instead.
+    // program anyway. Writing the exec marker into a channel with no reader,
+    // after SIGPIPE was restored to its default, killed the daemon instead.
     #[test]
     fn exec_runs_the_program_when_the_launcher_is_gone() {
         const MARKER: &str = "__BLIVET_EXEC_NO_LAUNCHER";
@@ -688,7 +687,7 @@ mod tests {
 
     // Covers: R154
     //
-    // A failed readiness send takes the pipe with it, yet the daemon never
+    // A failed readiness send takes the channel with it, yet the daemon never
     // started and is about to exit, so its pidfile must go even with
     // cleanup_on_drop off.
     #[test]
@@ -838,7 +837,7 @@ mod tests {
     // Covers: R157
     //
     // Only a broken pipe means the launcher is gone. Any other failure to
-    // write the marker leaves a launcher that will read the closed pipe as a
+    // write the marker leaves a launcher that will read the closed channel as a
     // failed start, so running the program anyway would put a live daemon
     // behind a reported failure.
     #[test]
@@ -869,7 +868,7 @@ mod tests {
 
     // Covers: R157, R161
     //
-    // A failed exec reports into the pipe after SIGPIPE was restored to its
+    // A failed exec reports into the channel after SIGPIPE was restored to its
     // default; with the launcher gone that write must not kill the daemon
     // before it exits with the exec's code, and the message nobody read goes
     // to stderr.
@@ -901,8 +900,8 @@ mod tests {
 
     // Covers: R161
     //
-    // Foreground mode has no launcher pipe, so the error goes to stderr, or
-    // `daemonize -f -- missing-program` exits 66 having said nothing.
+    // Foreground mode has no notification channel, so the error goes to stderr,
+    // or `daemonize -f -- missing-program` exits 66 having said nothing.
     #[test]
     fn report_error_without_a_launcher_prints_the_error() {
         const MARKER: &str = "__BLIVET_REPORT_NO_PIPE";
@@ -1266,8 +1265,8 @@ mod tests {
     // Covers: R143
     #[test]
     fn drop_removes_pidfile_before_signaling_parent() {
-        // The parent wakes on the pipe byte, so anything that must be true by
-        // then has to happen before the write. An observer that checks the
+        // The parent wakes on the channel byte, so anything that must be true
+        // by then has to happen before the write. An observer that checks the
         // instant the byte arrives can never see the pidfile when the order is
         // right: the unlink happens-before the write, which happens-before the
         // read. `Drop` had the two the wrong way round and nothing noticed,

@@ -66,8 +66,8 @@ pub(crate) unsafe fn daemonize_inner_with<T>(
             Ok(result) => result,
             Err(e) => {
                 // No child exists yet; the error returns to the caller
-                // directly, so close the write end silently rather than let
-                // the NotifyPipe Drop safety net write into a pipe whose only
+                // directly, so close the write end silently rather than let the
+                // NotifyPipe Drop safety net write into a channel whose only
                 // reader is this same process.
                 pipe_wr.close();
                 return Err(e);
@@ -426,7 +426,7 @@ unsafe fn run_post_fork<T>(
     Ok((DaemonContext::new(config, lockfile, pipe_wr.take()), value))
 }
 
-/// Parent-side pipe reader. Reads from the pipe and exits accordingly.
+/// Parent-side channel reader. Reads from the channel and exits accordingly.
 fn parent_pipe_reader(rd: OwnedFd, forker: &impl Forker) -> ! {
     match notify::read_outcome(&mut std::fs::File::from(rd)) {
         notify::Outcome::Success => forker.exit(0),
@@ -1382,7 +1382,7 @@ mod tests {
 
     // Covers: R137, R150
     //
-    // NullForker runs no daemon, so the parent reads its pipe after closing
+    // NullForker runs no daemon, so the parent reads its channel after closing
     // its own write end: what a daemon killed before notifying leaves. The
     // parent must *close* that end, not drop it, or NotifyPipe's Drop safety
     // net writes failure bytes the parent then reads as the daemon's. Both
@@ -1429,7 +1429,7 @@ mod tests {
     #[test]
     fn second_fork_intermediate_closes_pipe_silently() {
         // The intermediate child's write-end copy must also close without
-        // writing: the grandchild daemon is the sole writer on the pipe.
+        // writing: the grandchild daemon is the sole writer on the channel.
         let config = DaemonConfig::new();
         let mut forker = NullForker::second_parent();
         let result = catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -1457,8 +1457,8 @@ mod tests {
     // Covers: R57
     #[test]
     fn first_fork_failure_closes_pipe_silently() {
-        // The error goes back to the caller directly — nothing should reach
-        // the pipe, whose only reader is this same process. A plain drop would
+        // The error goes back to the caller directly — nothing should reach the
+        // channel, whose only reader is this same process. A plain drop would
         // fire the NotifyPipe Drop safety net into it.
         let config = DaemonConfig::new();
         let mut forker = NullForker::first_fork_fails();
@@ -1575,7 +1575,7 @@ mod tests {
     /// In the daemon, unwinding out of the sequence would run the caller's
     /// frames, and any `catch_unwind` recovery in them, in a detached process
     /// whose launcher has already reported failure. The panic must end the
-    /// daemon like an error does, with its text on the pipe.
+    /// daemon like an error does, with its text on the channel.
     #[test]
     #[ignore]
     fn daemon_init_panic_exits_and_reports_its_text_subprocess() {

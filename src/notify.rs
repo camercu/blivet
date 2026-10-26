@@ -1,7 +1,7 @@
 //! Wire protocol for the notification channel.
 //!
-//! After the double fork, the grandchild (the daemon) writes to the pipe; the
-//! original parent reads it, and both exit. A message starts with an
+//! After the double fork, the grandchild (the daemon) writes to the channel;
+//! the original parent reads it, and both exit. A message starts with an
 //! **exit-code byte**:
 //!
 //! - `0x00 0x00` ([`SUCCESS`]) — the daemon is ready.
@@ -28,10 +28,10 @@ use crate::error::DaemonizeError;
 /// The write end of the notification channel.
 ///
 /// Owns the single act of writing one wire-protocol message (see the module
-/// docs) and closing the pipe. The pipe is **one-shot**: each `signal_*` method
-/// spends it, after which the write end is closed (the parent reads the
-/// message, then EOF). Whether a launcher still waits is
-/// [`DaemonContext`]'s launcher state to say, not this.
+/// docs) and closing the channel. The channel is **one-shot**: each `signal_*`
+/// method spends it, after which the write end is closed (the parent reads the
+/// message, then EOF). Whether a launcher still waits is [`DaemonContext`]'s
+/// launcher state to say, not this.
 ///
 /// [`DaemonContext`]: crate::DaemonContext
 ///
@@ -66,11 +66,11 @@ impl NotifyPipe {
         drop(self.0.take());
     }
 
-    /// Signal readiness: write [`SUCCESS`] and close the pipe.
+    /// Signal readiness: write [`SUCCESS`] and close the channel.
     ///
     /// # Errors
     ///
-    /// Returns `io::Error` if writing to the pipe fails.
+    /// Returns `io::Error` if writing to the channel fails.
     ///
     /// Spends the channel whether or not the write succeeds.
     #[must_use = "the parent process blocks until notified; ignoring this Result may leave it waiting"]
@@ -78,13 +78,13 @@ impl NotifyPipe {
         self.write_all(&SUCCESS)
     }
 
-    /// Say the daemon is about to `exec`, keeping the pipe open: a successful
-    /// `exec` closes it (EOF reads as success), and a failed one reports its
-    /// error through [`signal_error`](Self::signal_error).
+    /// Say the daemon is about to `exec`, keeping the channel open: a
+    /// successful `exec` closes it (EOF reads as success), and a failed one
+    /// reports its error through [`signal_error`](Self::signal_error).
     ///
     /// # Errors
     ///
-    /// Returns `io::Error` if writing to the pipe fails.
+    /// Returns `io::Error` if writing to the channel fails.
     pub(crate) fn signal_exec_pending(&mut self) -> io::Result<()> {
         let fd = self.0.as_ref().ok_or_else(spent)?;
         // Through the borrowed fd: a `dup` to get a `File` would need a free
@@ -93,7 +93,7 @@ impl NotifyPipe {
     }
 
     /// Signal a daemonization failure: write the error's exit-code byte and
-    /// message, then close the pipe. If the write fails, most likely because
+    /// message, then close the channel. If the write fails, most likely because
     /// the launcher is gone, or a failed send already spent the channel, the
     /// message goes to stderr instead, so it is not lost with the channel
     /// (R161).
@@ -231,7 +231,7 @@ const UNNOTIFIED_CODE: u8 = 1;
 /// Message paired with [`UNNOTIFIED_CODE`].
 const UNNOTIFIED_MSG: &[u8] = b"daemon exited without signaling readiness";
 
-/// Message for a pipe that closed with no message and no exec marker.
+/// Message for a channel that closed with no message and no exec marker.
 const EOF_UNNOTIFIED_MSG: &str = "daemon ended without signaling readiness (killed by a signal, or exited without dropping its DaemonContext)";
 
 /// Readiness: the daemon is up.
@@ -275,14 +275,14 @@ pub(crate) enum Outcome {
     Failure { code: i32, message: String },
 }
 
-/// Read the daemon's message from the pipe and decode it.
+/// Read the daemon's message from the channel and decode it.
 ///
 /// Returns on [`SUCCESS`] without reading on. A process the daemon forked
-/// before notifying holds a copy of the write end, so the pipe reaches EOF only
-/// when that process exits too: waiting for EOF would hold the launcher until
-/// then. A failure reads only its length-framed message (R160), for the same
-/// reason. After [`EXEC_PENDING`] the read waits for the exec: a successful
-/// one closes the pipe (EOF), a failed one sends its error.
+/// before notifying holds a copy of the write end, so the channel reaches EOF
+/// only when that process exits too: waiting for EOF would hold the launcher
+/// until then. A failure reads only its length-framed message (R160), for the
+/// same reason. After [`EXEC_PENDING`] the read waits for the exec: a
+/// successful one closes the channel (EOF), a failed one sends its error.
 pub(crate) fn read_outcome(pipe: &mut impl io::Read) -> Outcome {
     let code = match read_byte(pipe) {
         None => {
@@ -296,7 +296,7 @@ pub(crate) fn read_outcome(pipe: &mut impl io::Read) -> Outcome {
         Some(0x00) => match read_byte(pipe) {
             Some(second) if [0x00, second] == SUCCESS => return Outcome::Success,
             Some(second) if [0x00, second] == EXEC_PENDING => match read_byte(pipe) {
-                // EOF: the exec closed the pipe.
+                // EOF: the exec closed the channel.
                 None => return Outcome::Success,
                 Some(0x00) => return malformed(&[0x00, second, 0x00]),
                 Some(code) => code,
@@ -330,7 +330,7 @@ fn malformed(header: &[u8]) -> Outcome {
     }
 }
 
-/// One byte from the pipe, or `None` at EOF or on an error. A read a signal
+/// One byte from the channel, or `None` at EOF or on an error. A read a signal
 /// interrupts is retried (R158): `read` returns `EINTR` then, not data.
 fn read_byte(pipe: &mut impl io::Read) -> Option<u8> {
     let mut byte = [0u8; 1];
@@ -410,9 +410,9 @@ mod tests {
 
     #[test]
     fn drop_with_closed_reader_does_not_panic() {
-        // The Drop safety net runs during unwinds; a failing pipe write there
-        // (reader already gone -> EPIPE) must stay silent, or the safety net
-        // would turn one panic into an abort.
+        // The Drop safety net runs during unwinds; a failing channel write
+        // there (reader already gone -> EPIPE) must stay silent, or the safety
+        // net would turn one panic into an abort.
         let (rd, wr) = make_pipe();
         drop(rd);
         drop(NotifyPipe::new(wr));
@@ -438,9 +438,9 @@ mod tests {
         assert_eq!(decode(&SUCCESS), Outcome::Success);
     }
 
-    /// A pipe that has delivered `.0` and whose write end another process still
-    /// holds open, as one forked before `notify_parent` does: reading past the
-    /// delivered bytes would block the launcher.
+    /// A channel that has delivered `.0` and whose write end another process
+    /// still holds open, as one forked before `notify_parent` does: reading
+    /// past the delivered bytes would block the launcher.
     struct StillOpen(std::collections::VecDeque<u8>);
 
     impl io::Read for StillOpen {
@@ -457,7 +457,7 @@ mod tests {
         }
     }
 
-    /// A pipe read that a signal interrupts before each byte, as a SIGCHLD
+    /// A channel read that a signal interrupts before each byte, as a SIGCHLD
     /// arriving in the launcher would.
     struct Interrupted(std::collections::VecDeque<u8>, bool);
 
@@ -488,7 +488,7 @@ mod tests {
         assert_eq!(read_outcome(&mut failed), decode(&error_bytes(&err)));
     }
 
-    /// A pipe whose read fails for good, as on `EBADF`.
+    /// A channel whose read fails for good, as on `EBADF`.
     struct Broken;
 
     impl io::Read for Broken {

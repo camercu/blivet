@@ -1,4 +1,4 @@
-//! Forker trait abstracting fork/setsid/pipe syscalls for testability.
+//! Forker trait abstracting fork, setsid and channel creation for testability.
 //!
 //! [`RealForker`] wraps real syscalls;
 //! [`NullForker`](null_forker::NullForker) (test-only) provides
@@ -11,13 +11,13 @@ use nix::unistd::ForkResult;
 use crate::error::DaemonizeError;
 use crate::sys;
 
-/// Abstraction over fork/setsid/pipe for testability.
+/// Abstraction over fork, setsid and channel creation for testability.
 ///
 /// `daemonize_inner` is generic over this trait. `RealForker` wraps real
 /// syscalls; `NullForker` (test-only) provides configurable results.
 #[allow(unsafe_code)]
 pub(crate) trait Forker {
-    /// Makes the pipe the daemon reports its start through: `(read, write)`.
+    /// Makes the channel the daemon reports its start through: `(read, write)`.
     /// Runs in the caller's process, so a failure is an error for the caller.
     fn create_notification_pipe(&mut self) -> Result<(OwnedFd, OwnedFd), DaemonizeError>;
     /// # Safety
@@ -110,7 +110,7 @@ pub(crate) mod null_forker {
         }
 
         /// A forker whose script ends the sequence before step 13, so it can
-        /// keep a copy of the pipe's read end: step 13 would close that copy
+        /// keep a copy of the channel's read end: step 13 would close that copy
         /// behind its back. Only the fork-sequence constructors use this.
         fn stopping_before_step_13(
             fork_results: Vec<Result<ForkResult, DaemonizeError>>,
@@ -122,12 +122,12 @@ pub(crate) mod null_forker {
             }
         }
 
-        /// Take the test-side duplicate of the pipe's read end, so a test can
-        /// observe what the fork sequence writes — or must not write — on the
-        /// wire. `daemonize_inner` drops its own read-end copy in the child
-        /// branch; this duplicate lets the test read what reached the pipe
+        /// Take the test-side duplicate of the channel's read end, so a test
+        /// can observe what the fork sequence writes — or must not write — on
+        /// the wire. `daemonize_inner` drops its own read-end copy in the child
+        /// branch; this duplicate lets the test read what reached the channel
         /// afterwards. `Some` only once, and only from a fork-sequence
-        /// constructor whose pipe was made.
+        /// constructor whose channel was made.
         pub(crate) fn take_pipe_reader(&mut self) -> Option<OwnedFd> {
             self.pipe_reader.take()
         }
@@ -297,9 +297,9 @@ mod tests {
         );
     }
 
-    /// With stdin, stdout, and stderr closed, `pipe` hands out the lowest free
-    /// descriptors, 0 and 1. Step 6 then `dup2`s `/dev/null` over them and the
-    /// launcher loses its pipe.
+    /// With stdin, stdout, and stderr closed, `socketpair` hands out the lowest
+    /// free descriptors, 0 and 1. Step 6 then `dup2`s `/dev/null` over them and
+    /// the launcher loses its channel.
     #[test]
     #[ignore]
     fn notification_pipe_ends_stay_clear_of_stdio_subprocess() {

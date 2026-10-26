@@ -177,7 +177,7 @@ pub(crate) fn with_fds_closed<R>(closed: &[i32], f: impl FnOnce() -> R) -> R {
 }
 
 /// A pipe for a test to read to EOF: `(read, write)`, close-on-exec like the
-/// notification pipe, so a subprocess a parallel `cargo test` thread spawns
+/// notification channel, so a subprocess a parallel `cargo test` thread spawns
 /// does not inherit the write end and hold the read open. On macOS the flag
 /// is set in a second step (no `SOCK_CLOEXEC`), so a spawn in between can
 /// still inherit it; the read then waits for that subprocess to exit.

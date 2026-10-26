@@ -96,7 +96,7 @@ pub enum DaemonizeError {
     /// Writing the readiness message to the notification channel failed.
     ///
     /// Produced by [`notify_parent`](crate::DaemonContext::notify_parent) when
-    /// the pipe write returns an `io::Error`, and by
+    /// the channel write returns an `io::Error`, and by
     /// [`exec`](crate::DaemonContext::exec) when writing the exec marker fails
     /// for a reason other than a launcher that is gone.
     #[error("failed to notify parent: {0}")]
