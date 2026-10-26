@@ -1052,9 +1052,13 @@ mod tests {
         );
     }
 
-    /// Step 8 writes the pid through the descriptor step 7 locked, not one
-    /// it opens anew by path: a file swapped in between would take the pid
-    /// unlocked. So while init runs, one descriptor holds the pidfile.
+    /// Step 8 is handed the descriptor step 7 locked, so it opens no second
+    /// one: while init runs, one descriptor holds the pidfile. That the write
+    /// then goes through that descriptor, not the path, is pinned at the step:
+    /// `steps::pidfile`'s `write_pidfile_shared_writes_through_locked_fd_not_path`.
+    /// The fd scan is a raw `fstat` loop because `list_open_fds` also lists
+    /// its own, already closed, directory descriptor, which no `BorrowedFd`
+    /// may name.
     #[test]
     #[ignore]
     #[allow(unsafe_code)]
