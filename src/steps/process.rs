@@ -53,7 +53,7 @@ struct Cwd(Option<OwnedFd>);
 
 impl Cwd {
     fn save() -> Self {
-        Self(super::open_above_stdio(".", OFlag::O_RDONLY | OFlag::O_CLOEXEC, Mode::empty()).ok())
+        Self(super::open_above_stdio(".", OFlag::O_RDONLY, Mode::empty()).ok())
     }
 }
 

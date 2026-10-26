@@ -30,16 +30,16 @@ pub(crate) struct Collision {
     pub(crate) owned: &'static str,
 }
 
-/// Opens `path`, never on fd 0, 1 or 2 (see [`above_stdio`]). Every file the
-/// sequence opens and holds goes through here; clippy.toml bans a bare
-/// `nix::fcntl::open` and the `std::fs` opens.
+/// Opens `path` close-on-exec, never on fd 0, 1 or 2 (see [`above_stdio`]).
+/// Every file the sequence opens and holds goes through here; clippy.toml
+/// bans a bare `nix::fcntl::open` and the `std::fs` opens.
 #[allow(clippy::disallowed_methods)] // the one place a bare open is allowed
 pub(crate) fn open_above_stdio<P: ?Sized + nix::NixPath>(
     path: &P,
     flags: OFlag,
     mode: Mode,
 ) -> std::io::Result<OwnedFd> {
-    above_stdio(open(path, flags, mode)?)
+    above_stdio(open(path, flags | OFlag::O_CLOEXEC, mode)?)
 }
 
 /// Step 6: Redirect standard streams to /dev/null.
@@ -111,7 +111,7 @@ struct OpenStream<'a> {
 /// Opens `path` for a stream without truncating it: nothing on disk may
 /// change until [`plan_output_redirect`] has seen what the file is.
 fn open_stream(path: &Path, append: bool) -> Result<OpenStream<'_>, DaemonizeError> {
-    let mut flags = OFlag::O_WRONLY | OFlag::O_CREAT | OFlag::O_CLOEXEC;
+    let mut flags = OFlag::O_WRONLY | OFlag::O_CREAT;
     if append {
         flags |= OFlag::O_APPEND;
     }
@@ -417,6 +417,22 @@ mod tests {
     use super::*;
 
     use crate::test_support::{is_subprocess, run_in_subprocess};
+
+    // Covers: R96
+    #[test]
+    fn open_above_stdio_opens_close_on_exec_whatever_flags_the_caller_passes() {
+        for passed in [OFlag::O_RDONLY, OFlag::O_RDONLY | OFlag::O_CLOEXEC] {
+            let fd = open_above_stdio(c"/dev/null", passed, Mode::empty()).unwrap();
+
+            let flags = nix::fcntl::fcntl(&fd, nix::fcntl::FcntlArg::F_GETFD).unwrap();
+
+            assert!(
+                nix::fcntl::FdFlag::from_bits_truncate(flags)
+                    .contains(nix::fcntl::FdFlag::FD_CLOEXEC),
+                "{passed:?}: a held file would leak into the daemon's program"
+            );
+        }
+    }
 
     // Covers: R7, R8
     #[test]

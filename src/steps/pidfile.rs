@@ -16,7 +16,7 @@ use crate::file_identity::{FileId, file_id, paths_same};
 pub(crate) fn open_and_lock(path: &Path) -> Result<Flock<OwnedFd>, DaemonizeError> {
     let fd = open_above_stdio(
         path,
-        OFlag::O_WRONLY | OFlag::O_CREAT | OFlag::O_CLOEXEC,
+        OFlag::O_WRONLY | OFlag::O_CREAT,
         Mode::from_bits_truncate(0o644),
     )
     .map_err(|e| DaemonizeError::LockfileError(format!("cannot open {}: {e}", path.display())))?;
@@ -61,7 +61,7 @@ pub(crate) fn open_pidfile<'a>(
     // file 0666 & ~umask, violating the mandated pidfile permissions.
     let fd = open_above_stdio(
         pidfile_path,
-        OFlag::O_WRONLY | OFlag::O_CREAT | OFlag::O_TRUNC | OFlag::O_CLOEXEC,
+        OFlag::O_WRONLY | OFlag::O_CREAT | OFlag::O_TRUNC,
         Mode::from_bits_truncate(0o644),
     )
     .map_err(|e| DaemonizeError::PidfileError(format!("open {}: {e}", pidfile_path.display())))?;

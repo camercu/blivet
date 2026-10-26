@@ -36,7 +36,7 @@ impl ThreadCount {
             #[cfg(blivet_thread_count_procfs)]
             status: crate::steps::open_above_stdio(
                 "/proc/self/status",
-                nix::fcntl::OFlag::O_RDONLY | nix::fcntl::OFlag::O_CLOEXEC,
+                nix::fcntl::OFlag::O_RDONLY,
                 nix::sys::stat::Mode::empty(),
             )?
             .into(),
