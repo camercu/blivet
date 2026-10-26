@@ -1612,11 +1612,13 @@ verification points.
   it would remove the pidfile of a daemon that keeps running. Signals
   whose default varies by OS (SIGIO, SIGINFO, SIGPWR) are refused
   everywhere. The error names the signal.
-- R152. Every descriptor the sequence opens — both notification pipe
-  ends, the lockfile, the pidfile, and redirect sources — sits above
-  descriptor 2, even when the caller closed stdin, stdout, or stderr, so
-  a later `dup2` onto a stdio slot (step 6 or step 12) cannot close one
-  and drop the pipe or the lock.
+- R152. Every descriptor the sequence opens and holds — both
+  notification pipe ends, the lockfile, the pidfile, the redirect
+  sources, the saved working directory, and the thread-count status
+  file — sits above descriptor 2, even when the caller closed stdin,
+  stdout, or stderr. A later `dup2` onto a stdio slot (step 6, step 12,
+  or an `init`'s own) then cannot close one and drop the pipe, the
+  lock, or the thread-count reading.
 - R153. `daemonize_with` runs its `init` closure in the final process
   after step 13, so init runs only in the instance holding the lock,
   and whatever it opens survives the fd sweep. Its value comes back
