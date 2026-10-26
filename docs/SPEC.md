@@ -621,7 +621,7 @@ undefined behaviour.
     identity, unless `chown_paths(false)`. See path ownership.
 17. **Switch identity.** See user/group switching.
 18. **Return `DaemonContext`** owning lockfile `Option<Flock>`,
-    `pipe_wr` as `Option<NotifyPipe>`, and the cloned config, beside
+    `pipe_wr` as `Option<NotifyChannel>`, and the cloned config, beside
     `init`'s value.
 
 ### Post-fork error policy

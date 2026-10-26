@@ -39,12 +39,12 @@ use crate::error::DaemonizeError;
 /// the wire" (`None`) from "never spoke" (`Some`). Every consuming method takes
 /// the fd out before writing; [`Drop`] uses the leftover `Some` as the signal
 /// to fire the unnotified-failure safety net.
-pub(crate) struct NotifyPipe(Option<OwnedFd>);
+pub(crate) struct NotifyChannel(Option<OwnedFd>);
 
-impl NotifyPipe {
+impl NotifyChannel {
     /// Wrap the write end of a notification channel.
     pub(crate) fn new(fd: OwnedFd) -> Self {
-        NotifyPipe(Some(fd))
+        NotifyChannel(Some(fd))
     }
 
     /// Borrow the underlying fd, e.g. to exempt it from
@@ -208,8 +208,8 @@ pub(crate) fn print_on_stderr(message: impl std::fmt::Display) {
     let _ = writeln!(io::stderr(), "{message}");
 }
 
-impl Drop for NotifyPipe {
-    /// Safety net: a `NotifyPipe` still holding its fd at drop means the daemon
+impl Drop for NotifyChannel {
+    /// Safety net: a `NotifyChannel` still holding its fd at drop means the daemon
     /// process is going away without having reported an outcome — e.g. a panic
     /// unwound past the signalling seam. Report a failure that names the cause:
     /// a bare EOF already reads as failure (R150), but after the exec marker it
@@ -357,7 +357,7 @@ mod tests {
     #[test]
     fn signal_ready_writes_success_byte() {
         let (rd, wr) = make_pipe();
-        NotifyPipe::new(wr).signal_ready().unwrap();
+        NotifyChannel::new(wr).signal_ready().unwrap();
         assert_eq!(read_pipe(rd), SUCCESS);
     }
 
@@ -365,14 +365,14 @@ mod tests {
     fn signal_error_writes_protocol() {
         let (rd, wr) = make_pipe();
         let err = DaemonizeError::ForkFailed("boom".into());
-        NotifyPipe::new(wr).signal_error(&err);
+        NotifyChannel::new(wr).signal_error(&err);
         assert_eq!(decode(&read_pipe(rd)), decode(&error_bytes(&err)));
     }
 
     #[test]
     fn signal_unnotified_writes_protocol() {
         let (rd, wr) = make_pipe();
-        NotifyPipe::new(wr).signal_unnotified();
+        NotifyChannel::new(wr).signal_unnotified();
         assert_eq!(
             decode(&read_pipe(rd)),
             Outcome::Failure {
@@ -385,11 +385,11 @@ mod tests {
     // Covers: R137
     #[test]
     fn drop_without_signal_reports_unnotified_failure() {
-        // Safety net: a NotifyPipe that is dropped without any signal_* call
+        // Safety net: a NotifyChannel that is dropped without any signal_* call
         // (e.g. a panic unwinding past the signalling seam) must report a
         // failure that names the cause, not leave a bare EOF.
         let (rd, wr) = make_pipe();
-        drop(NotifyPipe::new(wr));
+        drop(NotifyChannel::new(wr));
         assert_eq!(
             decode(&read_pipe(rd)),
             Outcome::Failure {
@@ -404,7 +404,7 @@ mod tests {
         // The intermediate fork processes close their write-end copy silently;
         // the reader sees a bare EOF, not the Drop safety net's report.
         let (rd, wr) = make_pipe();
-        NotifyPipe::new(wr).close();
+        NotifyChannel::new(wr).close();
         assert_eq!(read_pipe(rd), Vec::<u8>::new());
     }
 
@@ -415,13 +415,13 @@ mod tests {
         // net would turn one panic into an abort.
         let (rd, wr) = make_pipe();
         drop(rd);
-        drop(NotifyPipe::new(wr));
+        drop(NotifyChannel::new(wr));
     }
 
     #[test]
     fn drop_after_signal_does_not_double_write() {
         let (rd, wr) = make_pipe();
-        NotifyPipe::new(wr).signal_ready().unwrap();
+        NotifyChannel::new(wr).signal_ready().unwrap();
         assert_eq!(read_pipe(rd), SUCCESS);
     }
 
@@ -429,7 +429,7 @@ mod tests {
     fn signal_ready_errors_on_closed_reader() {
         let (rd, wr) = make_pipe();
         drop(rd); // reader gone: write end sees EPIPE
-        let result = NotifyPipe::new(wr).signal_ready();
+        let result = NotifyChannel::new(wr).signal_ready();
         assert!(result.is_err());
     }
 
@@ -593,7 +593,7 @@ mod tests {
     fn signal_exec_pending_leaves_the_pipe_open_for_an_exec_error() {
         let (rd, wr) = make_pipe();
         let err = DaemonizeError::ProgramNotFound("exec /x: ENOENT".into());
-        let mut pipe = NotifyPipe::new(wr);
+        let mut pipe = NotifyChannel::new(wr);
         pipe.signal_exec_pending().unwrap();
         pipe.signal_error(&err);
         assert_eq!(
@@ -618,7 +618,7 @@ mod tests {
             return;
         }
         let (rd, wr) = make_pipe();
-        let mut pipe = NotifyPipe::new(wr);
+        let mut pipe = NotifyChannel::new(wr);
         let held = crate::test_support::fill_fd_table(0);
         let written = pipe.signal_exec_pending();
         drop(held);
@@ -652,7 +652,7 @@ mod tests {
         nix::unistd::dup2_stderr(err_wr).unwrap();
 
         let reported = std::panic::catch_unwind(|| {
-            NotifyPipe::new(wr).signal_error(&DaemonizeError::ForkFailed("boom".into()));
+            NotifyChannel::new(wr).signal_error(&DaemonizeError::ForkFailed("boom".into()));
         });
 
         assert!(reported.is_ok());

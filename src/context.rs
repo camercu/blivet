@@ -10,7 +10,7 @@ use nix::fcntl::Flock;
 
 use crate::config::DaemonConfig;
 use crate::error::DaemonizeError;
-use crate::notify::NotifyPipe;
+use crate::notify::NotifyChannel;
 
 /// Context returned by a successful daemonization.
 ///
@@ -61,7 +61,7 @@ enum Launcher {
     /// The launcher reads the channel for the outcome. After a failed readiness
     /// send from `notify_parent_or_report` the channel is spent but the start
     /// still never succeeded, so the state stays here.
-    Waiting(NotifyPipe),
+    Waiting(NotifyChannel),
     /// The launcher was told the start succeeded, or `notify_parent` handed
     /// its failure to a caller that may keep running.
     Released,
@@ -113,7 +113,7 @@ impl DaemonContext {
     pub(crate) fn new(
         config: &DaemonConfig,
         lockfile: Option<Flock<OwnedFd>>,
-        notify_pipe: Option<NotifyPipe>,
+        notify_pipe: Option<NotifyChannel>,
     ) -> Self {
         Self {
             config: config.clone(),
@@ -430,7 +430,7 @@ impl DaemonContext {
     ///
     /// A launcher still waiting means the start never succeeded, so the
     /// pidfile goes whatever `cleanup_on_drop` says (R154).
-    fn cleanup_then_signal(&mut self, signal: impl FnOnce(NotifyPipe)) {
+    fn cleanup_then_signal(&mut self, signal: impl FnOnce(NotifyChannel)) {
         let waiting = match self.launcher {
             Launcher::Waiting(_) => true,
             Launcher::Released | Launcher::Foreground => false,
@@ -477,7 +477,7 @@ impl DaemonContext {
 
 impl Drop for DaemonContext {
     fn drop(&mut self) {
-        self.cleanup_then_signal(NotifyPipe::signal_unnotified);
+        self.cleanup_then_signal(NotifyChannel::signal_unnotified);
     }
 }
 
@@ -541,7 +541,7 @@ mod tests {
     fn ctx(
         config: &DaemonConfig,
         lockfile: Option<Flock<OwnedFd>>,
-        notify_pipe: Option<NotifyPipe>,
+        notify_pipe: Option<NotifyChannel>,
     ) -> DaemonContext {
         DaemonContext::new(config, lockfile, notify_pipe)
     }
@@ -559,7 +559,7 @@ mod tests {
         if std::env::var(MARKER).is_ok() {
             let (rd, wr) = make_pipe();
             drop(rd);
-            let ctx = ctx(&DaemonConfig::new(), None, Some(NotifyPipe::new(wr)));
+            let ctx = ctx(&DaemonConfig::new(), None, Some(NotifyChannel::new(wr)));
             ctx.exec(c"sh", &[c"sh", c"-c", c"exit 7"]);
         }
 
@@ -586,7 +586,7 @@ mod tests {
             crate::signals::restore_default_sigpipe();
             let (rd, wr) = make_pipe();
             drop(rd);
-            let ctx = ctx(&DaemonConfig::new(), None, Some(NotifyPipe::new(wr)));
+            let ctx = ctx(&DaemonConfig::new(), None, Some(NotifyChannel::new(wr)));
             ctx.exec(c"sh", &[c"sh", c"-c", c"exit 7"]);
         }
 
@@ -644,7 +644,7 @@ mod tests {
             crate::signals::restore_default_sigpipe();
             let (rd, wr) = make_pipe();
             drop(rd);
-            let mut ctx = ctx(&DaemonConfig::new(), None, Some(NotifyPipe::new(wr)));
+            let mut ctx = ctx(&DaemonConfig::new(), None, Some(NotifyChannel::new(wr)));
             let reported = matches!(ctx.notify_parent(), Err(DaemonizeError::NotifyFailed(_)));
             std::process::exit(if reported { 0 } else { 3 });
         }
@@ -668,7 +668,7 @@ mod tests {
             crate::signals::restore_default_sigpipe();
             let (rd, wr) = make_pipe();
             drop(rd);
-            let mut ctx = ctx(&DaemonConfig::new(), None, Some(NotifyPipe::new(wr)));
+            let mut ctx = ctx(&DaemonConfig::new(), None, Some(NotifyChannel::new(wr)));
             ctx.report_error(&DaemonizeError::application(75, "database unreachable"));
         }
 
@@ -699,7 +699,7 @@ mod tests {
         if let Some(pidfile) = std::env::var_os(MARKER) {
             let (rd, wr) = make_pipe();
             drop(rd);
-            let mut ctx = ctx(&pidfile_config(pidfile), None, Some(NotifyPipe::new(wr)));
+            let mut ctx = ctx(&pidfile_config(pidfile), None, Some(NotifyChannel::new(wr)));
             ctx.notify_parent_or_report();
             std::process::exit(0);
         }
@@ -726,7 +726,11 @@ mod tests {
         let pidfile = dir.path().join("test.pid");
         std::fs::write(&pidfile, "12345\n").unwrap();
         let (rd, wr) = make_pipe();
-        let mut ctx = ctx(&pidfile_config(&pidfile), None, Some(NotifyPipe::new(wr)));
+        let mut ctx = ctx(
+            &pidfile_config(&pidfile),
+            None,
+            Some(NotifyChannel::new(wr)),
+        );
         ctx.notify_parent().unwrap();
 
         drop(ctx);
@@ -747,7 +751,11 @@ mod tests {
         std::fs::write(&pidfile, "12345\n").unwrap();
         let (rd, wr) = make_pipe();
         drop(rd);
-        let mut ctx = ctx(&pidfile_config(&pidfile), None, Some(NotifyPipe::new(wr)));
+        let mut ctx = ctx(
+            &pidfile_config(&pidfile),
+            None,
+            Some(NotifyChannel::new(wr)),
+        );
         assert!(ctx.notify_parent().is_err());
 
         drop(ctx);
@@ -766,7 +774,7 @@ mod tests {
 
         if std::env::var(MARKER).is_ok() {
             let (rd, wr) = make_pipe();
-            let mut ctx = ctx(&DaemonConfig::new(), None, Some(NotifyPipe::new(wr)));
+            let mut ctx = ctx(&DaemonConfig::new(), None, Some(NotifyChannel::new(wr)));
             ctx.notify_parent().unwrap();
             drop(rd);
             ctx.report_error(&DaemonizeError::application(75, "database unreachable"));
@@ -794,7 +802,7 @@ mod tests {
         if std::env::var(MARKER).is_ok() {
             let (rd, wr) = make_pipe();
             drop(rd);
-            let mut ctx = ctx(&DaemonConfig::new(), None, Some(NotifyPipe::new(wr)));
+            let mut ctx = ctx(&DaemonConfig::new(), None, Some(NotifyChannel::new(wr)));
             ctx.notify_parent_or_report();
             std::process::exit(0);
         }
@@ -852,7 +860,7 @@ mod tests {
             let ctx = ctx(
                 &DaemonConfig::new(),
                 None,
-                Some(NotifyPipe::new(not_a_socket)),
+                Some(NotifyChannel::new(not_a_socket)),
             );
             ctx.exec(c"sh", &[c"sh", c"-c", c"exit 7"]);
         }
@@ -881,7 +889,7 @@ mod tests {
         if std::env::var(MARKER).is_ok() {
             let (rd, wr) = make_pipe();
             drop(rd);
-            let ctx = ctx(&DaemonConfig::new(), None, Some(NotifyPipe::new(wr)));
+            let ctx = ctx(&DaemonConfig::new(), None, Some(NotifyChannel::new(wr)));
             ctx.exec(c"/nonexistent_blivet_program", &[c"x"]);
         }
 
@@ -930,7 +938,7 @@ mod tests {
     #[test]
     fn notify_parent_writes_success_byte() {
         let (rd, wr) = make_pipe();
-        let mut ctx = ctx(&DaemonConfig::new(), None, Some(NotifyPipe::new(wr)));
+        let mut ctx = ctx(&DaemonConfig::new(), None, Some(NotifyChannel::new(wr)));
         ctx.notify_parent().unwrap();
         assert_eq!(read_pipe(rd), crate::notify::SUCCESS);
     }
@@ -938,7 +946,7 @@ mod tests {
     #[test]
     fn notify_parent_or_report_writes_success_byte() {
         let (rd, wr) = make_pipe();
-        let mut ctx = ctx(&DaemonConfig::new(), None, Some(NotifyPipe::new(wr)));
+        let mut ctx = ctx(&DaemonConfig::new(), None, Some(NotifyChannel::new(wr)));
         ctx.notify_parent_or_report(); // success path returns normally
         assert_eq!(read_pipe(rd), crate::notify::SUCCESS);
     }
@@ -1240,7 +1248,7 @@ mod tests {
     #[test]
     fn notify_parent_idempotent() {
         let (_rd, wr) = make_pipe();
-        let mut ctx = ctx(&DaemonConfig::new(), None, Some(NotifyPipe::new(wr)));
+        let mut ctx = ctx(&DaemonConfig::new(), None, Some(NotifyChannel::new(wr)));
         ctx.notify_parent().unwrap();
         ctx.notify_parent().unwrap();
     }
@@ -1250,7 +1258,7 @@ mod tests {
     fn drop_writes_failure_when_not_notified() {
         let (rd, wr) = make_pipe();
         {
-            let _ctx = ctx(&DaemonConfig::new(), None, Some(NotifyPipe::new(wr)));
+            let _ctx = ctx(&DaemonConfig::new(), None, Some(NotifyChannel::new(wr)));
         }
 
         assert_eq!(
@@ -1293,7 +1301,7 @@ mod tests {
                 })
             };
 
-            drop(ctx(&cfg, None, Some(NotifyPipe::new(wr))));
+            drop(ctx(&cfg, None, Some(NotifyChannel::new(wr))));
 
             assert!(
                 !observer.join().unwrap(),
@@ -1317,7 +1325,7 @@ mod tests {
         let (rd, wr) = make_pipe();
         let mut cfg = DaemonConfig::new();
         cfg.pidfile(&pidfile);
-        let mut ctx = ctx(&cfg, None, Some(NotifyPipe::new(wr)));
+        let mut ctx = ctx(&cfg, None, Some(NotifyChannel::new(wr)));
 
         let code = ctx.cleanup_and_signal_error(&DaemonizeError::ExecFailed("boom".into()));
 
@@ -1347,7 +1355,11 @@ mod tests {
         std::fs::write(&pidfile, "123").unwrap();
 
         let (_rd, wr) = make_pipe();
-        let mut ctx = ctx(&pidfile_config(&pidfile), None, Some(NotifyPipe::new(wr)));
+        let mut ctx = ctx(
+            &pidfile_config(&pidfile),
+            None,
+            Some(NotifyChannel::new(wr)),
+        );
 
         ctx.cleanup_and_signal_error(&DaemonizeError::ExecFailed("boom".into()));
 
@@ -1371,7 +1383,7 @@ mod tests {
     fn drop_no_write_after_notify() {
         let (rd, wr) = make_pipe();
         {
-            let mut ctx = ctx(&DaemonConfig::new(), None, Some(NotifyPipe::new(wr)));
+            let mut ctx = ctx(&DaemonConfig::new(), None, Some(NotifyChannel::new(wr)));
             ctx.notify_parent().unwrap();
         }
         assert_eq!(read_pipe(rd), crate::notify::SUCCESS);

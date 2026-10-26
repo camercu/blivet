@@ -12,7 +12,7 @@ use nix::unistd::ForkResult;
 
 use crate::forker::Forker;
 use crate::identity::ResolvedIdentity;
-use crate::notify::{self, NotifyPipe};
+use crate::notify::{self, NotifyChannel};
 use crate::{DaemonConfig, DaemonContext, DaemonizeError, signals, steps};
 
 /// Internal daemonization logic, generic over the Forker trait for testability.
@@ -55,7 +55,7 @@ pub(crate) unsafe fn daemonize_inner_with<T>(
         // Made in the caller's process, before any fork, so a failure
         // returns to the caller.
         let (pipe_rd, pipe_wr) = forker.create_notification_pipe()?;
-        let pipe_wr = NotifyPipe::new(pipe_wr);
+        let pipe_wr = NotifyChannel::new(pipe_wr);
 
         // SAFETY: daemonize_unchecked() is unsafe and requires the caller to
         // ensure the process is single-threaded. The checked daemonize()
@@ -67,7 +67,7 @@ pub(crate) unsafe fn daemonize_inner_with<T>(
             Err(e) => {
                 // No child exists yet; the error returns to the caller
                 // directly, so close the write end silently rather than let the
-                // NotifyPipe Drop safety net write into a channel whose only
+                // NotifyChannel Drop safety net write into a channel whose only
                 // reader is this same process.
                 pipe_wr.close();
                 return Err(e);
@@ -76,7 +76,7 @@ pub(crate) unsafe fn daemonize_inner_with<T>(
         match first_fork {
             ForkResult::Parent { .. } => {
                 // Parent: close the write end *silently* (it only reads) then
-                // read and exit. A plain drop would trip the NotifyPipe Drop
+                // read and exit. A plain drop would trip the NotifyChannel Drop
                 // safety net and make the parent read its own failure bytes.
                 pipe_wr.close();
                 parent_pipe_reader(pipe_rd, forker);
@@ -99,7 +99,7 @@ pub(crate) unsafe fn daemonize_inner_with<T>(
             Ok(ForkResult::Parent { .. }) => {
                 // Intermediate child exits silently: the grandchild daemon is
                 // the sole writer, so close the write-end copy without tripping
-                // the NotifyPipe Drop safety net.
+                // the NotifyChannel Drop safety net.
                 pipe_wr.close();
                 forker.exit(0);
             }
@@ -289,7 +289,7 @@ impl Drop for AbortGuard<'_> {
 #[allow(unsafe_code)]
 unsafe fn run_post_fork<T>(
     config: &DaemonConfig,
-    pipe_wr: &mut Option<NotifyPipe>,
+    pipe_wr: &mut Option<NotifyChannel>,
     init: impl FnOnce() -> Result<T, DaemonizeError>,
 ) -> Result<(DaemonContext, T), DaemonizeError> {
     // What a failure must undo (R164): everything restorable in foreground
@@ -1384,7 +1384,7 @@ mod tests {
     //
     // NullForker runs no daemon, so the parent reads its channel after closing
     // its own write end: what a daemon killed before notifying leaves. The
-    // parent must *close* that end, not drop it, or NotifyPipe's Drop safety
+    // parent must *close* that end, not drop it, or NotifyChannel's Drop safety
     // net writes failure bytes the parent then reads as the daemon's. Both
     // exit 1, so the printed message tells them apart.
     #[test]
@@ -1459,7 +1459,7 @@ mod tests {
     fn first_fork_failure_closes_pipe_silently() {
         // The error goes back to the caller directly — nothing should reach the
         // channel, whose only reader is this same process. A plain drop would
-        // fire the NotifyPipe Drop safety net into it.
+        // fire the NotifyChannel Drop safety net into it.
         let config = DaemonConfig::new();
         let mut forker = NullForker::first_fork_fails();
         let result = run_inner(&config, &mut forker);

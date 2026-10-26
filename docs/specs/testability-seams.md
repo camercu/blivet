@@ -115,7 +115,7 @@ and names the code to revisit.
 
 ### Launcher state
 
-`DaemonContext` stores the notification pipe as `Option<NotifyPipe>`, and
+`DaemonContext` stores the notification pipe as `Option<NotifyChannel>`, and
 three decisions read `None` as "the launcher was told": whether a failure
 removes the pidfile whatever `cleanup_on_drop` says (R154), whether an error
 goes to stderr (R161), and whether `Drop` writes to the pipe. Any path that
@@ -126,7 +126,7 @@ paths, one at a time.
 A private enum replaces the option:
 
 ```rust
-enum Launcher { Waiting(NotifyPipe), Released, Foreground }
+enum Launcher { Waiting(NotifyChannel), Released, Foreground }
 ```
 
 `Waiting` holds the pipe while the launcher waits. A successful readiness
@@ -228,7 +228,7 @@ each decision handles it.
 
 - **5.1**: `DaemonContext` holds its launcher state as `Waiting` (with the
   pipe), `Released`, or `Foreground`, and holds no separate
-  `Option<NotifyPipe>`.
+  `Option<NotifyChannel>`.
 - **5.2**: The pidfile cleanup in `report_error` and `Drop` removes the
   pidfile when the state is `Waiting`. Otherwise it removes it only if
   `cleanup_on_drop` is `true` (R154).
