@@ -293,7 +293,7 @@ are lowercase with no trailing punctuation.
 | ------------------ | ------------------------------------------------------- |
 | `ValidationError`  | Bad path, bad env key, path overlap, other config error |
 | `ProgramNotFound`  | Program missing or not executable (the CLI's pre-fork path check, or `ENOENT`/`EACCES` from `DaemonContext::exec`) |
-| `UserNotFound`     | User does not exist at runtime during user switching    |
+| `UserNotFound`     | User does not exist at runtime during the identity switch |
 | `GroupNotFound`    | Group does not exist at runtime during group switching  |
 | `LockConflict`     | flock already held by another process                   |
 | `LockfileError`    | Lockfile cannot be opened                               |
@@ -307,7 +307,7 @@ are lowercase with no trailing punctuation.
 | `ChownError`       | chown of pidfile/lockfile/output file failed             |
 | `ExecFailed`       | `DaemonContext::exec` failed (other than `ENOENT`/`EACCES`) |
 | `NotifyFailed`     | Writing the readiness message to the notification pipe failed |
-| `InitLeftThreads`  | A checked `daemonize_with` init left threads running before a user switch |
+| `InitLeftThreads`  | A checked `daemonize_with` init left threads running before an identity switch to a user |
 | `Application`      | Caller-reported startup failure (returned from `init`, or via `application()`/`report_error`) |
 
 `ProgramNotFound` and `ExecFailed` come only from `DaemonContext::exec`
@@ -425,8 +425,8 @@ Checks paths, permissions, and config values against the real
 filesystem using the **current effective UID** at the time of the call
 (on Android, the **real** UID — see path rules below).
 
-> When a user switch is configured, validation runs as root but the
-> daemon operates as the target user. Post-user-switch permission
+> When an identity switch is configured, validation runs as root but
+> the daemon operates as the target identity. Post-switch permission
 > failures are runtime errors. TOCTOU is inherent; `daemonize()` still
 > handles runtime failures.
 
@@ -829,10 +829,10 @@ step 11.
 **Thread-count guard.** The `USER`/`HOME`/`LOGNAME` writes use `setenv`,
 which is not thread-safe. The checked `daemonize()` and
 `daemonize_with()` check the thread count at entry, and
-`daemonize_with()` checks again after `init` returns, **only when a
-user switch is configured** (the sole `setenv` after `init`; a group-only
-switch performs no `setenv`). An `init` may start threads only if it
-joins them before it returns. The unchecked forms skip both checks.
+`daemonize_with()` checks again after `init` returns, **only when an
+identity switch to a user is configured** (the sole `setenv` after
+`init`; a group-only switch performs no `setenv`). An `init` may start
+threads only if it joins them before it returns. The unchecked forms skip both checks.
 
 User resolution failure returns `UserNotFound`, group resolution
 failure `GroupNotFound`, and `initgroups`/`setgid`/`setuid` failure
@@ -1174,7 +1174,7 @@ Spawn CLI binary, inspect /proc and files. Require Linux, /proc:
 - **Stdout/stderr redirect:** assert file contents. Repeat with append.
 - **Same-path stdout/stderr:** assert no interleaving.
 - **Lockfile exclusion:** two instances, assert second exits 69.
-- **User switching (root-only, skip in CI):** assert UID/GID.
+- **Identity switch (root-only, skip in CI):** assert UID/GID.
 - **Group switching (root-only, skip in CI):** assert GID with
   independent group.
 - **Output file ownership (root-only, skip in CI):** with `-u`,
@@ -1302,7 +1302,7 @@ verification points.
 - R24. Configured env vars are present in daemon environment.
 - R25. Inherited env vars are preserved.
 - R26. Duplicate env keys: last-write-wins.
-- R27. User switching sets UID, GID, and supplementary groups.
+- R27. The identity switch sets UID, GID, and supplementary groups.
 - R28. `USER`, `HOME`, `LOGNAME` match target user after switching.
 - R29. `USER`/`HOME`/`LOGNAME` from switching overwrite `.env()` vals.
 - R30. Validation rejects non-absolute paths.
@@ -1413,7 +1413,7 @@ verification points.
 - R99. Signal reset: 1..SIGRTMAX, skip SIGKILL/SIGSTOP/SIGPIPE,
   EINVAL → skip.
 - R100. Signal reset uses `libc::sigaction()` directly.
-- R101. User switch order: `getpwnam` → `initgroups` (both before
+- R101. Identity switch order: `getpwnam` → `initgroups` (both before
   `init`) → `setgid` → `setuid`.
 - R102. Output files opened in daemonization step 12 (before the
   identity switch).
@@ -1464,11 +1464,11 @@ verification points.
   elevated privileges: the `DaemonContext` exists only after the
   identity switch succeeds, and a switch failure ends the sequence.
 - R126. The checked `daemonize_with()` fails with `InitLeftThreads`
-  (exit 70) when a user switch is configured and `init` leaves the
-  thread count other than 1, read as R45 reads it, so threads `init`
+  (exit 70) when an identity switch to a user is configured and `init`
+  leaves the thread count other than 1, read as R45 reads it, so threads `init`
   joined do not count. Where the count comes from `/proc`, the file is
   opened before `init` runs, so an `init` that changes root still gets
-  a reading (the user-switch path calls `setenv`, which
+  a reading (a switch to a user calls `setenv`, which
   is not thread-safe). An error, not a panic: in daemon mode the
   launcher prints it. A group-only switch is not checked. The unchecked
   forms skip the check; on targets without a thread-count source the

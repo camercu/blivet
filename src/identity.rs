@@ -35,7 +35,7 @@ impl ResolvedUser {
     }
 }
 
-/// The target identity to chown to and drop privileges to, resolved once from
+/// The target identity to chown to and switch to, resolved once from
 /// the configured user and group specs.
 pub(crate) struct ResolvedIdentity {
     user: Option<ResolvedUser>,

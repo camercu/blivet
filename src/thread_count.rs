@@ -5,8 +5,8 @@
 //! `/proc/self/status` where `/proc` has it, otherwise from the kernel's
 //! per-OS query below (the FFI `unsafe` this module allows).
 //! [`assert_single_threaded`] is the check at the entry points (R45), and
-//! [`checked_init`] the one after a `daemonize_with` init when a user switch
-//! follows (R126).
+//! [`checked_init`] the one after a `daemonize_with` init when an identity
+//! switch to a user follows (R126).
 //!
 //! Defined only where the count is available at all (`blivet_thread_count`);
 //! elsewhere the checked entry points are deprecated stubs that never call in
@@ -270,7 +270,7 @@ pub(crate) fn count() -> std::io::Result<usize> {
 /// Returns the panic message if `count` is not exactly one thread, else `None`.
 ///
 /// The checked entry points require *exactly* one thread (R45): forking — or
-/// calling `setenv` during the user switch — in a multi-threaded process is
+/// calling `setenv` during the identity switch — in a multi-threaded process is
 /// unsound. Any count other than 1 is a violation — including an anomalous `0`,
 /// which a healthy process can never report and so signals an unreliable
 /// thread-count query. Failing closed keeps the safety guard from
@@ -343,7 +343,8 @@ fn settle(
     }
 }
 
-/// `init`, then the thread check a user switch's `setenv` needs (R126).
+/// `init`, then the thread check an identity switch to a user needs for its
+/// `setenv` (R126).
 ///
 /// A group-only switch calls no `setenv`, so it is not checked.
 #[cfg(blivet_thread_count)]

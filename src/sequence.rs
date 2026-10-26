@@ -284,7 +284,8 @@ impl Drop for AbortGuard<'_> {
 ///
 /// # Safety
 ///
-/// No other thread may be running: step 17 calls `setenv` when switching user.
+/// No other thread may be running: step 17 calls `setenv` when the identity
+/// switch sets a user.
 #[allow(unsafe_code)]
 unsafe fn run_post_fork<T>(
     config: &DaemonConfig,
