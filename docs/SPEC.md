@@ -966,9 +966,11 @@ remains valid after `chdir` changes the working directory:
   `chdir` is set). An absolute PATH entry finds the same file from
   there; a relative or empty entry resolves against that directory,
   not the caller's. A program the caller finds through such an entry
-  may not be found there (`ProgramNotFound`). A file of that name
-  under the daemon's directory runs instead, even ahead of an
-  absolute entry later in PATH. A bare name that is missing or not
+  may not be found there. `execvp` then searches the later entries: a
+  file of that name further along PATH may run, and with none the
+  start exits `ProgramNotFound`. A file of that name under the
+  daemon's directory runs instead, even ahead of an absolute entry
+  later in PATH. A bare name that is missing or not
   executable is therefore only discovered at exec time;
   the resulting `ENOENT`/`EACCES` still exits `ProgramNotFound` (66) —
   see Program execution.
