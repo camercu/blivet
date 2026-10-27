@@ -965,10 +965,11 @@ remains valid after `chdir` changes the working directory:
   searches PATH from the daemon's working directory (`/` unless
   `chdir` is set). An absolute PATH entry finds the same file from
   there; a relative or empty entry resolves against that directory,
-  not the caller's. A program found only through such an entry may
-  not be found there (`ProgramNotFound`), or a different file of
-  that name may run. A bare name that is
-  missing or not executable is therefore only discovered at exec time;
+  not the caller's. A program the caller finds through such an entry
+  may not be found there (`ProgramNotFound`). A file of that name
+  under the daemon's directory runs instead, even ahead of an
+  absolute entry later in PATH. A bare name that is missing or not
+  executable is therefore only discovered at exec time;
   the resulting `ENOENT`/`EACCES` still exits `ProgramNotFound` (66) —
   see Program execution.
 
