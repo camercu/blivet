@@ -196,7 +196,7 @@ impl DaemonConfig {
         }
     }
 
-    /// Sets the user to run the daemon as. Default: none (no identity switch).
+    /// Sets the user to run the daemon as. Default: none (no switch to a user).
     ///
     /// Accepts a username string or a numeric UID (as a string, e.g. `"1000"`).
     /// The daemonize call resolves it before any init runs and switches to it
