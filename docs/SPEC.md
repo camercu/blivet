@@ -1688,3 +1688,7 @@ verification points.
 - R167. `DaemonContext::exec` refuses an empty `args` with
   `ExecFailed` before it changes anything, so no program runs with
   argc 0.
+- R168. Every file descriptor R152 lists, including one moved off a
+  stdio slot, is close-on-exec. A program `init` spawns or the daemon
+  execs inherits none of them, except the lockfile `DaemonContext::exec`
+  hands on (R110).

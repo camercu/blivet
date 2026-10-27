@@ -418,7 +418,7 @@ mod tests {
 
     use crate::test_support::{is_subprocess, run_in_subprocess};
 
-    // Covers: R96
+    // Covers: R96, R168
     #[test]
     fn open_above_stdio_opens_close_on_exec_whatever_flags_the_caller_passes() {
         for passed in [OFlag::O_RDONLY, OFlag::O_RDONLY | OFlag::O_CLOEXEC] {
@@ -432,6 +432,36 @@ mod tests {
                 "{passed:?}: a held file would leak into the daemon's program"
             );
         }
+    }
+
+    // Covers: R152, R168
+    #[test]
+    fn a_file_moved_off_a_stdio_slot_stays_close_on_exec() {
+        run_in_subprocess(
+            "steps::stdio::tests::a_file_moved_off_a_stdio_slot_stays_close_on_exec_subprocess",
+        );
+    }
+
+    /// With stdin closed, the open lands on fd 0 and `above_stdio` moves it:
+    /// the copy, not only the first open, must be close-on-exec.
+    #[test]
+    #[ignore]
+    fn a_file_moved_off_a_stdio_slot_stays_close_on_exec_subprocess() {
+        use std::os::fd::AsRawFd;
+        if !is_subprocess() {
+            return;
+        }
+        let fd = crate::test_support::with_fds_closed(&[0], || {
+            open_above_stdio(c"/dev/null", OFlag::O_RDONLY, Mode::empty()).unwrap()
+        });
+
+        let flags = nix::fcntl::fcntl(&fd, nix::fcntl::FcntlArg::F_GETFD).unwrap();
+
+        assert!(fd.as_raw_fd() > 2, "fd {}", fd.as_raw_fd());
+        assert!(
+            nix::fcntl::FdFlag::from_bits_truncate(flags).contains(nix::fcntl::FdFlag::FD_CLOEXEC),
+            "the moved copy would leak into the daemon's program"
+        );
     }
 
     // Covers: R7, R8
