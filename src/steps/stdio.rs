@@ -32,7 +32,7 @@ pub(crate) struct Collision {
 
 /// Opens `path` close-on-exec, never on fd 0, 1 or 2 (see [`above_stdio`]).
 /// Every file the sequence opens and holds goes through here; clippy.toml
-/// bans a bare `nix::fcntl::open` and the `std::fs` opens.
+/// bans the other ways to open one.
 #[allow(clippy::disallowed_methods)] // the one place a bare open is allowed
 pub(crate) fn open_above_stdio<P: ?Sized + nix::NixPath>(
     path: &P,
