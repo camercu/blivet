@@ -72,7 +72,8 @@ The user and group the daemon runs as after the identity switch.
 _Avoid_: target user (when a group is meant too)
 
 **Identity switch**:
-Setting supplementary groups, group, and user to the target identity, and `USER`/`HOME`/`LOGNAME`.
+Setting the group to the target identity. With a user, also setting
+supplementary groups, user, and `USER`/`HOME`/`LOGNAME`.
 _Avoid_: user switch, privilege drop, drop privileges
 
 **Path ownership transfer**:
