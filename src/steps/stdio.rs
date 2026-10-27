@@ -472,8 +472,9 @@ mod tests {
         );
     }
 
-    /// With stdin closed, the lowest free descriptor is 0: the saved copy of
-    /// stdout must not land there, where step 6's `dup2` would replace it.
+    /// With another stdio slot closed, the lowest free descriptor is that
+    /// slot: no saved copy may land there, where step 6's `dup2` would
+    /// replace it.
     #[test]
     #[ignore]
     fn a_saved_stdio_copy_sits_above_stdio_close_on_exec_subprocess() {
@@ -481,16 +482,28 @@ mod tests {
         if !is_subprocess() {
             return;
         }
-        let saved =
-            crate::test_support::with_fds_closed(&[0], || StdioSlot::Stdout.save().unwrap());
+        for (slot, closed) in [
+            (StdioSlot::Stdin, 1),
+            (StdioSlot::Stdout, 0),
+            (StdioSlot::Stderr, 0),
+        ] {
+            let saved = crate::test_support::with_fds_closed(&[closed], || slot.save().unwrap());
 
-        let flags = nix::fcntl::fcntl(&saved, nix::fcntl::FcntlArg::F_GETFD).unwrap();
+            let flags = nix::fcntl::fcntl(&saved, nix::fcntl::FcntlArg::F_GETFD).unwrap();
 
-        assert!(saved.as_raw_fd() > 2, "fd {}", saved.as_raw_fd());
-        assert!(
-            nix::fcntl::FdFlag::from_bits_truncate(flags).contains(nix::fcntl::FdFlag::FD_CLOEXEC),
-            "the saved copy would leak into the daemon's program"
-        );
+            assert!(
+                saved.as_raw_fd() > 2,
+                "slot {}: fd {}",
+                slot.fd(),
+                saved.as_raw_fd()
+            );
+            assert!(
+                nix::fcntl::FdFlag::from_bits_truncate(flags)
+                    .contains(nix::fcntl::FdFlag::FD_CLOEXEC),
+                "slot {}: the saved copy would leak into the daemon's program",
+                slot.fd()
+            );
+        }
     }
 
     // Covers: R7, R8
