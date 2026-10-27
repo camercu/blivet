@@ -464,6 +464,35 @@ mod tests {
         );
     }
 
+    // Covers: R152, R168
+    #[test]
+    fn a_saved_stdio_copy_sits_above_stdio_close_on_exec() {
+        run_in_subprocess(
+            "steps::stdio::tests::a_saved_stdio_copy_sits_above_stdio_close_on_exec_subprocess",
+        );
+    }
+
+    /// With stdin closed, the lowest free descriptor is 0: the saved copy of
+    /// stdout must not land there, where step 6's `dup2` would replace it.
+    #[test]
+    #[ignore]
+    fn a_saved_stdio_copy_sits_above_stdio_close_on_exec_subprocess() {
+        use std::os::fd::AsRawFd;
+        if !is_subprocess() {
+            return;
+        }
+        let saved =
+            crate::test_support::with_fds_closed(&[0], || StdioSlot::Stdout.save().unwrap());
+
+        let flags = nix::fcntl::fcntl(&saved, nix::fcntl::FcntlArg::F_GETFD).unwrap();
+
+        assert!(saved.as_raw_fd() > 2, "fd {}", saved.as_raw_fd());
+        assert!(
+            nix::fcntl::FdFlag::from_bits_truncate(flags).contains(nix::fcntl::FdFlag::FD_CLOEXEC),
+            "the saved copy would leak into the daemon's program"
+        );
+    }
+
     // Covers: R7, R8
     #[test]
     fn redirect_to_devnull_succeeds() {

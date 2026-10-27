@@ -1618,8 +1618,9 @@ verification points.
   everywhere. The error names the signal.
 - R152. Every descriptor the sequence opens and holds — both
   notification pipe ends, the lockfile, the pidfile, the redirect
-  sources, the saved working directory, and the thread-count status
-  file — sits above descriptor 2, even when the caller closed stdin,
+  sources, the saved working directory, the saved copy of each stdio
+  slot a step replaces, and the thread-count status file — sits above
+  descriptor 2, even when the caller closed stdin,
   stdout, or stderr. A later `dup2` onto a stdio slot (step 6, step 12,
   or an `init`'s own) then cannot close one and drop the pipe, the
   lock, or the thread-count reading.
