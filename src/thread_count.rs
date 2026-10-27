@@ -270,7 +270,7 @@ pub(crate) fn count() -> std::io::Result<usize> {
 /// Returns the panic message if `count` is not exactly one thread, else `None`.
 ///
 /// The checked entry points require *exactly* one thread (R45): forking — or
-/// calling `setenv` during the identity switch — in a multi-threaded process is
+/// calling `setenv` during an identity switch to a user — in a multi-threaded process is
 /// unsound. Any count other than 1 is a violation — including an anomalous `0`,
 /// which a healthy process can never report and so signals an unreliable
 /// thread-count query. Failing closed keeps the safety guard from

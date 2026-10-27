@@ -78,9 +78,10 @@
 //! ```
 //!
 //! [`daemonize`] and [`daemonize_with`] check for you: at the call they panic
-//! if threads are running, and after `init`, when an identity switch follows, they
-//! fail with [`DaemonizeError::InitLeftThreads`], which reaches the launcher.
-//! An `init` may start threads only if it joins them before it returns.
+//! if threads are running, and after `init`, when an identity switch to a user
+//! follows, they fail with [`DaemonizeError::InitLeftThreads`], which reaches
+//! the launcher. An `init` may start threads only if it joins them before it
+//! returns.
 //! [`daemonize_unchecked`] and [`daemonize_with_unchecked`] are the `unsafe`
 //! opt-outs. [`notify_parent`](DaemonContext::notify_parent) itself is
 //! thread-safe.
@@ -381,7 +382,7 @@ pub fn daemonize_with<T>(
     thread_count::assert_single_threaded("daemonize_with");
     #[allow(unsafe_code)]
     // SAFETY: verified single-threaded above, and `checked_init` verifies it
-    // again after init, before the identity switch's `setenv`.
+    // again after init, before an identity switch to a user calls `setenv`.
     unsafe {
         daemonize_with_unchecked(config, thread_count::checked_init(config, init))
     }

@@ -1302,7 +1302,8 @@ verification points.
 - R24. Configured env vars are present in daemon environment.
 - R25. Inherited env vars are preserved.
 - R26. Duplicate env keys: last-write-wins.
-- R27. The identity switch sets UID, GID, and supplementary groups.
+- R27. The identity switch to a user sets UID, GID, and supplementary
+  groups.
 - R28. `USER`, `HOME`, `LOGNAME` match target user after switching.
 - R29. `USER`/`HOME`/`LOGNAME` from switching overwrite `.env()` vals.
 - R30. Validation rejects non-absolute paths.
@@ -1413,8 +1414,8 @@ verification points.
 - R99. Signal reset: 1..SIGRTMAX, skip SIGKILL/SIGSTOP/SIGPIPE,
   EINVAL → skip.
 - R100. Signal reset uses `libc::sigaction()` directly.
-- R101. Identity switch order: `getpwnam` → `initgroups` (both before
-  `init`) → `setgid` → `setuid`.
+- R101. Identity switch order with a user: `getpwnam` → `initgroups`
+  (both before `init`) → `setgid` → `setuid`.
 - R102. Output files opened in daemonization step 12 (before the
   identity switch).
 - R103. Fd closing: brute-force 3..rlim_cur, not `/proc/self/fd`.

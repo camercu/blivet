@@ -103,9 +103,9 @@ pub enum DaemonizeError {
     NotifyFailed(#[source] std::io::Error),
 
     /// The [`daemonize_with`](crate::daemonize_with) init left threads
-    /// running before an identity switch, whose `setenv` is not thread-safe. Holds
-    /// the thread count. The checked entry point reports it instead of
-    /// switching (R126).
+    /// running before an identity switch to a user, whose `setenv` is not
+    /// thread-safe. Holds the thread count. The checked entry point reports it
+    /// instead of switching (R126).
     #[error(
         "init left {0} threads running (expected 1); join them before init \
          returns, since switching user calls setenv"
