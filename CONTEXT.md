@@ -64,7 +64,8 @@ _Avoid_: already running
 
 **Privileged init**:
 Caller-supplied work that runs inside the sequence, after the lock and before
-the identity switch, with the launcher's privileges (`daemonize_with`'s `init`).
+the group and user change, with the launcher's privileges
+(`daemonize_with`'s `init`).
 _Avoid_: init (bare), init closure, setup hook
 
 **Target identity**:
@@ -72,8 +73,9 @@ The user and group the daemon runs as after the identity switch.
 _Avoid_: target user (when a group is meant too)
 
 **Identity switch**:
-Setting the group to the target identity. With a user, also setting
-supplementary groups, user, and `USER`/`HOME`/`LOGNAME`.
+Setting the group to the target identity. With a user, also setting the
+user and `USER`/`HOME`/`LOGNAME`, and joining the supplementary groups. The
+groups are joined earlier, before privileged init (R162).
 _Avoid_: user switch, privilege drop, drop privileges
 
 **Path ownership transfer**:
