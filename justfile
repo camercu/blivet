@@ -273,18 +273,17 @@ mutants-docker base="":
     #!/usr/bin/env bash
     set -euo pipefail
     diff=$(mktemp)
-    iid=$(mktemp)
     name="blivet-mutants-$$"
-    trap 'rm -f "$diff" "$iid"; docker rm -f "$name" >/dev/null 2>&1 || true' EXIT
-    just build-context | docker build --load --iidfile "$iid" \
-        --build-arg RUST_VERSION={{docker_rust}} --target mutants -t blivet-mutants -
+    trap 'rm -f "$diff"; docker rm -f "$name" >/dev/null 2>&1 || true' EXIT
+    image=$({{just_executable()}} --justfile {{justfile()}} docker-image \
+        --build-arg RUST_VERSION={{docker_rust}} --target mutants)
     mode=""
     if [ -n "{{base}}" ]; then
         {{just_executable()}} --justfile {{justfile()}} rust-diff {{base}} > "$diff"
         mode="--in-diff"
     fi
     rc=0
-    docker run -i --name "$name" --init --privileged "$(cat "$iid")" \
+    docker run -i --name "$name" --init --privileged "$image" \
         sh scripts/privileged-mutants.sh $mode < "$diff" || rc=$?
     rm -rf mutants.out
     docker cp "$name:/src/mutants.out" mutants.out || true
@@ -324,19 +323,28 @@ build-context:
         | while IFS= read -r -d '' f; do [ -e "$f" ] && printf '%s\0' "$f"; done \
         | tar --null -T - -cf -
 
-# Build and run Docker container for root + Linux-specific tests.
-# Every docker recipe runs the image it just built by ID, never by tag: podman
-# resolves a short tag to `localhost/` first, so an old image there would run
-# instead. `--load` puts the image where `run` finds it under a buildx
-# docker-container builder, which otherwise keeps it to itself.
-docker-test:
+# Build an image from `build-context` and print its ID. The image has no tag,
+# so callers run it by ID: podman resolves a short tag to `localhost/` first,
+# and an old image there would run instead. `--load` puts the image where
+# `run` finds it under a buildx docker-container builder, which otherwise
+# keeps it to itself.
+[private]
+docker-image *args:
     #!/usr/bin/env bash
     set -euo pipefail
     iid=$(mktemp)
     trap 'rm -f "$iid"' EXIT
-    just build-context | docker build --load --iidfile "$iid" \
-        --build-arg RUST_VERSION={{docker_rust}} --target test -t blivet-test -
-    docker run --rm --init --privileged "$(cat "$iid")"
+    {{just_executable()}} --justfile {{justfile()}} build-context \
+        | docker build --load --iidfile "$iid" {{args}} - >&2
+    cat "$iid"
+
+# Build and run Docker container for root + Linux-specific tests.
+docker-test:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    image=$({{just_executable()}} --justfile {{justfile()}} docker-image \
+        --build-arg RUST_VERSION={{docker_rust}} --target test)
+    docker run --rm --init --privileged "$image"
 
 # Run the library tests against bionic, Android's libc, in a Termux container.
 # The platform is pinned to linux/amd64 so a developer on any architecture runs
@@ -344,11 +352,9 @@ docker-test:
 termux-test:
     #!/usr/bin/env bash
     set -euo pipefail
-    iid=$(mktemp)
-    trap 'rm -f "$iid"' EXIT
-    just build-context | docker build --load --iidfile "$iid" --platform linux/amd64 \
-        -f Dockerfile.termux -t blivet-termux -
-    docker run --rm --platform linux/amd64 --init "$(cat "$iid")"
+    image=$({{just_executable()}} --justfile {{justfile()}} docker-image \
+        --platform linux/amd64 -f Dockerfile.termux)
+    docker run --rm --platform linux/amd64 --init "$image"
 
 # Rewrite the machine-owned cells of README.md and docs/SPEC.md.
 #
