@@ -172,9 +172,8 @@ pub(crate) fn with_fds_closed<R>(closed: &[i32], f: impl FnOnce() -> R) -> R {
         #[allow(clippy::disallowed_methods)] // puts back the slots it closed
         // SAFETY: `dup2` onto a closed slot touches no memory, and no handle
         // owns the slot.
-        unsafe {
-            libc::dup2(std::os::fd::AsRawFd::as_raw_fd(copy), fd)
-        };
+        let put_back = unsafe { libc::dup2(std::os::fd::AsRawFd::as_raw_fd(copy), fd) };
+        assert_eq!(put_back, fd, "could not put back fd {fd}");
     }
     result
 }
