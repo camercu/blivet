@@ -73,9 +73,10 @@ pub(crate) fn isolated() -> bool {
 ///
 /// The child is judged on having run the test, not only on how it exited.
 /// A caller that spells `test_name` as a literal goes stale on a rename or a
-/// module move, and libtest exits 0 when its filter matches nothing, so the
-/// caller would otherwise turn into a silent no-op that still reports ok — the vacuity
-/// `scripts/assert-tests-ran.sh` catches one level up, inside the test binary.
+/// module move, and libtest exits 0 when its filter matches nothing or skips
+/// an ignored test, so the caller would otherwise turn into a silent no-op
+/// that still reports ok. `scripts/assert-tests-ran.sh` catches the same
+/// vacuity one level up, inside the test binary.
 /// A caller that expects the child to fail, or to die on a signal, still gets
 /// its own verdict from the returned [`Output`]; this only rules out the child
 /// having run nothing.
@@ -94,15 +95,21 @@ pub(crate) fn rerun_in_subprocess(
         .env(ISOLATED_ENV, "1")
         .output()
         .unwrap();
-    // libtest announces the filtered count before it runs anything, so this
-    // holds even for a child that is killed part-way through its body.
     assert!(
-        String::from_utf8_lossy(&output.stdout).contains("running 1 test\n"),
-        "subprocess test {test_name} matched no test, so its body never ran. \
-         Has it been renamed or moved? {}",
+        child_ran(test_name, &String::from_utf8_lossy(&output.stdout)),
+        "subprocess test {test_name} matched no test or was skipped as ignored, \
+         so its body never ran. Has it been renamed or moved? {}",
         subprocess_report(test_name, &output)
     );
     output
+}
+
+/// Whether a child's stdout shows libtest started `test_name`, rather than
+/// matching nothing or skipping it as ignored. libtest announces the count
+/// before it runs anything, so this holds for a child killed mid-body too.
+fn child_ran(test_name: &str, stdout: &str) -> bool {
+    stdout.contains("running 1 test\n")
+        && !stdout.contains(&format!("test {test_name} ... ignored"))
 }
 
 /// Renders a finished subprocess for a failure message: how it ended, and both
@@ -361,6 +368,20 @@ mod tests {
         assert!(is_child_for(me, Some(me.as_ref())));
         assert!(!is_child_for(me, Some("steps::process::tests::y".as_ref())));
         assert!(!is_child_for(me, None));
+    }
+
+    #[test]
+    fn a_child_skipped_as_ignored_did_not_run() {
+        let me = "sequence::tests::x";
+        assert!(child_ran(
+            me,
+            "\nrunning 1 test\ntest sequence::tests::x ... ok\n"
+        ));
+        assert!(!child_ran(
+            me,
+            "\nrunning 1 test\ntest sequence::tests::x ... ignored, needs root\n"
+        ));
+        assert!(!child_ran(me, "\nrunning 0 tests\n"));
     }
 
     /// The parent fails when its child does: otherwise every isolated test
