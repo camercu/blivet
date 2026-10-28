@@ -363,6 +363,21 @@ mod tests {
         assert!(!is_child_for(me, None));
     }
 
+    /// The parent fails when its child does: otherwise every isolated test
+    /// passes whatever its body asserts. The child exits rather than panics,
+    /// so its own libtest verdict plays no part.
+    #[test]
+    fn a_failing_isolated_body_fails_the_parent() {
+        match std::panic::catch_unwind(isolated) {
+            Ok(true) => std::process::exit(3),
+            Ok(false) => panic!("the parent passed a child that failed"),
+            Err(panic) => {
+                let msg = panic.downcast::<String>().unwrap();
+                assert!(msg.contains("exit status: 3"), "{msg}");
+            }
+        }
+    }
+
     #[test]
     fn an_isolated_test_runs_its_body_in_a_child_process() {
         let ran = |pid: u32| tmp_dir().join(format!("blivet-isolated-ran-{pid}"));
