@@ -4,9 +4,11 @@
 //! umask, cwd, environment, signal handling, credentials — would do so under
 //! every test running in parallel in the shared harness. Such a test opens with
 //! `if !isolated() { return; }`: [`isolated`] re-invokes the test binary for
-//! just that one test and returns `true` only in that child. The production
-//! functions that change that state call [`assert_isolated`] under test, so a
-//! test that forgets the guard fails instead of racing its neighbours.
+//! just that one test and returns `true` only in that child. A test that
+//! judges how the child ended opens with [`isolated_output`] instead. The
+//! production functions that change that state call [`assert_isolated`] under
+//! test, so a test that forgets the guard fails instead of racing its
+//! neighbours.
 
 use std::ffi::OsStr;
 use std::process::{Command, Output};
@@ -18,8 +20,7 @@ const SUBPROCESS_ENV: &str = "__BLIVET_SUBPROCESS_TEST";
 /// The value [`isolated_output_with`] hands its child, for [`isolated_arg`].
 const ARG_ENV: &str = "__BLIVET_ISOLATED_ARG";
 
-/// Set in every child [`rerun_in_subprocess`] starts, whatever marker the
-/// caller branches on: each child runs one test, so it alone owns the
+/// Set in every child [`rerun`] starts: each child runs one test, so it alone owns the
 /// process-wide state [`assert_isolated`] guards.
 const ISOLATED_ENV: &str = "__BLIVET_ISOLATED_TEST";
 
@@ -38,11 +39,7 @@ pub(crate) fn isolated() -> bool {
     let Some(output) = isolated_output() else {
         return true;
     };
-    assert!(
-        output.status.success(),
-        "{}",
-        subprocess_report(&current_test_name(), &output)
-    );
+    assert!(output.status.success(), "{}", subprocess_report(&output));
     false
 }
 
@@ -74,7 +71,7 @@ fn rerun_unless_child(arg: Option<&OsStr>) -> Option<Output> {
     if is_child_for(&test_name, std::env::var_os(SUBPROCESS_ENV).as_deref()) {
         return None;
     }
-    Some(rerun(&test_name, SUBPROCESS_ENV, test_name.as_ref(), arg))
+    Some(rerun(&test_name, arg))
 }
 
 /// The calling test's full name, from the libtest thread that runs it.
@@ -92,12 +89,8 @@ fn current_test_name() -> String {
     name.to_owned()
 }
 
-/// Re-invokes this test binary to run one test in its own process, with
-/// `marker` set to `value`, and returns what the child exited with.
-///
-/// The child's body branches on `marker`, so the same test source is both the
-/// caller and the isolated run. Every re-invocation in the crate goes through
-/// here, for the capture described below.
+/// Re-invokes this test binary to run test `test_name` alone in its own
+/// process, marked as its child, and returns how the child ended.
 ///
 /// The child's output is captured, not inherited. A child writing straight to
 /// the parent's stdout interleaves with it, and with the other children running
@@ -111,24 +104,14 @@ fn current_test_name() -> String {
 /// skipped, the child exits 0, and the caller passes *vacuously* without ever
 /// running the body.
 ///
-/// The child is judged on having run the test, not only on how it exited.
-/// A caller that spells `test_name` as a literal goes stale on a rename or a
-/// module move, and libtest exits 0 when its filter matches nothing or skips
-/// an ignored test, so the caller would otherwise turn into a silent no-op
-/// that still reports ok. `scripts/assert-tests-ran.sh` catches the same
-/// vacuity one level up, inside the test binary.
-/// A caller that expects the child to fail, or to die on a signal, still gets
-/// its own verdict from the returned [`Output`]; this only rules out the child
-/// having run nothing.
-pub(crate) fn rerun_in_subprocess(
-    test_name: &str,
-    marker: &str,
-    value: impl AsRef<OsStr>,
-) -> Output {
-    rerun(test_name, marker, value.as_ref(), None)
-}
-
-fn rerun(test_name: &str, marker: &str, value: &OsStr, arg: Option<&OsStr>) -> Output {
+/// The child is judged on having run the test, not only on how it exited:
+/// libtest exits 0 when its filter matches nothing or skips an ignored test,
+/// so the caller would otherwise turn into a silent no-op that still reports
+/// ok. `scripts/assert-tests-ran.sh` catches the same vacuity one level up,
+/// inside the test binary. A caller that expects the child to fail, or to die
+/// on a signal, still gets its own verdict from the returned [`Output`]; this
+/// only rules out the child having run nothing.
+fn rerun(test_name: &str, arg: Option<&OsStr>) -> Output {
     let exe = std::env::current_exe().unwrap();
     let mut command = Command::new(exe);
     command
@@ -136,7 +119,7 @@ fn rerun(test_name: &str, marker: &str, value: &OsStr, arg: Option<&OsStr>) -> O
         .arg(test_name)
         .arg("--include-ignored")
         .arg("--nocapture")
-        .env(marker, value)
+        .env(SUBPROCESS_ENV, test_name)
         .env(ISOLATED_ENV, "1");
     if let Some(arg) = arg {
         command.env(ARG_ENV, arg);
@@ -145,8 +128,8 @@ fn rerun(test_name: &str, marker: &str, value: &OsStr, arg: Option<&OsStr>) -> O
     assert!(
         child_ran(test_name, &String::from_utf8_lossy(&output.stdout)),
         "subprocess test {test_name} matched no test or was skipped as ignored, \
-         so its body never ran. Has it been renamed or moved? {}",
-        subprocess_report(test_name, &output)
+         so its body never ran. {}",
+        subprocess_report(&output)
     );
     output
 }
@@ -159,11 +142,12 @@ fn child_ran(test_name: &str, stdout: &str) -> bool {
         && !stdout.contains(&format!("test {test_name} ... ignored"))
 }
 
-/// Renders a finished subprocess for a failure message: how it ended, and both
-/// of its captured streams.
-pub(crate) fn subprocess_report(test_name: &str, output: &Output) -> String {
+/// Renders the calling test's finished child for a failure message: how it
+/// ended, and both of its captured streams.
+pub(crate) fn subprocess_report(output: &Output) -> String {
     format!(
-        "subprocess test {test_name} failed: {}\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        "subprocess test {} failed: {}\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        current_test_name(),
         output.status,
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr),
@@ -262,7 +246,7 @@ pub(crate) fn read_pipe(rd: std::os::fd::OwnedFd) -> Vec<u8> {
     buf
 }
 
-/// Panics unless this runs in a child of [`rerun_in_subprocess`].
+/// Panics unless this runs in a child of [`isolated_output`].
 ///
 /// For code that changes process-wide state: stdio slots, other descriptors,
 /// umask, cwd, environment, signal handling, credentials. The shared test
@@ -472,11 +456,7 @@ mod tests {
             assert_eq!(isolated_arg(), OsStr::new(&parent));
             return;
         };
-        assert!(
-            output.status.success(),
-            "{}",
-            subprocess_report(&current_test_name(), &output)
-        );
+        assert!(output.status.success(), "{}", subprocess_report(&output));
     }
 
     #[allow(clippy::disallowed_methods)] // the harness keeps stdio open

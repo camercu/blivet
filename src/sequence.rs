@@ -1205,11 +1205,7 @@ mod tests {
     // exit 1, so the printed message tells them apart.
     #[test]
     fn launcher_reads_its_own_silent_close_as_the_eof_failure() {
-        const MARKER: &str = "__BLIVET_LAUNCHER_EOF";
-        const NAME: &str =
-            "sequence::tests::launcher_reads_its_own_silent_close_as_the_eof_failure";
-
-        if std::env::var(MARKER).is_ok() {
+        let Some(output) = crate::test_support::isolated_output() else {
             let config = DaemonConfig::new();
             let mut forker = NullForker::first_parent();
             let result = catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -1222,14 +1218,12 @@ mod tests {
                 .unwrap();
             assert!(panic_msg.contains("NullForker::exit(1)"), "{panic_msg}");
             return;
-        }
-
-        let output = crate::test_support::rerun_in_subprocess(NAME, MARKER, "1");
+        };
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(
             output.status.success(),
             "{}",
-            crate::test_support::subprocess_report(NAME, &output)
+            crate::test_support::subprocess_report(&output)
         );
         assert!(
             stderr.contains("daemon ended without signaling readiness"),

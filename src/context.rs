@@ -553,22 +553,17 @@ mod tests {
     // after SIGPIPE was restored to its default, killed the daemon instead.
     #[test]
     fn exec_runs_the_program_when_the_launcher_is_gone() {
-        const MARKER: &str = "__BLIVET_EXEC_NO_LAUNCHER";
-        const NAME: &str = "context::tests::exec_runs_the_program_when_the_launcher_is_gone";
-
-        if std::env::var(MARKER).is_ok() {
+        let Some(output) = crate::test_support::isolated_output() else {
             let (rd, wr) = make_pipe();
             drop(rd);
             let ctx = ctx(&DaemonConfig::new(), None, Some(NotifyChannel::new(wr)));
             ctx.exec(c"sh", &[c"sh", c"-c", c"exit 7"]);
-        }
-
-        let output = crate::test_support::rerun_in_subprocess(NAME, MARKER, "1");
+        };
         assert_eq!(
             output.status.code(),
             Some(7),
             "the program did not run: {}",
-            crate::test_support::subprocess_report(NAME, &output)
+            crate::test_support::subprocess_report(&output)
         );
     }
 
@@ -579,23 +574,18 @@ mod tests {
     // kill the daemon, when the launcher is gone.
     #[test]
     fn exec_runs_the_program_when_the_launcher_is_gone_and_sigpipe_is_default() {
-        const MARKER: &str = "__BLIVET_EXEC_NO_LAUNCHER_DFL";
-        const NAME: &str = "context::tests::exec_runs_the_program_when_the_launcher_is_gone_and_sigpipe_is_default";
-
-        if std::env::var(MARKER).is_ok() {
+        let Some(output) = crate::test_support::isolated_output() else {
             crate::signals::restore_default_sigpipe();
             let (rd, wr) = make_pipe();
             drop(rd);
             let ctx = ctx(&DaemonConfig::new(), None, Some(NotifyChannel::new(wr)));
             ctx.exec(c"sh", &[c"sh", c"-c", c"exit 7"]);
-        }
-
-        let output = crate::test_support::rerun_in_subprocess(NAME, MARKER, "1");
+        };
         assert_eq!(
             output.status.code(),
             Some(7),
             "the program did not run: {}",
-            crate::test_support::subprocess_report(NAME, &output)
+            crate::test_support::subprocess_report(&output)
         );
     }
 
@@ -644,18 +634,13 @@ mod tests {
     // Covers: R161
     #[test]
     fn report_error_reaches_stderr_when_the_launcher_is_gone_and_sigpipe_is_default() {
-        const MARKER: &str = "__BLIVET_REPORT_NO_LAUNCHER_DFL";
-        const NAME: &str = "context::tests::report_error_reaches_stderr_when_the_launcher_is_gone_and_sigpipe_is_default";
-
-        if std::env::var(MARKER).is_ok() {
+        let Some(output) = crate::test_support::isolated_output() else {
             crate::signals::restore_default_sigpipe();
             let (rd, wr) = make_pipe();
             drop(rd);
             let mut ctx = ctx(&DaemonConfig::new(), None, Some(NotifyChannel::new(wr)));
             ctx.report_error(&DaemonizeError::application(75, "database unreachable"));
-        }
-
-        let output = crate::test_support::rerun_in_subprocess(NAME, MARKER, "1");
+        };
         assert_eq!(
             (
                 output.status.code(),
@@ -664,7 +649,7 @@ mod tests {
             ),
             (Some(75), true),
             "{}",
-            crate::test_support::subprocess_report(NAME, &output)
+            crate::test_support::subprocess_report(&output)
         );
     }
 
@@ -675,27 +660,22 @@ mod tests {
     // cleanup_on_drop off.
     #[test]
     fn notify_parent_or_report_removes_the_pidfile_when_the_launcher_is_gone() {
-        const MARKER: &str = "__BLIVET_NOR_NO_LAUNCHER_PIDFILE";
-        const NAME: &str =
-            "context::tests::notify_parent_or_report_removes_the_pidfile_when_the_launcher_is_gone";
-
-        if let Some(pidfile) = std::env::var_os(MARKER) {
+        let dir = tempfile::tempdir().unwrap();
+        let pidfile = dir.path().join("test.pid");
+        std::fs::write(&pidfile, "12345\n").unwrap();
+        let Some(output) = crate::test_support::isolated_output_with(&pidfile) else {
+            let pidfile = crate::test_support::isolated_arg();
             let (rd, wr) = make_pipe();
             drop(rd);
             let mut ctx = ctx(&pidfile_config(pidfile), None, Some(NotifyChannel::new(wr)));
             ctx.notify_parent_or_report();
             std::process::exit(0);
-        }
-
-        let dir = tempfile::tempdir().unwrap();
-        let pidfile = dir.path().join("test.pid");
-        std::fs::write(&pidfile, "12345\n").unwrap();
-        let output = crate::test_support::rerun_in_subprocess(NAME, MARKER, &pidfile);
+        };
         assert_eq!(
             (output.status.code(), pidfile.exists()),
             (Some(71), false),
             "{}",
-            crate::test_support::subprocess_report(NAME, &output)
+            crate::test_support::subprocess_report(&output)
         );
     }
 
@@ -752,23 +732,18 @@ mod tests {
     // reach but stderr.
     #[test]
     fn report_error_after_notify_prints_the_error() {
-        const MARKER: &str = "__BLIVET_REPORT_AFTER_NOTIFY";
-        const NAME: &str = "context::tests::report_error_after_notify_prints_the_error";
-
-        if std::env::var(MARKER).is_ok() {
+        let Some(output) = crate::test_support::isolated_output() else {
             let (rd, wr) = make_pipe();
             let mut ctx = ctx(&DaemonConfig::new(), None, Some(NotifyChannel::new(wr)));
             ctx.notify_parent().unwrap();
             drop(rd);
             ctx.report_error(&DaemonizeError::application(75, "database unreachable"));
-        }
-
-        let output = crate::test_support::rerun_in_subprocess(NAME, MARKER, "1");
+        };
         assert!(
             String::from_utf8_lossy(&output.stderr)
                 .contains("application error: database unreachable"),
             "{}",
-            crate::test_support::subprocess_report(NAME, &output)
+            crate::test_support::subprocess_report(&output)
         );
     }
 
@@ -778,23 +753,17 @@ mod tests {
     // to write into: the error must reach stderr instead of vanishing.
     #[test]
     fn notify_parent_or_report_prints_the_error_when_the_launcher_is_gone() {
-        const MARKER: &str = "__BLIVET_NOR_NO_LAUNCHER_STDERR";
-        const NAME: &str =
-            "context::tests::notify_parent_or_report_prints_the_error_when_the_launcher_is_gone";
-
-        if std::env::var(MARKER).is_ok() {
+        let Some(output) = crate::test_support::isolated_output() else {
             let (rd, wr) = make_pipe();
             drop(rd);
             let mut ctx = ctx(&DaemonConfig::new(), None, Some(NotifyChannel::new(wr)));
             ctx.notify_parent_or_report();
             std::process::exit(0);
-        }
-
-        let output = crate::test_support::rerun_in_subprocess(NAME, MARKER, "1");
+        };
         assert!(
             String::from_utf8_lossy(&output.stderr).contains("failed to notify parent"),
             "{}",
-            crate::test_support::subprocess_report(NAME, &output)
+            crate::test_support::subprocess_report(&output)
         );
     }
 
@@ -805,15 +774,10 @@ mod tests {
     // before anything changes, as a failed exec.
     #[test]
     fn exec_refuses_an_empty_argv() {
-        const MARKER: &str = "__BLIVET_EXEC_EMPTY_ARGV";
-        const NAME: &str = "context::tests::exec_refuses_an_empty_argv";
-
-        if std::env::var(MARKER).is_ok() {
+        let Some(output) = crate::test_support::isolated_output() else {
             let ctx = ctx(&DaemonConfig::new(), None, None);
             ctx.exec::<&CStr>(c"true", &[]);
-        }
-
-        let output = crate::test_support::rerun_in_subprocess(NAME, MARKER, "1");
+        };
         assert_eq!(
             (
                 output.status.code(),
@@ -821,7 +785,7 @@ mod tests {
             ),
             (Some(71), true),
             "{}",
-            crate::test_support::subprocess_report(NAME, &output)
+            crate::test_support::subprocess_report(&output)
         );
     }
 
@@ -834,10 +798,7 @@ mod tests {
     #[test]
     #[allow(clippy::disallowed_methods)] // a test's own descriptor, not the sequence's
     fn exec_stops_when_the_marker_cannot_be_written() {
-        const MARKER: &str = "__BLIVET_EXEC_MARKER_FAILS";
-        const NAME: &str = "context::tests::exec_stops_when_the_marker_cannot_be_written";
-
-        if std::env::var(MARKER).is_ok() {
+        let Some(output) = crate::test_support::isolated_output() else {
             // Not a socket: the send fails with ENOTSOCK, not EPIPE.
             let not_a_socket = std::fs::File::open("/dev/null").unwrap().into();
             let ctx = ctx(
@@ -846,14 +807,12 @@ mod tests {
                 Some(NotifyChannel::new(not_a_socket)),
             );
             ctx.exec(c"sh", &[c"sh", c"-c", c"exit 7"]);
-        }
-
-        let output = crate::test_support::rerun_in_subprocess(NAME, MARKER, "1");
+        };
         assert_eq!(
             output.status.code(),
             Some(71),
             "{}",
-            crate::test_support::subprocess_report(NAME, &output)
+            crate::test_support::subprocess_report(&output)
         );
     }
 
@@ -865,18 +824,12 @@ mod tests {
     // to stderr.
     #[test]
     fn exec_failure_exits_with_its_code_when_the_launcher_is_gone() {
-        const MARKER: &str = "__BLIVET_EXEC_FAIL_NO_LAUNCHER";
-        const NAME: &str =
-            "context::tests::exec_failure_exits_with_its_code_when_the_launcher_is_gone";
-
-        if std::env::var(MARKER).is_ok() {
+        let Some(output) = crate::test_support::isolated_output() else {
             let (rd, wr) = make_pipe();
             drop(rd);
             let ctx = ctx(&DaemonConfig::new(), None, Some(NotifyChannel::new(wr)));
             ctx.exec(c"/nonexistent_blivet_program", &[c"x"]);
-        }
-
-        let output = crate::test_support::rerun_in_subprocess(NAME, MARKER, "1");
+        };
         assert_eq!(
             (
                 output.status.code(),
@@ -885,7 +838,7 @@ mod tests {
             ),
             (Some(66), true),
             "{}",
-            crate::test_support::subprocess_report(NAME, &output)
+            crate::test_support::subprocess_report(&output)
         );
     }
 
@@ -895,20 +848,15 @@ mod tests {
     // or `daemonize -f -- missing-program` exits 66 having said nothing.
     #[test]
     fn report_error_without_a_launcher_prints_the_error() {
-        const MARKER: &str = "__BLIVET_REPORT_NO_PIPE";
-        const NAME: &str = "context::tests::report_error_without_a_launcher_prints_the_error";
-
-        if std::env::var(MARKER).is_ok() {
+        let Some(output) = crate::test_support::isolated_output() else {
             default_ctx().report_error(&DaemonizeError::application(75, "database unreachable"));
-        }
-
-        let output = crate::test_support::rerun_in_subprocess(NAME, MARKER, "1");
+        };
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(
             output.status.code() == Some(75)
                 && stderr.contains("application error: database unreachable"),
             "{}",
-            crate::test_support::subprocess_report(NAME, &output)
+            crate::test_support::subprocess_report(&output)
         );
     }
 
@@ -1082,14 +1030,16 @@ mod tests {
     }
 
     // Installs a real SIGTERM handler and raises it, so it must run in its own
-    // process: it self-spawns a child (via an env marker) that dies from the
-    // signal, then the parent asserts the pidfile was removed by the handler
-    // and the child terminated *via* SIGTERM (proving the re-raise).
+    // process: the isolated child dies from the signal, then the parent asserts
+    // the pidfile was removed by the handler and the child terminated *via*
+    // SIGTERM (proving the re-raise).
     #[test]
     fn cleanup_on_signals_removes_pidfile_on_signal() {
-        const PIDFILE_ENV: &str = "__BLIVET_CLEANUP_PIDFILE";
-
-        if let Ok(path) = std::env::var(PIDFILE_ENV) {
+        use std::os::unix::process::ExitStatusExt;
+        let dir = tempfile::tempdir().unwrap();
+        let pidfile = dir.path().join("daemon.pid");
+        let Some(output) = crate::test_support::isolated_output_with(&pidfile) else {
+            let path = crate::test_support::isolated_arg();
             std::fs::write(&path, "123").unwrap();
             let mut cfg = DaemonConfig::new();
             cfg.pidfile(&path);
@@ -1097,19 +1047,13 @@ mod tests {
             ctx.cleanup_on_signals(&[libc::SIGTERM]).unwrap();
             nix::sys::signal::raise(nix::sys::signal::Signal::SIGTERM).unwrap();
             unreachable!("should have been killed by the re-raised SIGTERM");
-        }
-
-        use std::os::unix::process::ExitStatusExt;
-        let dir = tempfile::tempdir().unwrap();
-        let pidfile = dir.path().join("daemon.pid");
-        const NAME: &str = "context::tests::cleanup_on_signals_removes_pidfile_on_signal";
-        let output = crate::test_support::rerun_in_subprocess(NAME, PIDFILE_ENV, &pidfile);
+        };
 
         assert_eq!(
             output.status.signal(),
             Some(libc::SIGTERM),
             "child should terminate via the re-raised SIGTERM; {}",
-            crate::test_support::subprocess_report(NAME, &output)
+            crate::test_support::subprocess_report(&output)
         );
         assert!(
             !pidfile.exists(),
@@ -1123,9 +1067,11 @@ mod tests {
     // and Ctrl-C is the half a developer meets first.
     #[test]
     fn cleanup_on_term_signals_installs_sigint_handler() {
-        const PIDFILE_ENV: &str = "__BLIVET_INT_CLEANUP_PIDFILE";
-
-        if let Ok(path) = std::env::var(PIDFILE_ENV) {
+        use std::os::unix::process::ExitStatusExt;
+        let dir = tempfile::tempdir().unwrap();
+        let pidfile = dir.path().join("daemon.pid");
+        let Some(output) = crate::test_support::isolated_output_with(&pidfile) else {
+            let path = crate::test_support::isolated_arg();
             std::fs::write(&path, "123").unwrap();
             let mut cfg = DaemonConfig::new();
             cfg.pidfile(&path);
@@ -1133,19 +1079,13 @@ mod tests {
             ctx.cleanup_on_term_signals().unwrap();
             nix::sys::signal::raise(nix::sys::signal::Signal::SIGINT).unwrap();
             unreachable!("should have been killed by the re-raised SIGINT");
-        }
-
-        use std::os::unix::process::ExitStatusExt;
-        let dir = tempfile::tempdir().unwrap();
-        let pidfile = dir.path().join("daemon.pid");
-        const NAME: &str = "context::tests::cleanup_on_term_signals_installs_sigint_handler";
-        let output = crate::test_support::rerun_in_subprocess(NAME, PIDFILE_ENV, &pidfile);
+        };
 
         assert_eq!(
             output.status.signal(),
             Some(libc::SIGINT),
             "child should terminate via the re-raised SIGINT; {}",
-            crate::test_support::subprocess_report(NAME, &output)
+            crate::test_support::subprocess_report(&output)
         );
         assert!(
             !pidfile.exists(),
@@ -1153,14 +1093,16 @@ mod tests {
         );
     }
 
-    // Same self-spawn pattern as above, through the convenience wrapper: it
+    // Same isolated pattern as above, through the convenience wrapper: it
     // must actually install handlers for the standard termination signals,
     // not just return Ok.
     #[test]
     fn cleanup_on_term_signals_installs_sigterm_handler() {
-        const PIDFILE_ENV: &str = "__BLIVET_TERM_CLEANUP_PIDFILE";
-
-        if let Ok(path) = std::env::var(PIDFILE_ENV) {
+        use std::os::unix::process::ExitStatusExt;
+        let dir = tempfile::tempdir().unwrap();
+        let pidfile = dir.path().join("daemon.pid");
+        let Some(output) = crate::test_support::isolated_output_with(&pidfile) else {
+            let path = crate::test_support::isolated_arg();
             std::fs::write(&path, "123").unwrap();
             let mut cfg = DaemonConfig::new();
             cfg.pidfile(&path);
@@ -1168,19 +1110,13 @@ mod tests {
             ctx.cleanup_on_term_signals().unwrap();
             nix::sys::signal::raise(nix::sys::signal::Signal::SIGTERM).unwrap();
             unreachable!("should have been killed by the re-raised SIGTERM");
-        }
-
-        use std::os::unix::process::ExitStatusExt;
-        let dir = tempfile::tempdir().unwrap();
-        let pidfile = dir.path().join("daemon.pid");
-        const NAME: &str = "context::tests::cleanup_on_term_signals_installs_sigterm_handler";
-        let output = crate::test_support::rerun_in_subprocess(NAME, PIDFILE_ENV, &pidfile);
+        };
 
         assert_eq!(
             output.status.signal(),
             Some(libc::SIGTERM),
             "child should terminate via the re-raised SIGTERM; {}",
-            crate::test_support::subprocess_report(NAME, &output)
+            crate::test_support::subprocess_report(&output)
         );
         assert!(
             !pidfile.exists(),
