@@ -662,7 +662,6 @@ mod tests {
         assert_eq!(config.effective_lockfile(), None);
     }
 
-    // Covers: R84
     #[test]
     fn builder_setters_replace() {
         let mut config = DaemonConfig::new();

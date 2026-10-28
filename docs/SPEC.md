@@ -1382,16 +1382,18 @@ verification points.
 
 ### Implementation constraints (verifiable by code review)
 
-- R79. `DaemonConfig` derives `Default`, `Debug`, `Clone`, `Eq`,
-  `PartialEq`.
-- R80. `DaemonContext` is `#[non_exhaustive]`, all fields private.
-- R81. `DaemonContext` derives `Debug`; not `Clone` or `PartialEq`.
-- R82. `DaemonizeError` derives `Debug`, `thiserror::Error`; not
-  `Clone` or `PartialEq`.
+Retired rows keep their numbers, so no later row reuses one. R79–R82,
+R84, R86, and R91 described the public API: derives,
+`#[non_exhaustive]`, private fields, builder signatures, the `unsafe`
+unchecked entry points, and a crate-private `Forker`.
+`public-api.txt` records all of these, and the `public-api` CI job fails
+on any change to it, so the rows only copied the snapshot.
+
+- R79–R82: retired, see the note above.
 - R83. `Display` messages are lowercase, no trailing punctuation.
-- R84. All builder methods: `&mut self` → `&mut Self`, infallible.
+- R84: retired, see the note above.
 - R85. `daemonize_unchecked()` calls `validate()` before forking.
-- R86. `daemonize_unchecked()` is `pub unsafe fn`.
+- R86: retired, see the note above.
 - R87. `daemonize()` is `pub fn` wherever the capability table grants
   `thread_count`; a `#[deprecated]` panic stub on other targets. The
   requirement names the capability rather than the platforms: a list
@@ -1405,7 +1407,7 @@ verification points.
   `sequence.rs`, and the entry points in `lib.rs`.
 - R90. `daemonize()` delegates to `daemonize_inner()` with
   `&mut impl Forker`.
-- R91. `Forker` is `pub(crate)`, invisible to consumers.
+- R91: retired, see the note above.
 - R92. `NullForker` exists only under `#[cfg(test)]`.
 - R93. `Cargo.toml`: no `panic = "abort"` in dev/test profiles.
 - R94. Steps execute in specified order; ordering is load-bearing.
