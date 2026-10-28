@@ -241,27 +241,17 @@ mod tests {
     use std::os::fd::AsFd;
 
     // setsid fails with EPERM when the caller already leads a process group,
-    // so run it in a self-spawned child (env marker), which inherits the
-    // parent's process group and is never a leader.
+    // so run it in an isolated child, which inherits the parent's process
+    // group and is never a leader.
     #[test]
     fn real_setsid_makes_the_caller_session_leader() {
-        const MARKER: &str = "__BLIVET_REAL_SETSID";
-
-        if std::env::var(MARKER).is_ok() {
-            RealForker.setsid().expect("setsid should succeed");
-            let pid = nix::unistd::getpid();
-            let sid = nix::unistd::getsid(None).unwrap();
-            assert_eq!(sid, pid, "caller should lead the new session");
+        if !crate::test_support::isolated() {
             return;
         }
-
-        const NAME: &str = "forker::tests::real_setsid_makes_the_caller_session_leader";
-        let output = crate::test_support::rerun_in_subprocess(NAME, MARKER, "1");
-        assert!(
-            output.status.success(),
-            "{}",
-            crate::test_support::subprocess_report(NAME, &output)
-        );
+        RealForker.setsid().expect("setsid should succeed");
+        let pid = nix::unistd::getpid();
+        let sid = nix::unistd::getsid(None).unwrap();
+        assert_eq!(sid, pid, "caller should lead the new session");
     }
 
     // Covers: R148
