@@ -15,6 +15,9 @@ use std::process::{Command, Output};
 /// the one test the child runs (see [`is_child_for`]).
 const SUBPROCESS_ENV: &str = "__BLIVET_SUBPROCESS_TEST";
 
+/// The value [`isolated_output_with`] hands its child, for [`isolated_arg`].
+const ARG_ENV: &str = "__BLIVET_ISOLATED_ARG";
+
 /// Set in every child [`rerun_in_subprocess`] starts, whatever marker the
 /// caller branches on: each child runs one test, so it alone owns the
 /// process-wide state [`assert_isolated`] guards.
@@ -31,27 +34,62 @@ fn is_child_for(test_name: &str, marker: Option<&OsStr>) -> bool {
 /// Runs the calling test again in its own process. Returns `true` in that
 /// child, where the test body runs, and `false` in the parent once the child
 /// passed. Open each isolated test with `if !isolated() { return; }`.
-///
-/// The test's name comes from libtest, which names each test's thread after
-/// the test, so no test spells its own name. A thread with no name means the
-/// caller is not a test, and this panics. So does `main`: libtest falls back
-/// to the main thread when it cannot spawn one, and that name names no test.
 pub(crate) fn isolated() -> bool {
-    let thread = std::thread::current();
-    let test_name = thread.name().filter(|name| *name != "main").expect(
-        "isolated() runs only on a libtest thread named after its test; \
-         this thread is unnamed or `main`",
-    );
-    if is_child_for(test_name, std::env::var_os(SUBPROCESS_ENV).as_deref()) {
+    let Some(output) = isolated_output() else {
         return true;
-    }
-    let output = rerun_in_subprocess(test_name, SUBPROCESS_ENV, test_name);
+    };
     assert!(
         output.status.success(),
         "{}",
-        subprocess_report(test_name, &output)
+        subprocess_report(&current_test_name(), &output)
     );
     false
+}
+
+/// Runs the calling test again in its own process, for a test that judges how
+/// the child ended: its exit code, a signal, or what it printed. Returns
+/// `None` in that child, where the test body runs, and the child's [`Output`]
+/// in the parent. Open the test with
+/// `let Some(output) = isolated_output() else { /* body */ };`.
+pub(crate) fn isolated_output() -> Option<Output> {
+    rerun_unless_child(None)
+}
+
+/// [`isolated_output`], handing the child `arg`: a value only the parent
+/// knows, such as a path it made and will check afterwards. The child reads
+/// it with [`isolated_arg`].
+pub(crate) fn isolated_output_with(arg: impl AsRef<OsStr>) -> Option<Output> {
+    rerun_unless_child(Some(arg.as_ref()))
+}
+
+/// In the child [`isolated_output_with`] started, the value its parent
+/// handed it.
+pub(crate) fn isolated_arg() -> std::ffi::OsString {
+    std::env::var_os(ARG_ENV)
+        .expect("isolated_arg() runs only in a child of isolated_output_with()")
+}
+
+fn rerun_unless_child(arg: Option<&OsStr>) -> Option<Output> {
+    let test_name = current_test_name();
+    if is_child_for(&test_name, std::env::var_os(SUBPROCESS_ENV).as_deref()) {
+        return None;
+    }
+    Some(rerun(&test_name, SUBPROCESS_ENV, test_name.as_ref(), arg))
+}
+
+/// The calling test's full name, from the libtest thread that runs it.
+///
+/// libtest names each test's thread after the test, so no test spells its own
+/// name. A thread with no name means the caller is not a test, and this
+/// panics. So does `main`: libtest falls back to the main thread when it
+/// cannot spawn one, and that name names no test.
+fn current_test_name() -> String {
+    let thread = std::thread::current();
+    let name = thread.name().filter(|name| *name != "main").expect(
+        "isolated() runs only on a libtest thread named after its test; \
+         this thread is unnamed or `main`",
+    );
+    name.to_owned()
 }
 
 /// Re-invokes this test binary to run one test in its own process, with
@@ -87,16 +125,23 @@ pub(crate) fn rerun_in_subprocess(
     marker: &str,
     value: impl AsRef<OsStr>,
 ) -> Output {
+    rerun(test_name, marker, value.as_ref(), None)
+}
+
+fn rerun(test_name: &str, marker: &str, value: &OsStr, arg: Option<&OsStr>) -> Output {
     let exe = std::env::current_exe().unwrap();
-    let output = Command::new(exe)
+    let mut command = Command::new(exe);
+    command
         .arg("--exact")
         .arg(test_name)
         .arg("--include-ignored")
         .arg("--nocapture")
         .env(marker, value)
-        .env(ISOLATED_ENV, "1")
-        .output()
-        .unwrap();
+        .env(ISOLATED_ENV, "1");
+    if let Some(arg) = arg {
+        command.env(ARG_ENV, arg);
+    }
+    let output = command.output().unwrap();
     assert!(
         child_ran(test_name, &String::from_utf8_lossy(&output.stdout)),
         "subprocess test {test_name} matched no test or was skipped as ignored, \
@@ -408,6 +453,30 @@ mod tests {
                 assert!(msg.contains("exit status: 3"), "{msg}");
             }
         }
+    }
+
+    /// The parent gets the child's exit to judge as the test needs.
+    #[test]
+    fn the_parent_reads_how_its_isolated_child_exited() {
+        let Some(output) = isolated_output() else {
+            std::process::exit(5);
+        };
+        assert_eq!(output.status.code(), Some(5));
+    }
+
+    /// The child reads the parent's value, not the one it computes itself.
+    #[test]
+    fn the_parent_hands_its_isolated_child_an_argument() {
+        let Some(output) = isolated_output_with(std::process::id().to_string()) else {
+            let parent = std::os::unix::process::parent_id().to_string();
+            assert_eq!(isolated_arg(), OsStr::new(&parent));
+            return;
+        };
+        assert!(
+            output.status.success(),
+            "{}",
+            subprocess_report(&current_test_name(), &output)
+        );
     }
 
     #[allow(clippy::disallowed_methods)] // the harness keeps stdio open
