@@ -43,22 +43,13 @@ pub(crate) fn isolated() -> bool {
     if is_child_for(test_name, std::env::var_os(SUBPROCESS_ENV).as_deref()) {
         return true;
     }
-    run_in_subprocess(test_name);
-    false
-}
-
-/// Re-invokes the test binary to run a single test in its own process, then
-/// asserts it succeeded.
-///
-/// The privileged tier runs root-only tests, which are `#[ignore]`, so the
-/// child gets `--include-ignored` (see [`rerun_in_subprocess`]).
-fn run_in_subprocess(test_name: &str) {
     let output = rerun_in_subprocess(test_name, SUBPROCESS_ENV, test_name);
     assert!(
         output.status.success(),
         "{}",
         subprocess_report(test_name, &output)
     );
+    false
 }
 
 /// Re-invokes this test binary to run one test in its own process, with
