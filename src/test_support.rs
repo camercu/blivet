@@ -485,24 +485,21 @@ mod tests {
         }
     }
 
-    /// A marker leaked into a whole run leaves the guard armed, even one that
-    /// names a real isolated test running earlier in the same process.
+    /// A marker leaked into a whole run leaves the guard armed: it names no
+    /// pid, or the pid of some process other than this run's parent.
     #[test]
     fn a_leaked_marker_leaves_the_isolation_guard_armed() {
-        // libtest runs the two in name order on one thread: the isolated test
-        // first, then the one that must still meet the guard.
-        let isolated =
-            "kernel_facts::a_send_to_a_closed_peer_fails_with_epipe_and_raises_no_sigpipe";
         let unguarded = "steps::stdio::tests::redirect_output_refuses_the_shared_test_process";
-        for leaked in [isolated, "0"] {
+        let grandparent = std::os::unix::process::parent_id().to_string();
+        for leaked in ["some::test", "0", &grandparent] {
             let output = Command::new(std::env::current_exe().unwrap())
-                .args(["--exact", isolated, unguarded, "--test-threads=1"])
+                .args(["--exact", unguarded])
                 .env(SUBPROCESS_ENV, leaked)
                 .output()
                 .unwrap();
-            let stdout = String::from_utf8_lossy(&output.stdout);
             assert!(
-                stdout.contains("running 2 tests\n") && output.status.success(),
+                child_ran(unguarded, &String::from_utf8_lossy(&output.stdout))
+                    && output.status.success(),
                 "leaked {leaked:?}: {}",
                 subprocess_report(&output)
             );
