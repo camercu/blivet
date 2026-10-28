@@ -55,29 +55,22 @@ pub(crate) fn isolated_output() -> Option<Output> {
     Some(rerun(&current_test_name(), None))
 }
 
-/// Which side of [`isolated_output_with`] this is.
-pub(crate) enum Isolated<F, A> {
-    /// The child, where the test body runs, with the value its parent handed
-    /// it.
-    Child(std::ffi::OsString),
-    /// The parent, with its fixture, the value it handed the child, and how
-    /// the child ended.
-    Parent(F, A, Output),
-}
-
 /// [`isolated_output`] for a test whose parent makes a fixture, such as a
 /// path it checks afterwards. `setup` runs in the parent alone and returns the
-/// fixture and a value for the child, which [`Isolated::Child`] carries.
+/// fixture and a value for the child. `child` runs in the child alone, with
+/// that value, and the child then exits 0. The parent gets back its fixture,
+/// the value, and how the child ended.
 pub(crate) fn isolated_output_with<F, A: AsRef<OsStr>>(
     setup: impl FnOnce() -> (F, A),
-) -> Isolated<F, A> {
+    child: impl FnOnce(std::ffi::OsString),
+) -> (F, A, Output) {
     if in_isolated_child() {
-        let arg = std::env::var_os(ARG_ENV).expect("the parent hands every child its value");
-        return Isolated::Child(arg);
+        child(std::env::var_os(ARG_ENV).expect("the parent hands every child its value"));
+        std::process::exit(0);
     }
     let (fixture, arg) = setup();
     let output = rerun(&current_test_name(), Some(arg.as_ref()));
-    Isolated::Parent(fixture, arg, output)
+    (fixture, arg, output)
 }
 
 /// Whether this runs in a child [`isolated_output`] started.
@@ -559,15 +552,11 @@ mod tests {
             assert!(!in_isolated_child(), "the parent's setup ran in the child");
             ((), format!("from {}", std::process::id()))
         };
-        match isolated_output_with(setup) {
-            Isolated::Child(arg) => {
-                let parent = std::os::unix::process::parent_id();
-                assert_eq!(arg, OsStr::new(&format!("from {parent}")));
-            }
-            Isolated::Parent((), _, output) => {
-                assert!(output.status.success(), "{}", subprocess_report(&output));
-            }
-        }
+        let ((), _, output) = isolated_output_with(setup, |arg| {
+            let parent = std::os::unix::process::parent_id();
+            assert_eq!(arg, OsStr::new(&format!("from {parent}")));
+        });
+        assert!(output.status.success(), "{}", subprocess_report(&output));
     }
 
     #[allow(clippy::disallowed_methods)] // the harness keeps stdio open
