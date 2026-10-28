@@ -416,7 +416,7 @@ mod tests {
 
     use super::*;
 
-    use crate::test_support::{is_subprocess, run_in_subprocess};
+    use crate::test_support::isolated;
 
     // Covers: R96, R168
     #[test]
@@ -435,20 +435,12 @@ mod tests {
     }
 
     // Covers: R152, R168
-    #[test]
-    fn a_file_moved_off_a_stdio_slot_stays_close_on_exec() {
-        run_in_subprocess(
-            "steps::stdio::tests::a_file_moved_off_a_stdio_slot_stays_close_on_exec_subprocess",
-        );
-    }
-
     /// With stdin closed, the open lands on fd 0 and `above_stdio` moves it:
     /// the copy, not only the first open, must be close-on-exec.
     #[test]
-    #[ignore]
-    fn a_file_moved_off_a_stdio_slot_stays_close_on_exec_subprocess() {
+    fn a_file_moved_off_a_stdio_slot_stays_close_on_exec() {
         use std::os::fd::AsRawFd;
-        if !is_subprocess() {
+        if !isolated() {
             return;
         }
         let fd = crate::test_support::with_fds_closed(&[0], || {
@@ -465,21 +457,13 @@ mod tests {
     }
 
     // Covers: R152, R168
-    #[test]
-    fn a_saved_stdio_copy_sits_above_stdio_close_on_exec() {
-        run_in_subprocess(
-            "steps::stdio::tests::a_saved_stdio_copy_sits_above_stdio_close_on_exec_subprocess",
-        );
-    }
-
     /// With another stdio slot closed, the lowest free descriptor is that
     /// slot: no saved copy may land there, where step 6's `dup2` would
     /// replace it.
     #[test]
-    #[ignore]
-    fn a_saved_stdio_copy_sits_above_stdio_close_on_exec_subprocess() {
+    fn a_saved_stdio_copy_sits_above_stdio_close_on_exec() {
         use std::os::fd::AsRawFd;
-        if !is_subprocess() {
+        if !isolated() {
             return;
         }
         for (slot, closed) in [
@@ -508,17 +492,11 @@ mod tests {
 
     // Covers: R7, R8
     #[test]
-    fn redirect_to_devnull_succeeds() {
-        run_in_subprocess("steps::stdio::tests::redirect_to_devnull_succeeds_subprocess");
-    }
-
-    #[test]
-    #[ignore]
     #[allow(clippy::disallowed_methods)] // a test probe; no stdio slot is in play
-    fn redirect_to_devnull_succeeds_subprocess() {
+    fn redirect_to_devnull_succeeds() {
         use nix::sys::stat::fstat;
 
-        if !is_subprocess() {
+        if !isolated() {
             return;
         }
         let devnull = fstat(open(c"/dev/null", OFlag::O_RDONLY, Mode::empty()).unwrap()).unwrap();
@@ -546,19 +524,11 @@ mod tests {
     /// With stdin closed, `open("/dev/null")` hands back fd 0 itself. The
     /// redirect must still leave fd 0 open on /dev/null afterwards.
     #[test]
-    fn redirect_to_devnull_into_a_closed_stdin_slot() {
-        run_in_subprocess(
-            "steps::stdio::tests::redirect_to_devnull_into_a_closed_stdin_slot_subprocess",
-        );
-    }
-
-    #[test]
-    #[ignore]
     #[allow(clippy::disallowed_methods)] // a test probe; no stdio slot is in play
-    fn redirect_to_devnull_into_a_closed_stdin_slot_subprocess() {
+    fn redirect_to_devnull_into_a_closed_stdin_slot() {
         use nix::sys::stat::fstat;
 
-        if !is_subprocess() {
+        if !isolated() {
             return;
         }
         nix::unistd::close(0).unwrap();
@@ -578,17 +548,9 @@ mod tests {
 
     // Covers: R7
     #[test]
-    fn redirect_to_devnull_foreground_preserves_stdout_stderr() {
-        run_in_subprocess(
-            "steps::stdio::tests::redirect_to_devnull_foreground_preserves_stdout_stderr_subprocess",
-        );
-    }
-
-    #[test]
-    #[ignore]
     #[allow(clippy::disallowed_methods)] // a test probe; no stdio slot is in play
-    fn redirect_to_devnull_foreground_preserves_stdout_stderr_subprocess() {
-        if !is_subprocess() {
+    fn redirect_to_devnull_foreground_preserves_stdout_stderr() {
+        if !isolated() {
             return;
         }
         use nix::sys::stat::fstat;
@@ -690,7 +652,7 @@ mod tests {
     /// Outside a subprocess the stdio movers refuse to run. No paths, so the
     /// call would move nothing even if the refusal were gone.
     #[test]
-    #[should_panic(expected = "run_in_subprocess")]
+    #[should_panic(expected = "isolated()")]
     fn redirect_output_refuses_the_shared_test_process() {
         let _ = kept(redirect_output(None, None, false, &[], Rollback::PutBack));
     }
@@ -698,13 +660,7 @@ mod tests {
     // Covers: R98
     #[test]
     fn execute_redirect_creates_files() {
-        run_in_subprocess("steps::stdio::tests::execute_redirect_creates_files_subprocess");
-    }
-
-    #[test]
-    #[ignore]
-    fn execute_redirect_creates_files_subprocess() {
-        if !is_subprocess() {
+        if !isolated() {
             return;
         }
         let dir = tempfile::tempdir().unwrap();
@@ -724,13 +680,7 @@ mod tests {
 
     #[test]
     fn execute_redirect_truncate_vs_append() {
-        run_in_subprocess("steps::stdio::tests::execute_redirect_truncate_vs_append_subprocess");
-    }
-
-    #[test]
-    #[ignore]
-    fn execute_redirect_truncate_vs_append_subprocess() {
-        if !is_subprocess() {
+        if !isolated() {
             return;
         }
         let dir = tempfile::tempdir().unwrap();
@@ -774,13 +724,7 @@ mod tests {
 
     #[test]
     fn execute_redirect_dup_stdout_to_stderr() {
-        run_in_subprocess("steps::stdio::tests::execute_redirect_dup_stdout_to_stderr_subprocess");
-    }
-
-    #[test]
-    #[ignore]
-    fn execute_redirect_dup_stdout_to_stderr_subprocess() {
-        if !is_subprocess() {
+        if !isolated() {
             return;
         }
         let dir = tempfile::tempdir().unwrap();
@@ -808,22 +752,14 @@ mod tests {
     }
 
     // Covers: R147
-    #[test]
-    fn execute_redirect_that_fails_on_stderr_changes_nothing() {
-        run_in_subprocess(
-            "steps::stdio::tests::execute_redirect_that_fails_on_stderr_changes_nothing_subprocess",
-        );
-    }
-
     /// A start that fails must not have emptied the previous run's log, nor
     /// left the caller's stdout pointing somewhere else. A directory as stderr
     /// fails to open for root too, so every tier sees the failure.
     #[test]
-    #[ignore]
-    fn execute_redirect_that_fails_on_stderr_changes_nothing_subprocess() {
+    fn execute_redirect_that_fails_on_stderr_changes_nothing() {
         use nix::sys::stat::fstat;
 
-        if !is_subprocess() {
+        if !isolated() {
             return;
         }
         let dir = tempfile::tempdir().unwrap();
@@ -853,20 +789,12 @@ mod tests {
     }
 
     // Covers: R147
-    #[test]
-    fn execute_redirect_that_fails_with_stdout_closed_leaves_it_closed() {
-        run_in_subprocess(
-            "steps::stdio::tests::execute_redirect_that_fails_with_stdout_closed_leaves_it_closed_subprocess",
-        );
-    }
-
     /// A caller with fd 1 closed must find it closed after a failed start, not
     /// open on the log at offset 0, where its next write would overwrite the
     /// start of the previous run's output.
     #[test]
-    #[ignore]
-    fn execute_redirect_that_fails_with_stdout_closed_leaves_it_closed_subprocess() {
-        if !is_subprocess() {
+    fn execute_redirect_that_fails_with_stdout_closed_leaves_it_closed() {
+        if !isolated() {
             return;
         }
         let dir = tempfile::tempdir().unwrap();
@@ -895,19 +823,11 @@ mod tests {
     }
 
     // Covers: R147
-    #[test]
-    fn execute_redirect_that_fails_with_stderr_closed_leaves_it_closed() {
-        run_in_subprocess(
-            "steps::stdio::tests::execute_redirect_that_fails_with_stderr_closed_leaves_it_closed_subprocess",
-        );
-    }
-
     /// The fd 2 counterpart: a failure after stderr moved must close fd 2
     /// again, not fd 1.
     #[test]
-    #[ignore]
-    fn execute_redirect_that_fails_with_stderr_closed_leaves_it_closed_subprocess() {
-        if !is_subprocess() {
+    fn execute_redirect_that_fails_with_stderr_closed_leaves_it_closed() {
+        if !isolated() {
             return;
         }
         let dir = tempfile::tempdir().unwrap();
@@ -937,21 +857,13 @@ mod tests {
     }
 
     // Covers: R147
-    #[test]
-    fn execute_redirect_that_cannot_save_stdout_changes_nothing() {
-        run_in_subprocess(
-            "steps::stdio::tests::execute_redirect_that_cannot_save_stdout_changes_nothing_subprocess",
-        );
-    }
-
     /// With no descriptor left to save fd 1 in, the redirect must fail before
     /// moving it, not treat fd 1 as closed and carry on.
     #[test]
-    #[ignore]
-    fn execute_redirect_that_cannot_save_stdout_changes_nothing_subprocess() {
+    fn execute_redirect_that_cannot_save_stdout_changes_nothing() {
         use nix::sys::stat::fstat;
 
-        if !is_subprocess() {
+        if !isolated() {
             return;
         }
         let dir = tempfile::tempdir().unwrap();
@@ -986,21 +898,13 @@ mod tests {
     }
 
     // Covers: R147
-    #[test]
-    fn execute_redirect_that_fails_late_puts_both_slots_back() {
-        run_in_subprocess(
-            "steps::stdio::tests::execute_redirect_that_fails_late_puts_both_slots_back_subprocess",
-        );
-    }
-
     /// A failure after both slots have moved — here, the truncation, the last
     /// step — must put fd 1 and fd 2 back as they were.
     #[test]
-    #[ignore]
-    fn execute_redirect_that_fails_late_puts_both_slots_back_subprocess() {
+    fn execute_redirect_that_fails_late_puts_both_slots_back() {
         use nix::sys::stat::fstat;
 
-        if !is_subprocess() {
+        if !isolated() {
             return;
         }
         let dir = tempfile::tempdir().unwrap();
@@ -1039,15 +943,7 @@ mod tests {
     // Covers: R146
     #[test]
     fn execute_redirect_stderr_onto_dev_stdout_follows_the_redirected_stdout() {
-        run_in_subprocess(
-            "steps::stdio::tests::execute_redirect_stderr_onto_dev_stdout_follows_the_redirected_stdout_subprocess",
-        );
-    }
-
-    #[test]
-    #[ignore]
-    fn execute_redirect_stderr_onto_dev_stdout_follows_the_redirected_stdout_subprocess() {
-        if !is_subprocess() {
+        if !isolated() {
             return;
         }
         // `-e /dev/stdout` names whatever fd 1 is when stderr is opened, so
@@ -1080,13 +976,7 @@ mod tests {
 
     #[test]
     fn execute_redirect_stderr_only() {
-        run_in_subprocess("steps::stdio::tests::execute_redirect_stderr_only_subprocess");
-    }
-
-    #[test]
-    #[ignore]
-    fn execute_redirect_stderr_only_subprocess() {
-        if !is_subprocess() {
+        if !isolated() {
             return;
         }
         let dir = tempfile::tempdir().unwrap();
@@ -1109,15 +999,7 @@ mod tests {
 
     #[test]
     fn execute_redirect_truncates_a_separate_stderr_file() {
-        run_in_subprocess(
-            "steps::stdio::tests::execute_redirect_truncates_a_separate_stderr_file_subprocess",
-        );
-    }
-
-    #[test]
-    #[ignore]
-    fn execute_redirect_truncates_a_separate_stderr_file_subprocess() {
-        if !is_subprocess() {
+        if !isolated() {
             return;
         }
         let dir = tempfile::tempdir().unwrap();
@@ -1144,17 +1026,9 @@ mod tests {
     /// With stdout closed, `open` hands back fd 1 itself. The redirect must
     /// still leave fd 1 pointing at the file afterwards, not closed.
     #[test]
-    fn execute_redirect_into_a_closed_stdout_slot() {
-        run_in_subprocess(
-            "steps::stdio::tests::execute_redirect_into_a_closed_stdout_slot_subprocess",
-        );
-    }
-
-    #[test]
-    #[ignore]
     #[allow(clippy::disallowed_methods)] // writes the redirect's file, not the channel
-    fn execute_redirect_into_a_closed_stdout_slot_subprocess() {
-        if !is_subprocess() {
+    fn execute_redirect_into_a_closed_stdout_slot() {
+        if !isolated() {
             return;
         }
         let dir = tempfile::tempdir().unwrap();
@@ -1179,17 +1053,9 @@ mod tests {
     /// source out of: with stderr closed, the redirect must leave fd 2 open on
     /// the file.
     #[test]
-    fn execute_redirect_into_a_closed_stderr_slot() {
-        run_in_subprocess(
-            "steps::stdio::tests::execute_redirect_into_a_closed_stderr_slot_subprocess",
-        );
-    }
-
-    #[test]
-    #[ignore]
     #[allow(clippy::disallowed_methods)] // writes the redirect's file, not the channel
-    fn execute_redirect_into_a_closed_stderr_slot_subprocess() {
-        if !is_subprocess() {
+    fn execute_redirect_into_a_closed_stderr_slot() {
+        if !isolated() {
             return;
         }
         let dir = tempfile::tempdir().unwrap();
@@ -1212,17 +1078,9 @@ mod tests {
 
     // Covers: R146
     #[test]
-    fn execute_redirect_refuses_an_owned_file_before_truncating_it() {
-        run_in_subprocess(
-            "steps::stdio::tests::execute_redirect_refuses_an_owned_file_before_truncating_it_subprocess",
-        );
-    }
-
-    #[test]
-    #[ignore]
     #[allow(clippy::disallowed_methods)] // a test's own descriptor, not the sequence's
-    fn execute_redirect_refuses_an_owned_file_before_truncating_it_subprocess() {
-        if !is_subprocess() {
+    fn execute_redirect_refuses_an_owned_file_before_truncating_it() {
+        if !isolated() {
             return;
         }
         let dir = tempfile::tempdir().unwrap();
@@ -1252,15 +1110,7 @@ mod tests {
 
     #[test]
     fn execute_redirect_into_a_device_does_not_truncate_it() {
-        run_in_subprocess(
-            "steps::stdio::tests::execute_redirect_into_a_device_does_not_truncate_it_subprocess",
-        );
-    }
-
-    #[test]
-    #[ignore]
-    fn execute_redirect_into_a_device_does_not_truncate_it_subprocess() {
-        if !is_subprocess() {
+        if !isolated() {
             return;
         }
         // ftruncate refuses a device where O_TRUNC ignored it; `-o /dev/null`

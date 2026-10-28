@@ -432,24 +432,17 @@ mod tests {
         }
     }
 
-    use crate::test_support::{is_subprocess, run_in_subprocess};
+    use crate::test_support::isolated;
 
     // Covers: R152
-    #[cfg(blivet_thread_count_procfs)]
-    #[test]
-    fn the_status_file_stays_clear_of_stdio() {
-        run_in_subprocess("thread_count::tests::the_status_file_stays_clear_of_stdio_subprocess");
-    }
-
     /// A foreground start leaves a closed stdout closed, and the count is
     /// open while init runs, so an init that `dup2`s onto fd 1 would close
     /// it under the check after init.
-    #[cfg(blivet_thread_count_procfs)]
     #[test]
-    #[ignore]
-    fn the_status_file_stays_clear_of_stdio_subprocess() {
+    #[cfg(blivet_thread_count_procfs)]
+    fn the_status_file_stays_clear_of_stdio() {
         use std::os::fd::AsRawFd;
-        if !is_subprocess() {
+        if !isolated() {
             return;
         }
         let count = crate::test_support::with_fds_closed(&[1, 2], ThreadCount::open).unwrap();
@@ -461,22 +454,14 @@ mod tests {
     }
 
     // Covers: R126
-    #[test]
-    #[ignore = "needs root to chroot: the privileged tier runs it"]
-    fn the_check_after_init_reads_the_count_inside_a_chroot() {
-        run_in_subprocess(
-            "thread_count::tests::the_check_after_init_reads_the_count_inside_a_chroot_subprocess",
-        );
-    }
-
     /// An init that chroots into a jail without `/proc` (ADR 0005) must not
     /// cost the check its count. The harness keeps a second thread, so a
     /// count that was read reports `InitLeftThreads`; one that could not be
     /// read reports `SystemError`.
     #[test]
-    #[ignore]
-    fn the_check_after_init_reads_the_count_inside_a_chroot_subprocess() {
-        if !is_subprocess() {
+    #[ignore = "needs root to chroot: the privileged tier runs it"]
+    fn the_check_after_init_reads_the_count_inside_a_chroot() {
+        if !isolated() {
             return;
         }
         let jail = tempfile::tempdir().unwrap();
@@ -516,21 +501,13 @@ mod tests {
     }
 
     // Covers: R45, R126
-    #[test]
-    fn a_joined_thread_has_left_the_settled_count() {
-        run_in_subprocess(
-            "thread_count::tests::a_joined_thread_has_left_the_settled_count_subprocess",
-        );
-    }
-
     /// The kernel drops an exited thread from its count some microseconds
     /// after `pthread_join` returns, so one reading right after the join
     /// often still counts it. The harness keeps a thread of its own, so the
     /// count settles to this process's baseline rather than to 1.
     #[test]
-    #[ignore]
-    fn a_joined_thread_has_left_the_settled_count_subprocess() {
-        if !is_subprocess() {
+    fn a_joined_thread_has_left_the_settled_count() {
+        if !isolated() {
             return;
         }
         let source = ThreadCount::open().unwrap();
@@ -549,15 +526,7 @@ mod tests {
     /// the only test executing — hence the subprocess.
     #[test]
     fn current_thread_count_tracks_live_threads() {
-        run_in_subprocess(
-            "thread_count::tests::current_thread_count_tracks_live_threads_subprocess",
-        );
-    }
-
-    #[test]
-    #[ignore]
-    fn current_thread_count_tracks_live_threads_subprocess() {
-        if !is_subprocess() {
+        if !isolated() {
             return;
         }
         use std::sync::mpsc;

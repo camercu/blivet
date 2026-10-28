@@ -24,7 +24,7 @@ pub(crate) use undo::*;
 /// seccomp filter). A set flag makes its step take the error return so tests
 /// can pin that the failure *propagates* out of the sequence rather than being
 /// swallowed. Flags are process-global, so setting one asserts the test runs
-/// in its own process (`test_support::run_in_subprocess`).
+/// in its own process (`test_support::isolated`).
 #[cfg(test)]
 pub(crate) mod failpoints {
     use std::sync::atomic::{AtomicBool, AtomicI32, AtomicUsize, Ordering};

@@ -9,7 +9,7 @@
 
 use crate::forker::null_forker::NullForker;
 use crate::steps::failpoints;
-use crate::test_support::{ProcessSnapshot, is_subprocess, run_in_subprocess};
+use crate::test_support::{ProcessSnapshot, isolated};
 use crate::{DaemonConfig, DaemonizeError};
 
 extern "C" fn caller_handler(_: libc::c_int) {}
@@ -95,15 +95,7 @@ fn full_config(dir: &std::path::Path) -> DaemonConfig {
 // Covers: R164
 #[test]
 fn a_foreground_start_failing_anywhere_leaves_the_process_as_it_was() {
-    run_in_subprocess(
-        "undo_walk::a_foreground_start_failing_anywhere_leaves_the_process_as_it_was_subprocess",
-    );
-}
-
-#[test]
-#[ignore]
-fn a_foreground_start_failing_anywhere_leaves_the_process_as_it_was_subprocess() {
-    if !is_subprocess() {
+    if !isolated() {
         return;
     }
     caller_state();
@@ -116,15 +108,7 @@ fn a_foreground_start_failing_anywhere_leaves_the_process_as_it_was_subprocess()
 #[test]
 #[ignore = "needs root: the privileged tier runs it"]
 fn root_failing_anywhere_before_the_switch_leaves_the_process_as_it_was() {
-    run_in_subprocess(
-        "undo_walk::root_failing_anywhere_before_the_switch_leaves_the_process_as_it_was_subprocess",
-    );
-}
-
-#[test]
-#[ignore]
-fn root_failing_anywhere_before_the_switch_leaves_the_process_as_it_was_subprocess() {
-    if !is_subprocess() {
+    if !isolated() {
         return;
     }
     caller_state();

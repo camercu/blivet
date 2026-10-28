@@ -443,13 +443,8 @@ mod tests {
     use std::os::fd::AsFd;
 
     use crate::forker::null_forker::NullForker;
-    use crate::test_support::{is_subprocess, run_in_subprocess};
+    use crate::test_support::isolated;
     use std::panic::catch_unwind;
-
-    #[test]
-    fn both_forks_child_succeeds() {
-        run_in_subprocess("sequence::tests::both_forks_child_succeeds_subprocess");
-    }
 
     /// Test wrapper: `daemonize_inner` driven by the non-forking `NullForker`.
     ///
@@ -479,15 +474,7 @@ mod tests {
     // Covers: R153
     #[test]
     fn init_runs_only_in_the_instance_holding_the_lock() {
-        run_in_subprocess(
-            "sequence::tests::init_runs_only_in_the_instance_holding_the_lock_subprocess",
-        );
-    }
-
-    #[test]
-    #[ignore]
-    fn init_runs_only_in_the_instance_holding_the_lock_subprocess() {
-        if !is_subprocess() {
+        if !isolated() {
             return;
         }
         let dir = tempfile::tempdir().unwrap();
@@ -512,16 +499,8 @@ mod tests {
     // Covers: R153
     #[test]
     fn init_opens_after_the_fd_sweep_and_hands_back_its_value() {
-        run_in_subprocess(
-            "sequence::tests::init_opens_after_the_fd_sweep_and_hands_back_its_value_subprocess",
-        );
-    }
-
-    #[test]
-    #[ignore]
-    fn init_opens_after_the_fd_sweep_and_hands_back_its_value_subprocess() {
         use std::io::{Read, Seek, Write};
-        if !is_subprocess() {
+        if !isolated() {
             return;
         }
         let dir = tempfile::tempdir().unwrap();
@@ -545,15 +524,7 @@ mod tests {
     // Covers: R154
     #[test]
     fn init_error_returns_its_code_and_removes_the_pidfile() {
-        run_in_subprocess(
-            "sequence::tests::init_error_returns_its_code_and_removes_the_pidfile_subprocess",
-        );
-    }
-
-    #[test]
-    #[ignore]
-    fn init_error_returns_its_code_and_removes_the_pidfile_subprocess() {
-        if !is_subprocess() {
+        if !isolated() {
             return;
         }
         let dir = tempfile::tempdir().unwrap();
@@ -574,15 +545,7 @@ mod tests {
     // Covers: R145, R154
     #[test]
     fn a_failed_start_removes_the_pidfile_even_without_cleanup_on_drop() {
-        run_in_subprocess(
-            "sequence::tests::a_failed_start_removes_the_pidfile_even_without_cleanup_on_drop_subprocess",
-        );
-    }
-
-    #[test]
-    #[ignore]
-    fn a_failed_start_removes_the_pidfile_even_without_cleanup_on_drop_subprocess() {
-        if !is_subprocess() {
+        if !isolated() {
             return;
         }
         let dir = tempfile::tempdir().unwrap();
@@ -608,21 +571,15 @@ mod tests {
     extern "C" fn caller_handler(_: libc::c_int) {}
 
     // Covers: R164
-    #[test]
-    fn a_failed_foreground_start_restores_signals() {
-        run_in_subprocess("sequence::tests::a_failed_foreground_start_restores_signals_subprocess");
-    }
-
     /// The caller's handlers (the Rust runtime's stack-overflow SIGSEGV one
     /// among them) and its mask come back when the start fails after steps 9
     /// and 10 changed them, even from init, as sigaction and sigprocmask are
     /// safe with other threads running.
     #[test]
-    #[ignore]
     #[allow(unsafe_code)]
-    fn a_failed_foreground_start_restores_signals_subprocess() {
+    fn a_failed_foreground_start_restores_signals() {
         use nix::sys::signal::{SaFlags, SigAction, SigHandler, SigSet, Signal, sigaction};
-        if !is_subprocess() {
+        if !isolated() {
             return;
         }
         let handler = SigAction::new(
@@ -650,18 +607,10 @@ mod tests {
 
     // Covers: R164
     #[test]
-    fn a_start_failing_before_init_restores_the_env() {
-        run_in_subprocess(
-            "sequence::tests::a_start_failing_before_init_restores_the_env_subprocess",
-        );
-    }
-
-    #[test]
-    #[ignore]
     #[allow(unsafe_code)]
     #[allow(clippy::disallowed_methods)] // setenv thread safety: a one-thread subprocess
-    fn a_start_failing_before_init_restores_the_env_subprocess() {
-        if !is_subprocess() {
+    fn a_start_failing_before_init_restores_the_env() {
+        if !isolated() {
             return;
         }
         // SAFETY: this subprocess runs one thread.
@@ -692,19 +641,11 @@ mod tests {
     }
 
     // Covers: R164
-    #[test]
-    fn a_start_failing_in_init_leaves_the_env_alone() {
-        run_in_subprocess(
-            "sequence::tests::a_start_failing_in_init_leaves_the_env_alone_subprocess",
-        );
-    }
-
     /// From init on, other threads may run, and `setenv` with another thread
     /// alive is undefined behaviour. The env stays as step 11 set it.
     #[test]
-    #[ignore]
-    fn a_start_failing_in_init_leaves_the_env_alone_subprocess() {
-        if !is_subprocess() {
+    fn a_start_failing_in_init_leaves_the_env_alone() {
+        if !isolated() {
             return;
         }
         let mut config = DaemonConfig::new();
@@ -730,15 +671,7 @@ mod tests {
     #[test]
     #[ignore = "needs root: the privileged tier runs it"]
     fn root_gets_its_groups_back_after_a_failed_foreground_start() {
-        run_in_subprocess(
-            "sequence::tests::root_gets_its_groups_back_after_a_failed_foreground_start_subprocess",
-        );
-    }
-
-    #[test]
-    #[ignore]
-    fn root_gets_its_groups_back_after_a_failed_foreground_start_subprocess() {
-        if !is_subprocess() {
+        if !isolated() {
             return;
         }
         crate::sys::raw_setgroups(&[0, 4242, 4343]).unwrap();
@@ -759,15 +692,7 @@ mod tests {
     // Covers: R64, R65b, R155
     #[test]
     fn identity_chown_runs_after_init_and_before_the_switch() {
-        run_in_subprocess(
-            "sequence::tests::identity_chown_runs_after_init_and_before_the_switch_subprocess",
-        );
-    }
-
-    #[test]
-    #[ignore]
-    fn identity_chown_runs_after_init_and_before_the_switch_subprocess() {
-        if !is_subprocess() {
+        if !isolated() {
             return;
         }
         crate::test_support::shed_root();
@@ -796,15 +721,7 @@ mod tests {
     // Covers: R65a, R125
     #[test]
     fn chown_paths_false_goes_straight_to_the_switch() {
-        run_in_subprocess(
-            "sequence::tests::chown_paths_false_goes_straight_to_the_switch_subprocess",
-        );
-    }
-
-    #[test]
-    #[ignore]
-    fn chown_paths_false_goes_straight_to_the_switch_subprocess() {
-        if !is_subprocess() {
+        if !isolated() {
             return;
         }
         crate::test_support::shed_root();
@@ -826,19 +743,13 @@ mod tests {
     }
 
     // Covers: R163
-    #[test]
-    fn output_to_a_device_is_not_chowned() {
-        run_in_subprocess("sequence::tests::output_to_a_device_is_not_chowned_subprocess");
-    }
-
     /// `-o /dev/null` is a common way to drop output. The device is not the
     /// daemon's file: chowning it would hand `/dev/null` to the daemon's user
     /// as root, and as anyone else it fails the start with `ChownError`. The
     /// unprivileged run sees the second; the switch then fails on its own.
     #[test]
-    #[ignore]
-    fn output_to_a_device_is_not_chowned_subprocess() {
-        if !is_subprocess() {
+    fn output_to_a_device_is_not_chowned() {
+        if !isolated() {
             return;
         }
         crate::test_support::shed_root();
@@ -862,14 +773,8 @@ mod tests {
     #[test]
     #[ignore = "needs root: the privileged tier runs it"]
     fn root_leaves_a_device_output_with_its_owner() {
-        run_in_subprocess("sequence::tests::root_leaves_a_device_output_with_its_owner_subprocess");
-    }
-
-    #[test]
-    #[ignore]
-    fn root_leaves_a_device_output_with_its_owner_subprocess() {
         use std::os::unix::fs::MetadataExt;
-        if !is_subprocess() {
+        if !isolated() {
             return;
         }
         let owner = |m: std::fs::Metadata| (m.uid(), m.gid());
@@ -888,22 +793,14 @@ mod tests {
     }
 
     // Covers: R163
-    #[test]
-    fn the_chown_follows_the_opened_output_not_fd_1() {
-        run_in_subprocess(
-            "sequence::tests::the_chown_follows_the_opened_output_not_fd_1_subprocess",
-        );
-    }
-
     /// An init that puts another file on fd 1 must not have that file
     /// chowned: the chown reaches the stream step 12 opened. Here that is a
     /// device, which is skipped, so the unprivileged failure is setgid's; a
     /// chown through fd 1 would fail on the regular file first.
     #[test]
-    #[ignore]
     #[allow(clippy::disallowed_methods)] // init moves fd 1, in a subprocess of its own
-    fn the_chown_follows_the_opened_output_not_fd_1_subprocess() {
-        if !is_subprocess() {
+    fn the_chown_follows_the_opened_output_not_fd_1() {
+        if !isolated() {
             return;
         }
         crate::test_support::shed_root();
@@ -931,18 +828,10 @@ mod tests {
     // Covers: R163
     #[test]
     #[ignore = "needs root: the privileged tier runs it"]
-    fn root_chowns_the_opened_output_not_what_init_put_on_fd_1() {
-        run_in_subprocess(
-            "sequence::tests::root_chowns_the_opened_output_not_what_init_put_on_fd_1_subprocess",
-        );
-    }
-
-    #[test]
-    #[ignore]
     #[allow(clippy::disallowed_methods)] // init moves fd 1, in a subprocess of its own
-    fn root_chowns_the_opened_output_not_what_init_put_on_fd_1_subprocess() {
+    fn root_chowns_the_opened_output_not_what_init_put_on_fd_1() {
         use std::os::unix::fs::MetadataExt;
-        if !is_subprocess() {
+        if !isolated() {
             return;
         }
         let dir = tempfile::tempdir().unwrap();
@@ -977,13 +866,7 @@ mod tests {
     #[test]
     #[ignore = "getpwnam for a missing user can block on a networked NSS source"]
     fn unknown_user_fails_before_init_runs() {
-        run_in_subprocess("sequence::tests::unknown_user_fails_before_init_runs_subprocess");
-    }
-
-    #[test]
-    #[ignore]
-    fn unknown_user_fails_before_init_runs_subprocess() {
-        if !is_subprocess() {
+        if !isolated() {
             return;
         }
         let mut config = DaemonConfig::new();
@@ -1006,20 +889,12 @@ mod tests {
     }
 
     // Covers: R163
-    #[test]
-    fn the_chown_follows_the_opened_pidfile_not_its_path() {
-        run_in_subprocess(
-            "sequence::tests::the_chown_follows_the_opened_pidfile_not_its_path_subprocess",
-        );
-    }
-
     /// An init that takes the pidfile's path away (a chroot does, in effect)
     /// must not make the chown skip it: the chown reaches the file the
     /// sequence opened. Unprivileged, that chown fails, which shows it ran.
     #[test]
-    #[ignore]
-    fn the_chown_follows_the_opened_pidfile_not_its_path_subprocess() {
-        if !is_subprocess() {
+    fn the_chown_follows_the_opened_pidfile_not_its_path() {
+        if !isolated() {
             return;
         }
         crate::test_support::shed_root();
@@ -1045,13 +920,6 @@ mod tests {
     }
 
     // Covers: R97
-    #[test]
-    fn a_derived_lock_pidfile_is_written_through_the_lock() {
-        run_in_subprocess(
-            "sequence::tests::a_derived_lock_pidfile_is_written_through_the_lock_subprocess",
-        );
-    }
-
     /// Step 8 is handed the descriptor step 7 locked, so it opens no second
     /// one: while init runs, one descriptor holds the pidfile. That the write
     /// then goes through that descriptor, not the path, is pinned at the step:
@@ -1060,10 +928,9 @@ mod tests {
     /// its own, already closed, directory descriptor, which no `BorrowedFd`
     /// may name.
     #[test]
-    #[ignore]
     #[allow(unsafe_code)]
-    fn a_derived_lock_pidfile_is_written_through_the_lock_subprocess() {
-        if !is_subprocess() {
+    fn a_derived_lock_pidfile_is_written_through_the_lock() {
+        if !isolated() {
             return;
         }
         let dir = tempfile::tempdir().unwrap();
@@ -1094,19 +961,11 @@ mod tests {
     }
 
     // Covers: R162
-    #[test]
-    fn supplementary_groups_are_set_before_init_runs() {
-        run_in_subprocess(
-            "sequence::tests::supplementary_groups_are_set_before_init_runs_subprocess",
-        );
-    }
-
     /// Unprivileged, `initgroups` fails with EPERM, which shows where it runs:
     /// the error must come before init, not after it.
     #[test]
-    #[ignore]
-    fn supplementary_groups_are_set_before_init_runs_subprocess() {
-        if !is_subprocess() {
+    fn supplementary_groups_are_set_before_init_runs() {
+        if !isolated() {
             return;
         }
         crate::test_support::shed_root();
@@ -1127,20 +986,12 @@ mod tests {
     }
 
     // Covers: R162
-    #[test]
-    #[ignore = "needs root and the image's testuser: the privileged tier runs it"]
-    fn supplementary_groups_come_from_the_real_database_when_init_chroots() {
-        run_in_subprocess(
-            "sequence::tests::supplementary_groups_come_from_the_real_database_when_init_chroots_subprocess",
-        );
-    }
-
     /// An init that chroots into a jail whose `/etc/group` lists no groups
     /// must not cost the daemon its supplementary groups (ADR 0005).
     #[test]
-    #[ignore]
-    fn supplementary_groups_come_from_the_real_database_when_init_chroots_subprocess() {
-        if !is_subprocess() {
+    #[ignore = "needs root and the image's testuser: the privileged tier runs it"]
+    fn supplementary_groups_come_from_the_real_database_when_init_chroots() {
+        if !isolated() {
             return;
         }
         let supp = nix::unistd::Group::from_name("testsupp")
@@ -1169,20 +1020,12 @@ mod tests {
     }
 
     // Covers: R164
-    #[test]
-    #[ignore = "needs root and the image's testuser: the privileged tier runs it"]
-    fn a_failed_setuid_gives_the_caller_its_group_back() {
-        run_in_subprocess(
-            "sequence::tests::a_failed_setuid_gives_the_caller_its_group_back_subprocess",
-        );
-    }
-
     /// `setgid` succeeded and `setuid` failed: the foreground caller, still
     /// root, gets its primary group back rather than the target user's.
     #[test]
-    #[ignore]
-    fn a_failed_setuid_gives_the_caller_its_group_back_subprocess() {
-        if !is_subprocess() {
+    #[ignore = "needs root and the image's testuser: the privileged tier runs it"]
+    fn a_failed_setuid_gives_the_caller_its_group_back() {
+        if !isolated() {
             return;
         }
         let before = (nix::unistd::getgid(), nix::unistd::getegid());
@@ -1204,22 +1047,14 @@ mod tests {
     }
 
     // Covers: R164
-    #[test]
-    fn a_failed_foreground_sequence_puts_the_callers_process_back() {
-        run_in_subprocess(
-            "sequence::tests::a_failed_foreground_sequence_puts_the_callers_process_back_subprocess",
-        );
-    }
-
     /// Foreground mode changes the caller's own process. A failure after
     /// step 12 (here, init's) must leave stdin, stdout, stderr, the umask, and
     /// the working directory as the caller had them, so the error it prints
     /// reaches its terminal, not the log file.
     #[test]
-    #[ignore]
-    fn a_failed_foreground_sequence_puts_the_callers_process_back_subprocess() {
+    fn a_failed_foreground_sequence_puts_the_callers_process_back() {
         use nix::sys::stat::{Mode, fstat, umask};
-        if !is_subprocess() {
+        if !isolated() {
             return;
         }
         let dir = tempfile::tempdir().unwrap();
@@ -1270,20 +1105,12 @@ mod tests {
     }
 
     // Covers: R164
-    #[test]
-    fn a_failed_start_frees_the_lock_for_the_next_one() {
-        run_in_subprocess(
-            "sequence::tests::a_failed_start_frees_the_lock_for_the_next_one_subprocess",
-        );
-    }
-
     /// The abort guard removes the pidfile and then releases the lock, so a
     /// second instance never takes a lock whose pidfile is about to vanish.
     /// The order is the guard's `Drop`; this checks that both happen.
     #[test]
-    #[ignore]
-    fn a_failed_start_frees_the_lock_for_the_next_one_subprocess() {
-        if !is_subprocess() {
+    fn a_failed_start_frees_the_lock_for_the_next_one() {
+        if !isolated() {
             return;
         }
         let dir = tempfile::tempdir().unwrap();
@@ -1306,20 +1133,12 @@ mod tests {
     }
 
     // Covers: R164
-    #[test]
-    fn a_foreground_start_from_a_directory_it_cannot_read_succeeds() {
-        run_in_subprocess(
-            "sequence::tests::a_foreground_start_from_a_directory_it_cannot_read_succeeds_subprocess",
-        );
-    }
-
     /// `sudo -u app daemonize -f` from a home the user may enter but not list:
     /// saving the working directory for undo must not fail the start.
     #[test]
-    #[ignore]
-    fn a_foreground_start_from_a_directory_it_cannot_read_succeeds_subprocess() {
+    fn a_foreground_start_from_a_directory_it_cannot_read_succeeds() {
         use std::os::unix::fs::PermissionsExt;
-        if !is_subprocess() {
+        if !isolated() {
             return;
         }
         let dir = tempfile::tempdir().unwrap();
@@ -1343,13 +1162,7 @@ mod tests {
     // Covers: R154
     #[test]
     fn daemon_init_error_reaches_the_launcher() {
-        run_in_subprocess("sequence::tests::daemon_init_error_reaches_the_launcher_subprocess");
-    }
-
-    #[test]
-    #[ignore]
-    fn daemon_init_error_reaches_the_launcher_subprocess() {
-        if !is_subprocess() {
+        if !isolated() {
             return;
         }
         let mut config = DaemonConfig::new();
@@ -1371,9 +1184,8 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
-    fn both_forks_child_succeeds_subprocess() {
-        if !is_subprocess() {
+    fn both_forks_child_succeeds() {
+        if !isolated() {
             return;
         }
         let mut config = DaemonConfig::new();
@@ -1537,15 +1349,7 @@ mod tests {
     // instead of exiting.
     #[test]
     fn daemon_post_fork_failure_exits_not_returns() {
-        crate::test_support::run_in_subprocess(
-            "sequence::tests::daemon_post_fork_failure_exits_not_returns_subprocess",
-        );
-    }
-
-    #[test]
-    #[ignore]
-    fn daemon_post_fork_failure_exits_not_returns_subprocess() {
-        if !crate::test_support::is_subprocess() {
+        if !crate::test_support::isolated() {
             return;
         }
         // Daemon mode (foreground stays false); chdir to a nonexistent path
@@ -1569,21 +1373,13 @@ mod tests {
     }
 
     // Covers: R166
-    #[test]
-    fn daemon_init_panic_exits_and_reports_its_text() {
-        crate::test_support::run_in_subprocess(
-            "sequence::tests::daemon_init_panic_exits_and_reports_its_text_subprocess",
-        );
-    }
-
     /// In the daemon, unwinding out of the sequence would run the caller's
     /// frames, and any `catch_unwind` recovery in them, in a detached process
     /// whose launcher has already reported failure. The panic must end the
     /// daemon like an error does, with its text on the channel.
     #[test]
-    #[ignore]
-    fn daemon_init_panic_exits_and_reports_its_text_subprocess() {
-        if !crate::test_support::is_subprocess() {
+    fn daemon_init_panic_exits_and_reports_its_text() {
+        if !crate::test_support::isolated() {
             return;
         }
         let mut config = DaemonConfig::new();
@@ -1619,15 +1415,9 @@ mod tests {
     // Covers: R66, R68, R121
     #[test]
     fn foreground_mode_skips_fork() {
-        run_in_subprocess("sequence::tests::foreground_mode_skips_fork_subprocess");
-    }
-
-    #[test]
-    #[ignore]
-    fn foreground_mode_skips_fork_subprocess() {
         use nix::sys::stat::fstat;
 
-        if !is_subprocess() {
+        if !isolated() {
             return;
         }
         let mut config = DaemonConfig::new();
@@ -1675,21 +1465,13 @@ mod tests {
     }
 
     // Covers: R147
-    #[test]
-    fn foreground_redirect_that_fails_puts_stdout_back() {
-        run_in_subprocess(
-            "sequence::tests::foreground_redirect_that_fails_puts_stdout_back_subprocess",
-        );
-    }
-
     /// A foreground caller sees its stdio after a failed start, so step 12
     /// must save and restore fd 1 there.
     #[test]
-    #[ignore]
-    fn foreground_redirect_that_fails_puts_stdout_back_subprocess() {
+    fn foreground_redirect_that_fails_puts_stdout_back() {
         use nix::sys::stat::fstat;
 
-        if !is_subprocess() {
+        if !isolated() {
             return;
         }
         let dir = tempfile::tempdir().unwrap();
@@ -1717,21 +1499,13 @@ mod tests {
     }
 
     // Covers: R147
-    #[test]
-    fn daemon_redirect_starts_with_no_descriptor_free_to_save_stdout() {
-        run_in_subprocess(
-            "sequence::tests::daemon_redirect_starts_with_no_descriptor_free_to_save_stdout_subprocess",
-        );
-    }
-
     /// Step 12 saves fd 1 only where a failure could be seen: a daemon child
     /// that inherited descriptors up to its limit still gets past it.
     #[test]
-    #[ignore]
-    fn daemon_redirect_starts_with_no_descriptor_free_to_save_stdout_subprocess() {
+    fn daemon_redirect_starts_with_no_descriptor_free_to_save_stdout() {
         use nix::sys::stat::{fstat, stat};
 
-        if !is_subprocess() {
+        if !isolated() {
             return;
         }
         let dir = tempfile::tempdir().unwrap();
@@ -1784,13 +1558,7 @@ mod tests {
     // Covers: R95
     #[test]
     fn devnull_failure_propagates() {
-        run_in_subprocess("sequence::tests::devnull_failure_propagates_subprocess");
-    }
-
-    #[test]
-    #[ignore]
-    fn devnull_failure_propagates_subprocess() {
-        if !is_subprocess() {
+        if !isolated() {
             return;
         }
         steps::failpoints::DEVNULL_OPEN_FAILS.set();
@@ -1811,13 +1579,7 @@ mod tests {
     // Covers: R145
     #[test]
     fn pidfile_write_failure_leaves_no_pidfile() {
-        run_in_subprocess("sequence::tests::pidfile_write_failure_leaves_no_pidfile_subprocess");
-    }
-
-    #[test]
-    #[ignore]
-    fn pidfile_write_failure_leaves_no_pidfile_subprocess() {
-        if !is_subprocess() {
+        if !isolated() {
             return;
         }
         steps::failpoints::PIDFILE_WRITE_FAILS.set();
@@ -1843,15 +1605,7 @@ mod tests {
     // Covers: R145
     #[test]
     fn pidfile_open_failure_leaves_the_existing_file_alone() {
-        run_in_subprocess(
-            "sequence::tests::pidfile_open_failure_leaves_the_existing_file_alone_subprocess",
-        );
-    }
-
-    #[test]
-    #[ignore]
-    fn pidfile_open_failure_leaves_the_existing_file_alone_subprocess() {
-        if !is_subprocess() {
+        if !isolated() {
             return;
         }
         steps::failpoints::PIDFILE_OPEN_FAILS.set();
@@ -1885,13 +1639,7 @@ mod tests {
     // Covers: R134, R145
     #[test]
     fn sigaction_failure_propagates() {
-        run_in_subprocess("sequence::tests::sigaction_failure_propagates_subprocess");
-    }
-
-    #[test]
-    #[ignore]
-    fn sigaction_failure_propagates_subprocess() {
-        if !is_subprocess() {
+        if !isolated() {
             return;
         }
         steps::failpoints::SIGACTION_FAILS.set();
@@ -1920,13 +1668,7 @@ mod tests {
     // Covers: R134, R145
     #[test]
     fn sigprocmask_failure_propagates() {
-        run_in_subprocess("sequence::tests::sigprocmask_failure_propagates_subprocess");
-    }
-
-    #[test]
-    #[ignore]
-    fn sigprocmask_failure_propagates_subprocess() {
-        if !is_subprocess() {
+        if !isolated() {
             return;
         }
         steps::failpoints::SIGPROCMASK_FAILS.set();
@@ -1955,13 +1697,7 @@ mod tests {
     // Covers: R105, R145
     #[test]
     fn getrlimit_failure_propagates() {
-        run_in_subprocess("sequence::tests::getrlimit_failure_propagates_subprocess");
-    }
-
-    #[test]
-    #[ignore]
-    fn getrlimit_failure_propagates_subprocess() {
-        if !is_subprocess() {
+        if !isolated() {
             return;
         }
         // Force the brute-force fallback (the fd listing normally short-circuits
@@ -1994,13 +1730,7 @@ mod tests {
     // Covers: R131
     #[test]
     fn pidfile_only_holds_derived_lock() {
-        run_in_subprocess("sequence::tests::pidfile_only_holds_derived_lock_subprocess");
-    }
-
-    #[test]
-    #[ignore]
-    fn pidfile_only_holds_derived_lock_subprocess() {
-        if !is_subprocess() {
+        if !isolated() {
             return;
         }
         let dir = tempfile::tempdir().unwrap();
@@ -2028,13 +1758,7 @@ mod tests {
     // Covers: R134, R145
     #[test]
     fn foreground_lock_conflict_returns_err() {
-        run_in_subprocess("sequence::tests::foreground_lock_conflict_returns_err_subprocess");
-    }
-
-    #[test]
-    #[ignore]
-    fn foreground_lock_conflict_returns_err_subprocess() {
-        if !is_subprocess() {
+        if !isolated() {
             return;
         }
         let dir = tempfile::tempdir().unwrap();
@@ -2065,13 +1789,7 @@ mod tests {
     // Covers: R67
     #[test]
     fn foreground_mode_notify_parent_noop() {
-        run_in_subprocess("sequence::tests::foreground_mode_notify_parent_noop_subprocess");
-    }
-
-    #[test]
-    #[ignore]
-    fn foreground_mode_notify_parent_noop_subprocess() {
-        if !is_subprocess() {
+        if !isolated() {
             return;
         }
         let mut config = DaemonConfig::new();
@@ -2083,15 +1801,9 @@ mod tests {
 
     // Covers: R69, R122
     #[test]
-    fn close_fds_false_preserves_fds() {
-        run_in_subprocess("sequence::tests::close_fds_false_preserves_fds_subprocess");
-    }
-
-    #[test]
-    #[ignore]
     #[allow(clippy::disallowed_methods)] // a test pipe or file, not the channel: SIGPIPE cannot hit it
-    fn close_fds_false_preserves_fds_subprocess() {
-        if !is_subprocess() {
+    fn close_fds_false_preserves_fds() {
+        if !isolated() {
             return;
         }
         let (rd, wr) = crate::test_support::make_pipe();
@@ -2115,13 +1827,7 @@ mod tests {
     // Covers: R120
     #[test]
     fn context_carries_config_fields() {
-        run_in_subprocess("sequence::tests::context_carries_config_fields_subprocess");
-    }
-
-    #[test]
-    #[ignore]
-    fn context_carries_config_fields_subprocess() {
-        if !is_subprocess() {
+        if !isolated() {
             return;
         }
         let dir = tempfile::tempdir().unwrap();

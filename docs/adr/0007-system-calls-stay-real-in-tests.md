@@ -133,9 +133,10 @@ where planning fits.
   that finds a step that changes state without returning a token.
 - Three parts of the data-tokens design carry over to `main`, each as its
   own change:
-  - An `isolated_test!` macro makes each isolated test one function. Today
-    each needs a pair: an `#[ignore]` test and the body that
-    `is_subprocess` selects.
+  - Each isolated test becomes one function. Today each needs a pair: an
+    `#[ignore]` test and the body that `is_subprocess` selects. The spike
+    used a macro; `main` uses `test_support::isolated`, a plain function,
+    so rustfmt still formats the test bodies.
   - A plain-data enum of saved state, with exhaustive matches for
     restoring, for `single_threaded`, and for `held_fd`, replaces the
     `Box<dyn Restore>` in each token. The enum stays inside `Undo`, so

@@ -161,7 +161,7 @@ mod tests {
 
     use super::*;
 
-    use crate::test_support::{is_subprocess, run_in_subprocess};
+    use crate::test_support::isolated;
 
     // Covers: R96
     #[test]
@@ -174,20 +174,12 @@ mod tests {
     }
 
     // Covers: R152
-    #[test]
-    fn lockfile_and_pidfile_stay_clear_of_stdio() {
-        crate::test_support::run_in_subprocess(
-            "steps::pidfile::tests::lockfile_and_pidfile_stay_clear_of_stdio_subprocess",
-        );
-    }
-
     /// In foreground mode step 6 leaves a closed stdout closed, so `open`
     /// would hand the lockfile fd 1, and step 12's redirect of stdout would
     /// close it and drop the lock.
     #[test]
-    #[ignore]
-    fn lockfile_and_pidfile_stay_clear_of_stdio_subprocess() {
-        if !crate::test_support::is_subprocess() {
+    fn lockfile_and_pidfile_stay_clear_of_stdio() {
+        if !crate::test_support::isolated() {
             return;
         }
         let dir = tempfile::tempdir().unwrap();
@@ -252,17 +244,9 @@ mod tests {
     // Covers: R98
     #[test]
     fn write_pidfile_standalone_mode_is_0644() {
-        run_in_subprocess(
-            "steps::pidfile::tests::write_pidfile_standalone_mode_is_0644_subprocess",
-        );
-    }
-
-    #[test]
-    #[ignore]
-    fn write_pidfile_standalone_mode_is_0644_subprocess() {
         use std::os::unix::fs::PermissionsExt;
 
-        if !is_subprocess() {
+        if !isolated() {
             return;
         }
         // umask 0 so the on-disk mode reflects the open()/create mode exactly,

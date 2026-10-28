@@ -267,15 +267,7 @@ mod tests {
     // Covers: R148
     #[test]
     fn notification_pipe_with_no_descriptor_free_is_an_error() {
-        crate::test_support::run_in_subprocess(
-            "forker::tests::notification_pipe_with_no_descriptor_free_is_an_error_subprocess",
-        );
-    }
-
-    #[test]
-    #[ignore]
-    fn notification_pipe_with_no_descriptor_free_is_an_error_subprocess() {
-        if !crate::test_support::is_subprocess() {
+        if !crate::test_support::isolated() {
             return;
         }
         let held = crate::test_support::fill_fd_table(0);
@@ -290,22 +282,14 @@ mod tests {
     }
 
     // Covers: R152
-    #[test]
-    fn notification_pipe_ends_stay_clear_of_stdio() {
-        crate::test_support::run_in_subprocess(
-            "forker::tests::notification_pipe_ends_stay_clear_of_stdio_subprocess",
-        );
-    }
-
     /// With stdin, stdout, and stderr closed, `socketpair` hands out the lowest
     /// free descriptors, 0 and 1. Step 6 then `dup2`s `/dev/null` over them and
     /// the launcher loses its channel.
     #[test]
-    #[ignore]
-    fn notification_pipe_ends_stay_clear_of_stdio_subprocess() {
+    fn notification_pipe_ends_stay_clear_of_stdio() {
         use std::os::fd::AsRawFd;
 
-        if !crate::test_support::is_subprocess() {
+        if !crate::test_support::isolated() {
             return;
         }
         // All of stdio closed gives the ends 0 and 1; only stderr closed gives

@@ -160,15 +160,7 @@ mod tests {
 
     #[test]
     fn set_umask_applies_and_can_be_read_back() {
-        crate::test_support::run_in_subprocess(
-            "steps::process::tests::set_umask_applies_and_can_be_read_back_subprocess",
-        );
-    }
-
-    #[test]
-    #[ignore]
-    fn set_umask_applies_and_can_be_read_back_subprocess() {
-        if !crate::test_support::is_subprocess() {
+        if !crate::test_support::isolated() {
             return;
         }
         // Start from a different umask, so a set_umask that did nothing fails.
@@ -180,15 +172,7 @@ mod tests {
 
     #[test]
     fn change_dir_to_tempdir() {
-        crate::test_support::run_in_subprocess(
-            "steps::process::tests::change_dir_to_tempdir_subprocess",
-        );
-    }
-
-    #[test]
-    #[ignore]
-    fn change_dir_to_tempdir_subprocess() {
-        if !crate::test_support::is_subprocess() {
+        if !crate::test_support::isolated() {
             return;
         }
         let tmp = tempfile::tempdir().unwrap();
@@ -200,15 +184,7 @@ mod tests {
 
     #[test]
     fn change_dir_nonexistent_fails() {
-        crate::test_support::run_in_subprocess(
-            "steps::process::tests::change_dir_nonexistent_fails_subprocess",
-        );
-    }
-
-    #[test]
-    #[ignore]
-    fn change_dir_nonexistent_fails_subprocess() {
-        if !crate::test_support::is_subprocess() {
+        if !crate::test_support::isolated() {
             return;
         }
         let result = change_dir(
@@ -237,17 +213,9 @@ mod tests {
     }
 
     #[test]
-    fn set_env_vars_applies() {
-        crate::test_support::run_in_subprocess(
-            "steps::process::tests::set_env_vars_applies_subprocess",
-        );
-    }
-
-    #[test]
-    #[ignore]
     #[allow(unsafe_code)]
-    fn set_env_vars_applies_subprocess() {
-        if !crate::test_support::is_subprocess() {
+    fn set_env_vars_applies() {
+        if !crate::test_support::isolated() {
             return;
         }
         let vars = vec![
@@ -260,17 +228,9 @@ mod tests {
     }
 
     #[test]
-    fn set_env_vars_last_write_wins() {
-        crate::test_support::run_in_subprocess(
-            "steps::process::tests::set_env_vars_last_write_wins_subprocess",
-        );
-    }
-
-    #[test]
-    #[ignore]
     #[allow(unsafe_code)]
-    fn set_env_vars_last_write_wins_subprocess() {
-        if !crate::test_support::is_subprocess() {
+    fn set_env_vars_last_write_wins() {
+        if !crate::test_support::isolated() {
             return;
         }
         let vars = vec![

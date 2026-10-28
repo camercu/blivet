@@ -329,20 +329,12 @@ mod tests {
     use super::*;
 
     // Covers: R164
-    #[test]
-    fn a_reset_failing_part_way_puts_back_what_it_replaced() {
-        crate::test_support::run_in_subprocess(
-            "signals::tests::a_reset_failing_part_way_puts_back_what_it_replaced_subprocess",
-        );
-    }
-
     /// SIGHUP and SIGINT sit below SIGTERM on every platform, and the
     /// failpoint fails at SIGTERM, so the step has replaced both first.
     #[test]
-    #[ignore]
     #[allow(unsafe_code)]
-    fn a_reset_failing_part_way_puts_back_what_it_replaced_subprocess() {
-        if !crate::test_support::is_subprocess() {
+    fn a_reset_failing_part_way_puts_back_what_it_replaced() {
+        if !crate::test_support::isolated() {
             return;
         }
         use nix::sys::signal::{SaFlags, SigAction, SigHandler, SigSet, Signal, sigaction};
@@ -365,21 +357,13 @@ mod tests {
     }
 
     // Covers: R99
-    #[test]
-    fn a_signal_refused_with_einval_is_skipped() {
-        crate::test_support::run_in_subprocess(
-            "signals::tests::a_signal_refused_with_einval_is_skipped_subprocess",
-        );
-    }
-
     /// Linux never returns `EINVAL` in the range, so the failpoint stands in
     /// for the invalid numbers BSD and macOS meet. SIGTTIN sits above
     /// SIGTERM on every platform, so its reset shows the step went on.
     #[test]
-    #[ignore]
     #[allow(unsafe_code)]
-    fn a_signal_refused_with_einval_is_skipped_subprocess() {
-        if !crate::test_support::is_subprocess() {
+    fn a_signal_refused_with_einval_is_skipped() {
+        if !crate::test_support::isolated() {
             return;
         }
         use nix::sys::signal::{SaFlags, SigAction, SigHandler, SigSet, Signal, sigaction};
@@ -399,17 +383,9 @@ mod tests {
 
     // Covers: R99
     #[test]
-    fn reset_signal_dispositions_restores_default() {
-        crate::test_support::run_in_subprocess(
-            "signals::tests::reset_signal_dispositions_restores_default_subprocess",
-        );
-    }
-
-    #[test]
-    #[ignore]
     #[allow(unsafe_code)]
-    fn reset_signal_dispositions_restores_default_subprocess() {
-        if !crate::test_support::is_subprocess() {
+    fn reset_signal_dispositions_restores_default() {
+        if !crate::test_support::isolated() {
             return;
         }
         use nix::sys::signal::{SaFlags, SigAction, SigHandler, SigSet, Signal, sigaction};
@@ -441,17 +417,9 @@ mod tests {
 
     // Covers: R127
     #[test]
-    fn reset_signal_dispositions_preserves_sigpipe() {
-        crate::test_support::run_in_subprocess(
-            "signals::tests::reset_signal_dispositions_preserves_sigpipe_subprocess",
-        );
-    }
-
-    #[test]
-    #[ignore]
     #[allow(unsafe_code)]
-    fn reset_signal_dispositions_preserves_sigpipe_subprocess() {
-        if !crate::test_support::is_subprocess() {
+    fn reset_signal_dispositions_preserves_sigpipe() {
+        if !crate::test_support::isolated() {
             return;
         }
         use nix::sys::signal::{SaFlags, SigAction, SigHandler, SigSet, Signal, sigaction};
@@ -484,7 +452,7 @@ mod tests {
         );
     }
 
-    use crate::test_support::{is_subprocess, run_in_subprocess};
+    use crate::test_support::isolated;
     use std::sync::atomic::Ordering;
 
     // Covers: R151
@@ -556,19 +524,13 @@ mod tests {
     }
 
     // Covers: R129
-    #[test]
-    fn a_refused_slice_changes_nothing() {
-        run_in_subprocess("signals::tests::a_refused_slice_changes_nothing_subprocess");
-    }
-
     /// Every refusal is decided before the first handler goes in: a slice
     /// whose last signal is refused leaves the signals before it, and the
     /// handler's pidfile path, as they were. Mutates process-global signal
     /// state, hence the subprocess isolation.
     #[test]
-    #[ignore]
-    fn a_refused_slice_changes_nothing_subprocess() {
-        if !is_subprocess() {
+    fn a_refused_slice_changes_nothing() {
+        if !isolated() {
             return;
         }
 

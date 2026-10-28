@@ -186,17 +186,7 @@ mod tests {
     // Covers: R103, R104
     #[test]
     fn close_inherited_fds_preserves_skipped() {
-        crate::test_support::run_in_subprocess(
-            "steps::fds::tests::close_inherited_fds_preserves_skipped_subprocess",
-        );
-    }
-
-    #[test]
-    #[ignore = "closes fds process-wide; only safe in an isolated subprocess"]
-    fn close_inherited_fds_preserves_skipped_subprocess() {
-        // Guard so this never runs as a stray `--include-ignored` in the shared
-        // process; it executes only when spawned by run_in_subprocess.
-        if !crate::test_support::is_subprocess() {
+        if !crate::test_support::isolated() {
             return;
         }
         assert_closes_all_but_skipped();
@@ -213,15 +203,7 @@ mod tests {
     // Covers: R103, R104, R135
     #[test]
     fn close_inherited_fds_without_a_listing_preserves_skipped() {
-        crate::test_support::run_in_subprocess(
-            "steps::fds::tests::close_inherited_fds_without_a_listing_preserves_skipped_subprocess",
-        );
-    }
-
-    #[test]
-    #[ignore = "closes fds process-wide; only safe in an isolated subprocess"]
-    fn close_inherited_fds_without_a_listing_preserves_skipped_subprocess() {
-        if !crate::test_support::is_subprocess() {
+        if !crate::test_support::isolated() {
             return;
         }
         // Process-global, which is why this runs isolated. Where the platform

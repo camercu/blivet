@@ -603,18 +603,10 @@ mod tests {
     }
 
     // Covers: R150
-    #[test]
-    fn the_exec_marker_needs_no_free_descriptor() {
-        crate::test_support::run_in_subprocess(
-            "notify::tests::the_exec_marker_needs_no_free_descriptor_subprocess",
-        );
-    }
-
     /// A daemon at its descriptor limit must still be able to `exec`.
     #[test]
-    #[ignore]
-    fn the_exec_marker_needs_no_free_descriptor_subprocess() {
-        if !crate::test_support::is_subprocess() {
+    fn the_exec_marker_needs_no_free_descriptor() {
+        if !crate::test_support::isolated() {
             return;
         }
         let (rd, wr) = make_pipe();
@@ -628,20 +620,12 @@ mod tests {
     }
 
     // Covers: R161
-    #[test]
-    fn an_error_report_with_nowhere_to_go_does_not_panic() {
-        crate::test_support::run_in_subprocess(
-            "notify::tests::an_error_report_with_nowhere_to_go_does_not_panic_subprocess",
-        );
-    }
-
     /// The launcher is gone and stderr is a pipe nobody reads (or a full
     /// disk): the report is lost, but a panic here would unwind into the
     /// caller's code inside the daemon instead of exiting.
     #[test]
-    #[ignore]
-    fn an_error_report_with_nowhere_to_go_does_not_panic_subprocess() {
-        if !crate::test_support::is_subprocess() {
+    fn an_error_report_with_nowhere_to_go_does_not_panic() {
+        if !crate::test_support::isolated() {
             return;
         }
         let (rd, wr) = make_pipe();
@@ -670,26 +654,18 @@ mod tests {
     }
 
     // Covers: R165
-    #[test]
-    fn a_send_to_a_gone_launcher_raises_no_sigpipe() {
-        crate::test_support::run_in_subprocess(
-            "notify::tests::a_send_to_a_gone_launcher_raises_no_sigpipe_subprocess",
-        );
-    }
-
     /// A handler records any SIGPIPE, whichever thread the kernel delivers
     /// it to. A raised one arrives within microseconds; the wait only gives a
     /// regression time to show, so a correct send can never fail this test.
     #[test]
-    #[ignore]
     #[allow(unsafe_code)]
-    fn a_send_to_a_gone_launcher_raises_no_sigpipe_subprocess() {
+    fn a_send_to_a_gone_launcher_raises_no_sigpipe() {
         use std::sync::atomic::{AtomicBool, Ordering};
         static RAISED: AtomicBool = AtomicBool::new(false);
         extern "C" fn record(_: libc::c_int) {
             RAISED.store(true, Ordering::SeqCst);
         }
-        if !crate::test_support::is_subprocess() {
+        if !crate::test_support::isolated() {
             return;
         }
         let (launcher, daemon) = channel().unwrap();

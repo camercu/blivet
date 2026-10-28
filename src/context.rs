@@ -600,20 +600,12 @@ mod tests {
     }
 
     // Covers: R127, R128
-    #[test]
-    fn a_failed_exec_puts_the_callers_sigpipe_back() {
-        crate::test_support::run_in_subprocess(
-            "context::tests::a_failed_exec_puts_the_callers_sigpipe_back_subprocess",
-        );
-    }
-
     /// R128 sets the default SIGPIPE just before execvp. The daemon that goes
     /// on to report a failed exec runs with the caller's disposition again,
     /// here the Rust runtime's SIG_IGN.
     #[test]
-    #[ignore]
-    fn a_failed_exec_puts_the_callers_sigpipe_back_subprocess() {
-        if !crate::test_support::is_subprocess() {
+    fn a_failed_exec_puts_the_callers_sigpipe_back() {
+        if !crate::test_support::isolated() {
             return;
         }
         let mut ctx = ctx(&DaemonConfig::new(), None, None);
@@ -967,15 +959,7 @@ mod tests {
 
     #[test]
     fn cleanup_on_signals_uncatchable_signal_rejected() {
-        crate::test_support::run_in_subprocess(
-            "context::tests::cleanup_on_signals_uncatchable_signal_rejected_subprocess",
-        );
-    }
-
-    #[test]
-    #[ignore]
-    fn cleanup_on_signals_uncatchable_signal_rejected_subprocess() {
-        if !crate::test_support::is_subprocess() {
+        if !crate::test_support::isolated() {
             return;
         }
         let dir = tempfile::tempdir().unwrap();
@@ -992,23 +976,15 @@ mod tests {
     }
 
     // Covers: R149
-    #[test]
-    fn cleanup_on_signals_refuses_a_signal_that_already_has_a_handler() {
-        crate::test_support::run_in_subprocess(
-            "context::tests::cleanup_on_signals_refuses_a_signal_that_already_has_a_handler_subprocess",
-        );
-    }
-
     /// Another library's handler (signal-hook's, say) on one signal of the
     /// slice: the call is refused, names that signal, and changes nothing,
     /// not even the signals earlier in the slice.
     #[test]
-    #[ignore]
     #[allow(unsafe_code)]
-    fn cleanup_on_signals_refuses_a_signal_that_already_has_a_handler_subprocess() {
+    fn cleanup_on_signals_refuses_a_signal_that_already_has_a_handler() {
         use nix::sys::signal::{SaFlags, SigAction, SigHandler, SigSet, Signal, sigaction};
 
-        if !crate::test_support::is_subprocess() {
+        if !crate::test_support::isolated() {
             return;
         }
         extern "C" fn theirs(_: libc::c_int) {}
@@ -1045,22 +1021,14 @@ mod tests {
     }
 
     // Covers: R149
-    #[test]
-    fn cleanup_on_signals_refuses_an_ignored_signal() {
-        crate::test_support::run_in_subprocess(
-            "context::tests::cleanup_on_signals_refuses_an_ignored_signal_subprocess",
-        );
-    }
-
     /// An ignored signal is a choice too: installing over it would make the
     /// signal kill the process.
     #[test]
-    #[ignore]
     #[allow(unsafe_code)]
-    fn cleanup_on_signals_refuses_an_ignored_signal_subprocess() {
+    fn cleanup_on_signals_refuses_an_ignored_signal() {
         use nix::sys::signal::{SaFlags, SigAction, SigHandler, SigSet, Signal, sigaction};
 
-        if !crate::test_support::is_subprocess() {
+        if !crate::test_support::isolated() {
             return;
         }
         let ignore = SigAction::new(SigHandler::SigIgn, SaFlags::empty(), SigSet::empty());
@@ -1078,29 +1046,13 @@ mod tests {
         );
     }
 
-    // Covers: R149
-    #[test]
-    fn cleanup_on_signals_may_replace_its_own_handler() {
-        crate::test_support::run_in_subprocess(
-            "context::tests::cleanup_on_signals_may_replace_its_own_handler_subprocess",
-        );
-    }
-
     // Covers: R151
-    #[test]
-    fn cleanup_on_signals_refuses_a_signal_that_does_not_terminate() {
-        crate::test_support::run_in_subprocess(
-            "context::tests::cleanup_on_signals_refuses_a_signal_that_does_not_terminate_subprocess",
-        );
-    }
-
     /// SIGCHLD is ignored by default: a handler that unlinks the pidfile and
     /// re-raises would delete a running daemon's pidfile at its first child
     /// exit, and the daemon would carry on.
     #[test]
-    #[ignore]
-    fn cleanup_on_signals_refuses_a_signal_that_does_not_terminate_subprocess() {
-        if !crate::test_support::is_subprocess() {
+    fn cleanup_on_signals_refuses_a_signal_that_does_not_terminate() {
+        if !crate::test_support::isolated() {
             return;
         }
         let dir = tempfile::tempdir().unwrap();
@@ -1115,10 +1067,10 @@ mod tests {
         );
     }
 
+    // Covers: R149
     #[test]
-    #[ignore]
-    fn cleanup_on_signals_may_replace_its_own_handler_subprocess() {
-        if !crate::test_support::is_subprocess() {
+    fn cleanup_on_signals_may_replace_its_own_handler() {
+        if !crate::test_support::isolated() {
             return;
         }
         let dir = tempfile::tempdir().unwrap();

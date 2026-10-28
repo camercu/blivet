@@ -2,18 +2,17 @@
 //!
 //! A test that changes process-wide state — stdio or other descriptors, the
 //! umask, cwd, environment, signal handling, credentials — would do so under
-//! every test running in parallel in the shared harness. Such a test is marked
-//! `#[ignore]` and paired with a wrapper that re-invokes the test binary for
-//! just that one test via [`run_in_subprocess`]; the body guards on
-//! [`is_subprocess`] so it executes only when spawned this way. The production
+//! every test running in parallel in the shared harness. Such a test opens with
+//! `if !isolated() { return; }`: [`isolated`] re-invokes the test binary for
+//! just that one test and returns `true` only in that child. The production
 //! functions that change that state call [`assert_isolated`] under test, so a
-//! test that forgets the subprocess fails instead of racing its neighbours.
+//! test that forgets the guard fails instead of racing its neighbours.
 
 use std::ffi::OsStr;
 use std::process::{Command, Output};
 
-/// Environment variable set in the spawned subprocess so the `#[ignore]` test
-/// body knows it is running in isolation (see [`is_subprocess`]).
+/// Environment variable set in the child [`isolated`] starts, so the test body
+/// knows it runs there (see [`is_subprocess`]).
 const SUBPROCESS_ENV: &str = "__BLIVET_SUBPROCESS_TEST";
 
 /// Set in every child [`rerun_in_subprocess`] starts, whatever marker the
@@ -23,17 +22,35 @@ const ISOLATED_ENV: &str = "__BLIVET_ISOLATED_TEST";
 
 /// Returns `true` when running inside a subprocess spawned by
 /// [`run_in_subprocess`].
-pub(crate) fn is_subprocess() -> bool {
+fn is_subprocess() -> bool {
     std::env::var(SUBPROCESS_ENV).is_ok()
 }
 
-/// Re-invokes the test binary to run a single `#[ignore]` test in its own
-/// process, then asserts it succeeded.
+/// Runs the calling test again in its own process. Returns `true` in that
+/// child, where the test body runs, and `false` in the parent once the child
+/// passed. Open each isolated test with `if !isolated() { return; }`.
 ///
-/// `--include-ignored` is required: without it the named `#[ignore]` test is
-/// skipped, the subprocess exits 0, and this helper passes *vacuously* without
-/// ever running the test body.
-pub(crate) fn run_in_subprocess(test_name: &str) {
+/// The test's name comes from libtest, which names each test's thread after
+/// the test, so no test spells its own name. A thread with no name means the
+/// caller is not a test, and this panics.
+pub(crate) fn isolated() -> bool {
+    if is_subprocess() {
+        return true;
+    }
+    let thread = std::thread::current();
+    let test_name = thread
+        .name()
+        .expect("isolated() runs only on a libtest thread, which carries the test's name");
+    run_in_subprocess(test_name);
+    false
+}
+
+/// Re-invokes the test binary to run a single test in its own process, then
+/// asserts it succeeded.
+///
+/// The privileged tier runs root-only tests, which are `#[ignore]`, so the
+/// child gets `--include-ignored` (see [`rerun_in_subprocess`]).
+fn run_in_subprocess(test_name: &str) {
     let output = rerun_in_subprocess(test_name, SUBPROCESS_ENV, "1");
     assert!(
         output.status.success(),
@@ -215,7 +232,7 @@ pub(crate) fn assert_isolated(what: &str) {
     assert!(
         std::env::var_os(ISOLATED_ENV).is_some(),
         "{what} changes process-wide state under the shared test process; \
-         run the test body through run_in_subprocess"
+         open the test with `if !isolated() {{ return; }}`"
     );
 }
 
@@ -338,5 +355,29 @@ pub(crate) fn shed_root() {
     if nix::unistd::geteuid().is_root() {
         nix::unistd::seteuid(nix::unistd::Uid::from_raw(NOBODY))
             .expect("root can drop its effective UID");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_isolated_test_runs_its_body_once_in_a_child_process() {
+        let ran = |pid: u32| tmp_dir().join(format!("blivet-isolated-ran-{pid}"));
+        if !isolated() {
+            let marker = ran(std::process::id());
+            let body_ran = marker.exists();
+            let _ = std::fs::remove_file(&marker);
+            assert!(body_ran, "the isolated body never ran");
+            return;
+        }
+        assert_ne!(
+            std::env::var_os(ISOLATED_ENV),
+            None,
+            "the body ran outside a child"
+        );
+        let parent = std::os::unix::process::parent_id();
+        std::fs::write(ran(parent), b"").unwrap();
     }
 }

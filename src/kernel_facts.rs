@@ -13,7 +13,7 @@
 
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 
-use crate::test_support::{is_subprocess, run_in_subprocess};
+use crate::test_support::isolated;
 
 /// A connected `AF_UNIX` stream pair, as `notify::channel` makes one.
 fn socket_pair() -> (OwnedFd, OwnedFd) {
@@ -48,19 +48,11 @@ fn recv_now(fd: &OwnedFd, buf: &mut [u8]) -> std::io::Result<usize> {
 }
 
 // Depends: notify::ChannelWriter (R165).
+/// With `SIGPIPE` at its default, a raised one would kill this subprocess and
+/// fail the test.
 #[test]
 fn a_send_to_a_closed_peer_fails_with_epipe_and_raises_no_sigpipe() {
-    run_in_subprocess(
-        "kernel_facts::a_send_to_a_closed_peer_fails_with_epipe_and_raises_no_sigpipe_subprocess",
-    );
-}
-
-/// With `SIGPIPE` at its default, a raised one would kill this subprocess and
-/// fail the wrapper.
-#[test]
-#[ignore]
-fn a_send_to_a_closed_peer_fails_with_epipe_and_raises_no_sigpipe_subprocess() {
-    if !is_subprocess() {
+    if !isolated() {
         return;
     }
     // SAFETY: SIG_DFL installs no handler.
@@ -118,20 +110,12 @@ fn f_dupfd_cloexec_lands_at_or_above_its_floor_close_on_exec() {
     );
 }
 
+extern "C" fn handler(_: libc::c_int) {}
+
 // Depends: the signal-disposition undo token, signals::reset_signal_dispositions (R164).
 #[test]
 fn the_replaced_action_sigaction_reports_restores_the_original_exactly() {
-    run_in_subprocess(
-        "kernel_facts::the_replaced_action_sigaction_reports_restores_the_original_exactly_subprocess",
-    );
-}
-
-extern "C" fn handler(_: libc::c_int) {}
-
-#[test]
-#[ignore]
-fn the_replaced_action_sigaction_reports_restores_the_original_exactly_subprocess() {
-    if !is_subprocess() {
+    if !isolated() {
         return;
     }
     let read = || {
