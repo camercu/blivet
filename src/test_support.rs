@@ -12,6 +12,7 @@
 
 use std::ffi::OsStr;
 use std::process::{Command, Output};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Environment variable set in the child [`isolated`] starts, to the name of
 /// the one test the child runs (see [`is_child_for`]).
@@ -45,7 +46,7 @@ pub(crate) fn isolated() -> bool {
 /// in the parent. Open the test with
 /// `let Some(output) = isolated_output() else { /* body */ };`.
 pub(crate) fn isolated_output() -> Option<Output> {
-    if in_isolated_child() {
+    if enter_child() {
         return None;
     }
     Some(rerun(&current_test_name(), None))
@@ -58,7 +59,7 @@ pub(crate) fn isolated_output() -> Option<Output> {
 pub(crate) fn isolated_output_with<F, A: AsRef<OsStr>>(
     setup: impl FnOnce() -> (F, A),
 ) -> Option<(F, A, Output)> {
-    if in_isolated_child() {
+    if enter_child() {
         return None;
     }
     let (fixture, arg) = setup();
@@ -80,6 +81,20 @@ fn in_isolated_child() -> bool {
         &current_test_name(),
         std::env::var_os(SUBPROCESS_ENV).as_deref(),
     )
+}
+
+/// Set once the calling test finds itself in its own child. The child runs
+/// that one test, so from then on the whole process, every thread of it,
+/// belongs to the test; [`assert_isolated`] reads this.
+static ENTERED_CHILD: AtomicBool = AtomicBool::new(false);
+
+/// [`in_isolated_child`], recording a yes in [`ENTERED_CHILD`].
+fn enter_child() -> bool {
+    let in_child = in_isolated_child();
+    if in_child {
+        ENTERED_CHILD.store(true, Ordering::Relaxed);
+    }
+    in_child
 }
 
 /// The calling test's full name, from the libtest thread that runs it.
@@ -268,7 +283,7 @@ pub(crate) fn read_pipe(rd: std::os::fd::OwnedFd) -> Vec<u8> {
 /// one test, so nothing else opens descriptors under it.
 pub(crate) fn assert_isolated(what: &str) {
     assert!(
-        in_isolated_child(),
+        ENTERED_CHILD.load(Ordering::Relaxed),
         "{what} changes process-wide state under the shared test process; \
          open the test with `if !isolated() {{ return; }}`"
     );
@@ -470,6 +485,28 @@ mod tests {
             "{}",
             subprocess_report(&output)
         );
+    }
+
+    /// The child owns the whole process, so the guard holds on any of its
+    /// threads, not only the one libtest named after the test.
+    #[test]
+    fn the_isolation_guard_holds_on_a_helper_thread_of_the_child() {
+        if !isolated() {
+            return;
+        }
+        let helper = std::thread::spawn(|| assert_isolated("a helper thread"));
+        helper.join().unwrap();
+    }
+
+    /// Starting a child leaves the parent, still in the shared process,
+    /// guarded.
+    #[test]
+    fn a_parent_stays_guarded_after_its_child_ran() {
+        let Some(_) = isolated_output() else {
+            return;
+        };
+        let guard = std::panic::catch_unwind(|| assert_isolated("the parent"));
+        assert!(guard.is_err(), "the guard let the parent through");
     }
 
     /// The parent gets the child's exit to judge as the test needs.
