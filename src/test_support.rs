@@ -451,14 +451,21 @@ mod tests {
     /// The parent fails when its child does: otherwise every isolated test
     /// passes whatever its body asserts. The child exits rather than panics,
     /// so its own libtest verdict plays no part.
+    #[allow(clippy::disallowed_macros)] // the child's output is the subject
     #[test]
     fn a_failing_isolated_body_fails_the_parent() {
         match std::panic::catch_unwind(isolated) {
-            Ok(true) => std::process::exit(3),
+            Ok(true) => {
+                println!("child stdout line");
+                eprintln!("child stderr line");
+                std::process::exit(3)
+            }
             Ok(false) => panic!("the parent passed a child that failed"),
             Err(panic) => {
                 let msg = panic.downcast::<String>().unwrap();
-                assert!(msg.contains("exit status: 3"), "{msg}");
+                for want in ["exit status: 3", "child stdout line", "child stderr line"] {
+                    assert!(msg.contains(want), "{want:?} missing: {msg}");
+                }
             }
         }
     }
