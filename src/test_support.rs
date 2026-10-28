@@ -72,9 +72,9 @@ pub(crate) fn isolated() -> bool {
 /// running the body.
 ///
 /// The child is judged on having run the test, not only on how it exited.
-/// `test_name` is a literal in the caller, and libtest exits 0 when its filter
-/// matches nothing, so a rename or a module move would otherwise turn the
-/// caller into a silent no-op that still reports ok — the vacuity
+/// A caller that spells `test_name` as a literal goes stale on a rename or a
+/// module move, and libtest exits 0 when its filter matches nothing, so the
+/// caller would otherwise turn into a silent no-op that still reports ok — the vacuity
 /// `scripts/assert-tests-ran.sh` catches one level up, inside the test binary.
 /// A caller that expects the child to fail, or to die on a signal, still gets
 /// its own verdict from the returned [`Output`]; this only rules out the child
