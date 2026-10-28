@@ -657,6 +657,16 @@ mod tests {
         let _ = kept(redirect_output(None, None, false, &[], Rollback::PutBack));
     }
 
+    /// The one stdio mover refuses too. Stdin onto itself would move nothing
+    /// even if the refusal were gone.
+    #[test]
+    #[should_panic(
+        expected = "StdioSlot::dup2 changes process-wide state under the shared test process"
+    )]
+    fn the_stdio_mover_refuses_the_shared_test_process() {
+        let _ = StdioSlot::Stdin.dup2(std::io::stdin());
+    }
+
     // Covers: R98
     #[test]
     fn execute_redirect_creates_files() {

@@ -594,4 +594,69 @@ mod tests {
             .open(ran(parent))
             .unwrap();
     }
+
+    /// Each guarded entry point refuses the shared test process before it
+    /// changes anything. `redirect_output` and `StdioSlot::dup2` have their
+    /// own tests in `steps::stdio`.
+    #[test]
+    #[allow(unsafe_code)]
+    fn every_guarded_entry_point_refuses_the_shared_test_process() {
+        use crate::steps::{self, Rollback, failpoints};
+        fn identity() -> crate::identity::ResolvedIdentity {
+            crate::identity::ResolvedIdentity::resolve(None, None).unwrap()
+        }
+        let entry_points: [(&str, fn()); 16] = [
+            ("fill_fd_table", || drop(fill_fd_table(0))),
+            ("with_fds_closed", || with_fds_closed(&[], || ())),
+            ("writer_with_no_reader", || drop(writer_with_no_reader())),
+            ("shed_root", shed_root),
+            ("set_umask", || {
+                drop(steps::set_umask(0o022, Rollback::PutBack))
+            }),
+            ("change_dir", || {
+                drop(steps::change_dir(
+                    std::path::Path::new("."),
+                    Rollback::PutBack,
+                ))
+            }),
+            ("set_env_vars", || {
+                drop(steps::set_env_vars(&[], Rollback::PutBack))
+            }),
+            ("close_inherited_fds", || {
+                drop(steps::close_inherited_fds(&[]))
+            }),
+            ("redirect_to_devnull", || {
+                drop(steps::redirect_to_devnull(false, Rollback::PutBack));
+            }),
+            ("reset_signal_dispositions", || {
+                drop(crate::signals::reset_signal_dispositions(Rollback::PutBack));
+            }),
+            ("install_pidfile_cleanup_signals", || {
+                drop(crate::signals::install_pidfile_cleanup_signals(
+                    c"/nonexistent",
+                    &[],
+                ));
+            }),
+            ("joining the user's groups", || {
+                drop(identity().join_groups(Rollback::PutBack));
+            }),
+            ("the identity switch", || {
+                // SAFETY: the guard panics before the switch touches anything.
+                drop(unsafe { identity().switch_to() });
+            }),
+            ("a failpoint", || failpoints::SETUID_FAILS.set()),
+            ("the undo walk", || failpoints::fail_at_checkpoint(0)),
+            ("the injected fd limit", || failpoints::set_max_fd(0)),
+        ];
+        for (what, call) in entry_points {
+            let panic = std::panic::catch_unwind(call).expect_err(what);
+            let message = panic.downcast_ref::<String>().map_or("", String::as_str);
+            assert!(
+                message.starts_with(&format!(
+                    "{what} changes process-wide state under the shared test process"
+                )),
+                "{what}: {message}"
+            );
+        }
+    }
 }
