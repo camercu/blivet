@@ -417,6 +417,14 @@ mod tests {
         std::panic::resume_unwind(joined.unwrap_err());
     }
 
+    /// A child that matched no test fails its parent, rather than passing
+    /// with a body that never ran.
+    #[test]
+    #[should_panic(expected = "matched no test or was skipped as ignored")]
+    fn a_child_that_ran_no_test_fails_the_parent() {
+        rerun("test_support::tests::no_such_test", None);
+    }
+
     #[test]
     fn a_child_skipped_as_ignored_did_not_run() {
         let me = "sequence::tests::x";
