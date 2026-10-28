@@ -410,6 +410,7 @@ mod tests {
         }
     }
 
+    #[allow(clippy::disallowed_methods)] // the harness keeps stdio open
     #[test]
     fn an_isolated_test_runs_its_body_in_a_child_process() {
         let ran = |pid: u32| tmp_dir().join(format!("blivet-isolated-ran-{pid}"));
@@ -430,6 +431,11 @@ mod tests {
             "the body ran outside a child"
         );
         let parent = std::os::unix::process::parent_id();
-        std::fs::write(ran(parent), b"").unwrap();
+        // create_new refuses a path that already exists, symlinks included.
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(ran(parent))
+            .unwrap();
     }
 }
