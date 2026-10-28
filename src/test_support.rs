@@ -245,12 +245,27 @@ pub(crate) fn with_fds_closed<R>(closed: &[i32], f: impl FnOnce() -> R) -> R {
 /// notification channel, so a subprocess a parallel `cargo test` thread spawns
 /// does not inherit the write end and hold the read open. On macOS the flag
 /// is set in a second step (no `SOCK_CLOEXEC`), so a spawn in between can
-/// still inherit it; the read then waits for that subprocess to exit.
+/// still inherit it; the read then waits for that subprocess to exit. A test
+/// that needs the read end gone takes [`writer_with_no_reader`] instead.
 pub(crate) fn make_pipe() -> (std::os::fd::OwnedFd, std::os::fd::OwnedFd) {
     use crate::forker::{Forker, RealForker};
     RealForker
         .create_notification_pipe()
         .expect("failed to create test pipe")
+}
+
+/// The write end of a pipe whose read end is closed, so a write to it fails
+/// with `EPIPE`.
+///
+/// Only an isolated child can promise that. In the shared harness a parallel
+/// test may spawn a subprocess in the window before the read end gets
+/// close-on-exec (macOS has no `SOCK_CLOEXEC`); the subprocess then holds a
+/// reader, and the write succeeds.
+pub(crate) fn writer_with_no_reader() -> std::os::fd::OwnedFd {
+    assert_isolated("writer_with_no_reader");
+    let (rd, wr) = make_pipe();
+    drop(rd);
+    wr
 }
 
 /// Drains a pipe's read end to EOF.

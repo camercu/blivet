@@ -532,7 +532,7 @@ mod tests {
         ));
     }
 
-    use crate::test_support::{make_pipe, read_pipe};
+    use crate::test_support::{make_pipe, read_pipe, writer_with_no_reader};
     use std::io::Read;
 
     /// Build a context directly from a configured `DaemonConfig` plus the
@@ -554,8 +554,7 @@ mod tests {
     #[test]
     fn exec_runs_the_program_when_the_launcher_is_gone() {
         let Some(output) = crate::test_support::isolated_output() else {
-            let (rd, wr) = make_pipe();
-            drop(rd);
+            let wr = writer_with_no_reader();
             let ctx = ctx(&DaemonConfig::new(), None, Some(NotifyChannel::new(wr)));
             ctx.exec(c"sh", &[c"sh", c"-c", c"exit 7"]);
         };
@@ -576,8 +575,7 @@ mod tests {
     fn exec_runs_the_program_when_the_launcher_is_gone_and_sigpipe_is_default() {
         let Some(output) = crate::test_support::isolated_output() else {
             crate::signals::restore_default_sigpipe();
-            let (rd, wr) = make_pipe();
-            drop(rd);
+            let wr = writer_with_no_reader();
             let ctx = ctx(&DaemonConfig::new(), None, Some(NotifyChannel::new(wr)));
             ctx.exec(c"sh", &[c"sh", c"-c", c"exit 7"]);
         };
@@ -622,8 +620,7 @@ mod tests {
             return;
         }
         crate::signals::restore_default_sigpipe();
-        let (rd, wr) = make_pipe();
-        drop(rd);
+        let wr = writer_with_no_reader();
         let mut ctx = ctx(&DaemonConfig::new(), None, Some(NotifyChannel::new(wr)));
         assert!(matches!(
             ctx.notify_parent(),
@@ -636,8 +633,7 @@ mod tests {
     fn report_error_reaches_stderr_when_the_launcher_is_gone_and_sigpipe_is_default() {
         let Some(output) = crate::test_support::isolated_output() else {
             crate::signals::restore_default_sigpipe();
-            let (rd, wr) = make_pipe();
-            drop(rd);
+            let wr = writer_with_no_reader();
             let mut ctx = ctx(&DaemonConfig::new(), None, Some(NotifyChannel::new(wr)));
             ctx.report_error(&DaemonizeError::application(75, "database unreachable"));
         };
@@ -669,8 +665,7 @@ mod tests {
         let (_dir, pidfile, output) = match crate::test_support::isolated_output_with(setup) {
             crate::test_support::Isolated::Parent(dir, pidfile, output) => (dir, pidfile, output),
             crate::test_support::Isolated::Child(pidfile) => {
-                let (rd, wr) = make_pipe();
-                drop(rd);
+                let wr = writer_with_no_reader();
                 let mut ctx = ctx(&pidfile_config(pidfile), None, Some(NotifyChannel::new(wr)));
                 ctx.notify_parent_or_report();
                 std::process::exit(0);
@@ -714,11 +709,13 @@ mod tests {
     // cleanup_on_drop instead of reporting a start that never succeeded.
     #[test]
     fn a_failed_notify_parent_releases_the_launcher() {
+        if !crate::test_support::isolated() {
+            return;
+        }
         let dir = tempfile::tempdir().unwrap();
         let pidfile = dir.path().join("test.pid");
         std::fs::write(&pidfile, "12345\n").unwrap();
-        let (rd, wr) = make_pipe();
-        drop(rd);
+        let wr = writer_with_no_reader();
         let mut ctx = ctx(
             &pidfile_config(&pidfile),
             None,
@@ -759,8 +756,7 @@ mod tests {
     #[test]
     fn notify_parent_or_report_prints_the_error_when_the_launcher_is_gone() {
         let Some(output) = crate::test_support::isolated_output() else {
-            let (rd, wr) = make_pipe();
-            drop(rd);
+            let wr = writer_with_no_reader();
             let mut ctx = ctx(&DaemonConfig::new(), None, Some(NotifyChannel::new(wr)));
             ctx.notify_parent_or_report();
             std::process::exit(0);
@@ -830,8 +826,7 @@ mod tests {
     #[test]
     fn exec_failure_exits_with_its_code_when_the_launcher_is_gone() {
         let Some(output) = crate::test_support::isolated_output() else {
-            let (rd, wr) = make_pipe();
-            drop(rd);
+            let wr = writer_with_no_reader();
             let ctx = ctx(&DaemonConfig::new(), None, Some(NotifyChannel::new(wr)));
             ctx.exec(c"/nonexistent_blivet_program", &[c"x"]);
         };

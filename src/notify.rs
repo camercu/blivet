@@ -352,7 +352,7 @@ pub(crate) fn decode(buf: &[u8]) -> Outcome {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{make_pipe, read_pipe};
+    use crate::test_support::{make_pipe, read_pipe, writer_with_no_reader};
 
     #[test]
     fn signal_ready_writes_success_byte() {
@@ -410,11 +410,13 @@ mod tests {
 
     #[test]
     fn drop_with_closed_reader_does_not_panic() {
+        if !crate::test_support::isolated() {
+            return;
+        }
         // The Drop safety net runs during unwinds; a failing channel write
         // there (reader already gone -> EPIPE) must stay silent, or the safety
         // net would turn one panic into an abort.
-        let (rd, wr) = make_pipe();
-        drop(rd);
+        let wr = writer_with_no_reader();
         drop(NotifyChannel::new(wr));
     }
 
@@ -427,8 +429,10 @@ mod tests {
 
     #[test]
     fn signal_ready_errors_on_closed_reader() {
-        let (rd, wr) = make_pipe();
-        drop(rd); // reader gone: write end sees EPIPE
+        if !crate::test_support::isolated() {
+            return;
+        }
+        let wr = writer_with_no_reader();
         let result = NotifyChannel::new(wr).signal_ready();
         assert!(result.is_err());
     }
@@ -628,8 +632,7 @@ mod tests {
         if !crate::test_support::isolated() {
             return;
         }
-        let (rd, wr) = make_pipe();
-        drop(rd);
+        let wr = writer_with_no_reader();
         let (err_rd, err_wr) = make_pipe();
         drop(err_rd);
         #[allow(clippy::disallowed_methods)] // the test's own process
