@@ -438,8 +438,8 @@ mod tests {
     /// A foreground start leaves a closed stdout closed, and the count is
     /// open while init runs, so an init that `dup2`s onto fd 1 would close
     /// it under the check after init.
-    #[test]
     #[cfg(blivet_thread_count_procfs)]
+    #[test]
     fn the_status_file_stays_clear_of_stdio() {
         use std::os::fd::AsRawFd;
         if !isolated() {

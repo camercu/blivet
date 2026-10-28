@@ -162,8 +162,8 @@ mod tests {
     }
 
     // Covers: R135
-    #[test]
     #[cfg(blivet_fd_dir)]
+    #[test]
     fn list_open_fds_sees_an_open_fd() {
         use std::os::fd::AsRawFd;
         let file = tempfile::tempfile().unwrap();
