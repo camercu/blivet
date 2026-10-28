@@ -133,7 +133,7 @@ where planning fits.
   that finds a step that changes state without returning a token.
 - Three parts of the data-tokens design carry over to `main`, each as its
   own change:
-  - Each isolated test becomes one function, in place of a pair: an
+  - Landed: each isolated test is one function, in place of a pair: an
     `#[ignore]` body and a test that ran it by name in a subprocess. The
     spike used a macro. `test_support::isolated` is a plain function
     instead, so rustfmt still formats the test bodies.
