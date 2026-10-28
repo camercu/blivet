@@ -154,6 +154,8 @@ fn rerun(test_name: &str, arg: Option<&OsStr>) -> Output {
         .arg("--exact")
         .arg(test_name)
         .arg("--include-ignored")
+        // The child's prints and panic messages go to the captured streams as
+        // they happen, so a report shows them whatever libtest would buffer.
         .arg("--nocapture")
         .env(SUBPROCESS_ENV, marker_for(std::process::id(), test_name));
     if let Some(arg) = arg {
