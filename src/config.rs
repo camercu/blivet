@@ -1192,44 +1192,18 @@ mod tests {
     /// without this failing. Asserting the constant instead would only restate
     /// it.
     ///
-    /// Root-only and process-global, hence `#[ignore]` and the subprocess: the
-    /// root/Linux container tier is what passes `--include-ignored`.
-    #[allow(clippy::disallowed_macros)] // test output
+    /// Root-only and process-global, hence `#[ignore]` and `isolated`: the
+    /// root/Linux container tier is what runs ignored tests.
     #[test]
     #[ignore = "drops the process's effective UID; needs root"]
     fn writability_is_probed_against_the_effective_identity() {
         use std::os::unix::fs::PermissionsExt;
 
-        const NAME: &str = "config::tests::writability_is_probed_against_the_effective_identity";
-        const ROOT_ONLY_DIR: &str = "__BLIVET_ROOT_ONLY_DIR";
         /// The conventional unprivileged UID; it need not exist in passwd for
         /// `seteuid` to take it.
         const NOBODY: u32 = 65534;
 
-        if let Ok(dir) = std::env::var(ROOT_ONLY_DIR) {
-            nix::unistd::seteuid(nix::unistd::Uid::from_raw(NOBODY))
-                .expect("dropping the effective UID needs root");
-            let mut cfg = DaemonConfig::new();
-            cfg.pidfile(std::path::Path::new(&dir).join("daemon.pid"));
-            let result = cfg.validate();
-            #[cfg(not(blivet_faccessat_lacks_eaccess))]
-            assert!(
-                matches!(&result, Err(DaemonizeError::ValidationError(msg))
-                    if msg.contains("not writable")),
-                "the probe must answer for the effective UID, which cannot \
-                 write a root-owned directory: {result:?}"
-            );
-            #[cfg(blivet_faccessat_lacks_eaccess)]
-            assert!(
-                result.is_ok(),
-                "without AT_EACCESS the probe answers for the real UID, which \
-                 is root here: {result:?}"
-            );
-            return;
-        }
-
-        if !nix::unistd::geteuid().is_root() {
-            eprintln!("skipping: requires root");
+        if !crate::test_support::isolated() {
             return;
         }
 
@@ -1239,10 +1213,28 @@ mod tests {
         std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))
             .expect("root-only permissions");
 
-        let output = crate::test_support::rerun_in_subprocess(NAME, ROOT_ONLY_DIR, &dir);
-        let report = crate::test_support::subprocess_report(NAME, &output);
+        nix::unistd::seteuid(nix::unistd::Uid::from_raw(NOBODY))
+            .expect("dropping the effective UID needs root");
+        let mut cfg = DaemonConfig::new();
+        cfg.pidfile(dir.join("daemon.pid"));
+        let result = cfg.validate();
+        // Real UID 0 lets the child take its effective UID back to clean up.
+        nix::unistd::seteuid(nix::unistd::Uid::from_raw(0)).expect("restoring root");
         let _ = std::fs::remove_dir_all(&dir);
-        assert!(output.status.success(), "{report}");
+
+        #[cfg(not(blivet_faccessat_lacks_eaccess))]
+        assert!(
+            matches!(&result, Err(DaemonizeError::ValidationError(msg))
+                if msg.contains("not writable")),
+            "the probe must answer for the effective UID, which cannot \
+             write a root-owned directory: {result:?}"
+        );
+        #[cfg(blivet_faccessat_lacks_eaccess)]
+        assert!(
+            result.is_ok(),
+            "without AT_EACCESS the probe answers for the real UID, which \
+             is root here: {result:?}"
+        );
     }
 
     /// The two errnos that reach the probe describe different situations, and
