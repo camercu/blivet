@@ -411,6 +411,9 @@ pub(crate) fn foreign_gid() -> u32 {
     (1..).find(|g| !gids.contains(g) && *g != egid).unwrap()
 }
 
+/// The conventional unprivileged UID; `seteuid` does not need it in passwd.
+pub(crate) const NOBODY: u32 = 65534;
+
 /// Drops the effective UID to `nobody` when the test runs as root.
 ///
 /// The tests that call this assert an unprivileged failure, a chown or a
@@ -419,8 +422,6 @@ pub(crate) fn foreign_gid() -> u32 {
 /// process. Process-global, so it asserts it runs in one.
 pub(crate) fn shed_root() {
     assert_isolated("shed_root");
-    /// The conventional unprivileged UID; `seteuid` does not need it in passwd.
-    const NOBODY: u32 = 65534;
     if nix::unistd::geteuid().is_root() {
         nix::unistd::seteuid(nix::unistd::Uid::from_raw(NOBODY))
             .expect("root can drop its effective UID");

@@ -1199,10 +1199,6 @@ mod tests {
     fn writability_is_probed_against_the_effective_identity() {
         use std::os::unix::fs::PermissionsExt;
 
-        /// The conventional unprivileged UID; it need not exist in passwd for
-        /// `seteuid` to take it.
-        const NOBODY: u32 = 65534;
-
         if !crate::test_support::isolated() {
             return;
         }
@@ -1213,7 +1209,7 @@ mod tests {
         std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))
             .expect("root-only permissions");
 
-        nix::unistd::seteuid(nix::unistd::Uid::from_raw(NOBODY))
+        nix::unistd::seteuid(nix::unistd::Uid::from_raw(crate::test_support::NOBODY))
             .expect("dropping the effective UID needs root");
         let mut cfg = DaemonConfig::new();
         cfg.pidfile(dir.join("daemon.pid"));
