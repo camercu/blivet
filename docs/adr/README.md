@@ -15,3 +15,4 @@ Format: `NNNN-kebab-case-title.md`, numbered in acceptance order.
 | [0004](0004-privileged-init-runs-inside-daemonize.md) | Privileged init runs inside the daemonize call | Accepted |
 | [0005](0005-chroot-stays-out-of-scope.md) | Chroot stays out of scope; library-owned chroot is deferred | Accepted (chroot deferred) |
 | [0006](0006-the-notification-channel-cannot-raise-sigpipe.md) | The notification channel cannot raise SIGPIPE | Accepted |
+| [0007](0007-system-calls-stay-real-in-tests.md) | System calls stay real in tests | Accepted |
