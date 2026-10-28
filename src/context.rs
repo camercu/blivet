@@ -903,10 +903,10 @@ mod tests {
         }
 
         let output = crate::test_support::rerun_in_subprocess(NAME, MARKER, "1");
-        assert_eq!(output.status.code(), Some(75));
+        let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(
-            String::from_utf8_lossy(&output.stderr)
-                .contains("application error: database unreachable"),
+            output.status.code() == Some(75)
+                && stderr.contains("application error: database unreachable"),
             "{}",
             crate::test_support::subprocess_report(NAME, &output)
         );
