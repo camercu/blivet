@@ -34,12 +34,14 @@ fn is_child_for(test_name: &str, marker: Option<&OsStr>) -> bool {
 ///
 /// The test's name comes from libtest, which names each test's thread after
 /// the test, so no test spells its own name. A thread with no name means the
-/// caller is not a test, and this panics.
+/// caller is not a test, and this panics. So does `main`: libtest falls back
+/// to the main thread when it cannot spawn one, and that name names no test.
 pub(crate) fn isolated() -> bool {
     let thread = std::thread::current();
-    let test_name = thread
-        .name()
-        .expect("isolated() runs only on a libtest thread, which carries the test's name");
+    let test_name = thread.name().filter(|name| *name != "main").expect(
+        "isolated() runs only on a libtest thread named after its test; \
+         this thread is unnamed or `main`",
+    );
     if is_child_for(test_name, std::env::var_os(SUBPROCESS_ENV).as_deref()) {
         return true;
     }
@@ -368,6 +370,15 @@ mod tests {
         assert!(is_child_for(me, Some(me.as_ref())));
         assert!(!is_child_for(me, Some("steps::process::tests::y".as_ref())));
         assert!(!is_child_for(me, None));
+    }
+
+    /// A thread named `main` names no test, so rerunning it would match nothing.
+    #[test]
+    #[should_panic(expected = "this thread is unnamed or `main`")]
+    fn isolated_refuses_the_main_thread() {
+        let main = std::thread::Builder::new().name("main".to_owned());
+        let joined = main.spawn(isolated).unwrap().join();
+        std::panic::resume_unwind(joined.unwrap_err());
     }
 
     #[test]
