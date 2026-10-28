@@ -544,12 +544,12 @@ mod tests {
             // A fixture the child also made would outlive it: a child that
             // exits or dies on a signal runs no destructor.
             assert!(!in_isolated_child(), "the parent's setup ran in the child");
-            ((), std::process::id().to_string())
+            ((), format!("from {}", std::process::id()))
         };
         match isolated_output_with(setup) {
             Isolated::Child(arg) => {
-                let parent = std::os::unix::process::parent_id().to_string();
-                assert_eq!(arg, OsStr::new(&parent));
+                let parent = std::os::unix::process::parent_id();
+                assert_eq!(arg, OsStr::new(&format!("from {parent}")));
             }
             Isolated::Parent((), _, output) => {
                 assert!(output.status.success(), "{}", subprocess_report(&output));
