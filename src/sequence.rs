@@ -1349,7 +1349,7 @@ mod tests {
     // instead of exiting.
     #[test]
     fn daemon_post_fork_failure_exits_not_returns() {
-        if !crate::test_support::isolated() {
+        if !isolated() {
             return;
         }
         // Daemon mode (foreground stays false); chdir to a nonexistent path
@@ -1379,7 +1379,7 @@ mod tests {
     /// daemon like an error does, with its text on the channel.
     #[test]
     fn daemon_init_panic_exits_and_reports_its_text() {
-        if !crate::test_support::isolated() {
+        if !isolated() {
             return;
         }
         let mut config = DaemonConfig::new();

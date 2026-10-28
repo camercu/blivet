@@ -327,6 +327,7 @@ pub(crate) fn install_pidfile_cleanup_signals(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::isolated;
 
     // Covers: R164
     /// SIGHUP and SIGINT sit below SIGTERM on every platform, and the
@@ -334,7 +335,7 @@ mod tests {
     #[test]
     #[allow(unsafe_code)]
     fn a_reset_failing_part_way_puts_back_what_it_replaced() {
-        if !crate::test_support::isolated() {
+        if !isolated() {
             return;
         }
         use nix::sys::signal::{SaFlags, SigAction, SigHandler, SigSet, Signal, sigaction};
@@ -363,7 +364,7 @@ mod tests {
     #[test]
     #[allow(unsafe_code)]
     fn a_signal_refused_with_einval_is_skipped() {
-        if !crate::test_support::isolated() {
+        if !isolated() {
             return;
         }
         use nix::sys::signal::{SaFlags, SigAction, SigHandler, SigSet, Signal, sigaction};
@@ -385,7 +386,7 @@ mod tests {
     #[test]
     #[allow(unsafe_code)]
     fn reset_signal_dispositions_restores_default() {
-        if !crate::test_support::isolated() {
+        if !isolated() {
             return;
         }
         use nix::sys::signal::{SaFlags, SigAction, SigHandler, SigSet, Signal, sigaction};
@@ -419,7 +420,7 @@ mod tests {
     #[test]
     #[allow(unsafe_code)]
     fn reset_signal_dispositions_preserves_sigpipe() {
-        if !crate::test_support::isolated() {
+        if !isolated() {
             return;
         }
         use nix::sys::signal::{SaFlags, SigAction, SigHandler, SigSet, Signal, sigaction};
@@ -452,7 +453,6 @@ mod tests {
         );
     }
 
-    use crate::test_support::isolated;
     use std::sync::atomic::Ordering;
 
     // Covers: R151

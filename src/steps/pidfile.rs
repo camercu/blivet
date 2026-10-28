@@ -179,7 +179,7 @@ mod tests {
     /// close it and drop the lock.
     #[test]
     fn lockfile_and_pidfile_stay_clear_of_stdio() {
-        if !crate::test_support::isolated() {
+        if !isolated() {
             return;
         }
         let dir = tempfile::tempdir().unwrap();
