@@ -204,7 +204,7 @@ fn user_switch_sets_env_vars() {
 }
 
 // ============================================================
-// Output file ownership after the identity switch (R10, R82)
+// Output file ownership after the identity switch (R10, R64)
 // ============================================================
 
 // Covers: R10, R64, R71
