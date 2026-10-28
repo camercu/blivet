@@ -660,10 +660,13 @@ mod tests {
     // cleanup_on_drop off.
     #[test]
     fn notify_parent_or_report_removes_the_pidfile_when_the_launcher_is_gone() {
-        let dir = tempfile::tempdir().unwrap();
-        let pidfile = dir.path().join("test.pid");
-        std::fs::write(&pidfile, "12345\n").unwrap();
-        let Some(output) = crate::test_support::isolated_output_with(&pidfile) else {
+        let setup = || {
+            let dir = tempfile::tempdir().unwrap();
+            let pidfile = dir.path().join("test.pid");
+            std::fs::write(&pidfile, "12345\n").unwrap();
+            (dir, pidfile)
+        };
+        let Some((_dir, pidfile, output)) = crate::test_support::isolated_output_with(setup) else {
             let pidfile = crate::test_support::isolated_arg();
             let (rd, wr) = make_pipe();
             drop(rd);
@@ -1036,9 +1039,12 @@ mod tests {
     #[test]
     fn cleanup_on_signals_removes_pidfile_on_signal() {
         use std::os::unix::process::ExitStatusExt;
-        let dir = tempfile::tempdir().unwrap();
-        let pidfile = dir.path().join("daemon.pid");
-        let Some(output) = crate::test_support::isolated_output_with(&pidfile) else {
+        let setup = || {
+            let dir = tempfile::tempdir().unwrap();
+            let pidfile = dir.path().join("daemon.pid");
+            (dir, pidfile)
+        };
+        let Some((_dir, pidfile, output)) = crate::test_support::isolated_output_with(setup) else {
             let path = crate::test_support::isolated_arg();
             std::fs::write(&path, "123").unwrap();
             let mut cfg = DaemonConfig::new();
@@ -1068,9 +1074,12 @@ mod tests {
     #[test]
     fn cleanup_on_term_signals_installs_sigint_handler() {
         use std::os::unix::process::ExitStatusExt;
-        let dir = tempfile::tempdir().unwrap();
-        let pidfile = dir.path().join("daemon.pid");
-        let Some(output) = crate::test_support::isolated_output_with(&pidfile) else {
+        let setup = || {
+            let dir = tempfile::tempdir().unwrap();
+            let pidfile = dir.path().join("daemon.pid");
+            (dir, pidfile)
+        };
+        let Some((_dir, pidfile, output)) = crate::test_support::isolated_output_with(setup) else {
             let path = crate::test_support::isolated_arg();
             std::fs::write(&path, "123").unwrap();
             let mut cfg = DaemonConfig::new();
@@ -1099,9 +1108,12 @@ mod tests {
     #[test]
     fn cleanup_on_term_signals_installs_sigterm_handler() {
         use std::os::unix::process::ExitStatusExt;
-        let dir = tempfile::tempdir().unwrap();
-        let pidfile = dir.path().join("daemon.pid");
-        let Some(output) = crate::test_support::isolated_output_with(&pidfile) else {
+        let setup = || {
+            let dir = tempfile::tempdir().unwrap();
+            let pidfile = dir.path().join("daemon.pid");
+            (dir, pidfile)
+        };
+        let Some((_dir, pidfile, output)) = crate::test_support::isolated_output_with(setup) else {
             let path = crate::test_support::isolated_arg();
             std::fs::write(&path, "123").unwrap();
             let mut cfg = DaemonConfig::new();

@@ -45,14 +45,25 @@ pub(crate) fn isolated() -> bool {
 /// in the parent. Open the test with
 /// `let Some(output) = isolated_output() else { /* body */ };`.
 pub(crate) fn isolated_output() -> Option<Output> {
-    rerun_unless_child(None)
+    if in_isolated_child() {
+        return None;
+    }
+    Some(rerun(&current_test_name(), None))
 }
 
-/// [`isolated_output`], handing the child `arg`: a value only the parent
-/// knows, such as a path it made and will check afterwards. The child reads
-/// it with [`isolated_arg`].
-pub(crate) fn isolated_output_with(arg: impl AsRef<OsStr>) -> Option<Output> {
-    rerun_unless_child(Some(arg.as_ref()))
+/// [`isolated_output`] for a test whose parent makes a fixture, such as a
+/// path it checks afterwards. `setup` runs in the parent alone and returns the
+/// fixture and a value the child reads with [`isolated_arg`]; the parent gets
+/// both back with the child's [`Output`].
+pub(crate) fn isolated_output_with<F, A: AsRef<OsStr>>(
+    setup: impl FnOnce() -> (F, A),
+) -> Option<(F, A, Output)> {
+    if in_isolated_child() {
+        return None;
+    }
+    let (fixture, arg) = setup();
+    let output = rerun(&current_test_name(), Some(arg.as_ref()));
+    Some((fixture, arg, output))
 }
 
 /// In the child [`isolated_output_with`] started, the value its parent
@@ -60,13 +71,6 @@ pub(crate) fn isolated_output_with(arg: impl AsRef<OsStr>) -> Option<Output> {
 pub(crate) fn isolated_arg() -> std::ffi::OsString {
     std::env::var_os(ARG_ENV)
         .expect("isolated_arg() runs only in a child of isolated_output_with()")
-}
-
-fn rerun_unless_child(arg: Option<&OsStr>) -> Option<Output> {
-    if in_isolated_child() {
-        return None;
-    }
-    Some(rerun(&current_test_name(), arg))
 }
 
 /// Whether this runs in the child [`isolated_output`] started for the
@@ -472,7 +476,13 @@ mod tests {
     /// The child reads the parent's value, not the one it computes itself.
     #[test]
     fn the_parent_hands_its_isolated_child_an_argument() {
-        let Some(output) = isolated_output_with(std::process::id().to_string()) else {
+        let setup = || {
+            // A fixture the child also made would outlive it: a child that
+            // exits or dies on a signal runs no destructor.
+            assert!(!in_isolated_child(), "the parent's setup ran in the child");
+            ((), std::process::id().to_string())
+        };
+        let Some(((), _, output)) = isolated_output_with(setup) else {
             let parent = std::os::unix::process::parent_id().to_string();
             assert_eq!(isolated_arg(), OsStr::new(&parent));
             return;
