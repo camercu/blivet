@@ -364,8 +364,12 @@ mod tests {
     }
 
     #[test]
-    fn an_isolated_test_runs_its_body_once_in_a_child_process() {
+    fn an_isolated_test_runs_its_body_in_a_child_process() {
         let ran = |pid: u32| tmp_dir().join(format!("blivet-isolated-ran-{pid}"));
+        if std::env::var_os(SUBPROCESS_ENV).is_none() {
+            // A marker left by a crashed run under a reused pid would pass.
+            let _ = std::fs::remove_file(ran(std::process::id()));
+        }
         if !isolated() {
             let marker = ran(std::process::id());
             let body_ran = marker.exists();
