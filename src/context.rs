@@ -1025,12 +1025,11 @@ mod tests {
         );
     }
 
-    // Installs a real SIGTERM handler and raises it, so it must run in its own
-    // process: the isolated child dies from the signal, then the parent asserts
-    // the pidfile was removed by the handler and the child terminated *via*
-    // SIGTERM (proving the re-raise).
-    #[test]
-    fn cleanup_on_signals_removes_pidfile_on_signal() {
+    /// Installs real handlers with `install` and raises `sig`, so it must run
+    /// in its own process: the isolated child dies from the signal, then the
+    /// parent asserts the handler removed the pidfile and the child ended
+    /// *via* `sig` (proving the re-raise).
+    fn assert_handler_removes_pidfile(install: fn(&DaemonContext), sig: nix::sys::signal::Signal) {
         use std::os::unix::process::ExitStatusExt;
         let setup = || {
             let dir = tempfile::tempdir().unwrap();
@@ -1041,21 +1040,28 @@ mod tests {
             std::fs::write(&path, "123").unwrap();
             let mut cfg = DaemonConfig::new();
             cfg.pidfile(&path);
-            let ctx = ctx(&cfg, None, None);
-            ctx.cleanup_on_signals(&[libc::SIGTERM]).unwrap();
-            nix::sys::signal::raise(nix::sys::signal::Signal::SIGTERM).unwrap();
-            unreachable!("should have been killed by the re-raised SIGTERM");
+            install(&ctx(&cfg, None, None));
+            nix::sys::signal::raise(sig).unwrap();
+            unreachable!("should have been killed by the re-raised {sig}");
         });
 
         assert_eq!(
             output.status.signal(),
-            Some(libc::SIGTERM),
-            "child should terminate via the re-raised SIGTERM; {}",
+            Some(sig as i32),
+            "child should terminate via the re-raised {sig}; {}",
             crate::test_support::subprocess_report(&output)
         );
         assert!(
             !pidfile.exists(),
             "handler should have removed the pidfile before re-raising"
+        );
+    }
+
+    #[test]
+    fn cleanup_on_signals_removes_pidfile_on_signal() {
+        assert_handler_removes_pidfile(
+            |ctx| ctx.cleanup_on_signals(&[libc::SIGTERM]).unwrap(),
+            nix::sys::signal::Signal::SIGTERM,
         );
     }
 
@@ -1065,64 +1071,19 @@ mod tests {
     // and Ctrl-C is the half a developer meets first.
     #[test]
     fn cleanup_on_term_signals_installs_sigint_handler() {
-        use std::os::unix::process::ExitStatusExt;
-        let setup = || {
-            let dir = tempfile::tempdir().unwrap();
-            let pidfile = dir.path().join("daemon.pid");
-            (dir, pidfile)
-        };
-        let (_dir, pidfile, output) = crate::test_support::isolated_output_with(setup, |path| {
-            std::fs::write(&path, "123").unwrap();
-            let mut cfg = DaemonConfig::new();
-            cfg.pidfile(&path);
-            let ctx = ctx(&cfg, None, None);
-            ctx.cleanup_on_term_signals().unwrap();
-            nix::sys::signal::raise(nix::sys::signal::Signal::SIGINT).unwrap();
-            unreachable!("should have been killed by the re-raised SIGINT");
-        });
-
-        assert_eq!(
-            output.status.signal(),
-            Some(libc::SIGINT),
-            "child should terminate via the re-raised SIGINT; {}",
-            crate::test_support::subprocess_report(&output)
-        );
-        assert!(
-            !pidfile.exists(),
-            "handler should have removed the pidfile before re-raising"
+        assert_handler_removes_pidfile(
+            |ctx| ctx.cleanup_on_term_signals().unwrap(),
+            nix::sys::signal::Signal::SIGINT,
         );
     }
 
-    // Same isolated pattern as above, through the convenience wrapper: it
-    // must actually install handlers for the standard termination signals,
-    // not just return Ok.
+    // Through the convenience wrapper: it must actually install handlers for
+    // the standard termination signals, not just return Ok.
     #[test]
     fn cleanup_on_term_signals_installs_sigterm_handler() {
-        use std::os::unix::process::ExitStatusExt;
-        let setup = || {
-            let dir = tempfile::tempdir().unwrap();
-            let pidfile = dir.path().join("daemon.pid");
-            (dir, pidfile)
-        };
-        let (_dir, pidfile, output) = crate::test_support::isolated_output_with(setup, |path| {
-            std::fs::write(&path, "123").unwrap();
-            let mut cfg = DaemonConfig::new();
-            cfg.pidfile(&path);
-            let ctx = ctx(&cfg, None, None);
-            ctx.cleanup_on_term_signals().unwrap();
-            nix::sys::signal::raise(nix::sys::signal::Signal::SIGTERM).unwrap();
-            unreachable!("should have been killed by the re-raised SIGTERM");
-        });
-
-        assert_eq!(
-            output.status.signal(),
-            Some(libc::SIGTERM),
-            "child should terminate via the re-raised SIGTERM; {}",
-            crate::test_support::subprocess_report(&output)
-        );
-        assert!(
-            !pidfile.exists(),
-            "handler should have removed the pidfile before re-raising"
+        assert_handler_removes_pidfile(
+            |ctx| ctx.cleanup_on_term_signals().unwrap(),
+            nix::sys::signal::Signal::SIGTERM,
         );
     }
 
