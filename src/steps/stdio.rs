@@ -652,7 +652,7 @@ mod tests {
     /// Outside a subprocess the stdio movers refuse to run. No paths, so the
     /// call would move nothing even if the refusal were gone.
     #[test]
-    #[should_panic(expected = "isolated()")]
+    #[should_panic(expected = "changes process-wide state under the shared test process")]
     fn redirect_output_refuses_the_shared_test_process() {
         let _ = kept(redirect_output(None, None, false, &[], Rollback::PutBack));
     }
