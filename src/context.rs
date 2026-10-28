@@ -628,26 +628,17 @@ mod tests {
     // only an error (ADR 0006).
     #[test]
     fn notify_parent_reports_a_gone_launcher_when_sigpipe_is_default() {
-        const MARKER: &str = "__BLIVET_NOTIFY_NO_LAUNCHER_DFL";
-        const NAME: &str =
-            "context::tests::notify_parent_reports_a_gone_launcher_when_sigpipe_is_default";
-
-        if std::env::var(MARKER).is_ok() {
-            crate::signals::restore_default_sigpipe();
-            let (rd, wr) = make_pipe();
-            drop(rd);
-            let mut ctx = ctx(&DaemonConfig::new(), None, Some(NotifyChannel::new(wr)));
-            let reported = matches!(ctx.notify_parent(), Err(DaemonizeError::NotifyFailed(_)));
-            std::process::exit(if reported { 0 } else { 3 });
+        if !crate::test_support::isolated() {
+            return;
         }
-
-        let output = crate::test_support::rerun_in_subprocess(NAME, MARKER, "1");
-        assert_eq!(
-            output.status.code(),
-            Some(0),
-            "{}",
-            crate::test_support::subprocess_report(NAME, &output)
-        );
+        crate::signals::restore_default_sigpipe();
+        let (rd, wr) = make_pipe();
+        drop(rd);
+        let mut ctx = ctx(&DaemonConfig::new(), None, Some(NotifyChannel::new(wr)));
+        assert!(matches!(
+            ctx.notify_parent(),
+            Err(DaemonizeError::NotifyFailed(_))
+        ));
     }
 
     // Covers: R161
