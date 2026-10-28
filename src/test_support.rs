@@ -13,43 +13,23 @@
 use std::ffi::OsStr;
 use std::process::{Command, Output};
 
-/// Environment variable set in the child [`isolated`] starts, to
-/// `<parent pid>:<test name>`: the process that started the child and the one
-/// test the child runs (see [`is_child_for`]).
+/// Environment variable set in the child [`isolated`] starts, to the pid of
+/// the process that started it (see [`marked_by`]).
 const SUBPROCESS_ENV: &str = "__BLIVET_SUBPROCESS_TEST";
 
 /// The value [`isolated_output_with`] hands its child.
 const ARG_ENV: &str = "__BLIVET_ISOLATED_ARG";
 
-/// The [`SUBPROCESS_ENV`] value for a child of process `parent` that runs
-/// test `test_name`.
-fn marker_for(parent: u32, test_name: &str) -> String {
-    format!("{parent}:{test_name}")
-}
-
-/// The parent pid and test name a [`SUBPROCESS_ENV`] value carries.
-fn parse_marker(marker: &OsStr) -> Option<(u32, &str)> {
-    let (parent, test_name) = marker.to_str()?.split_once(':')?;
-    Some((parent.parse().ok()?, test_name))
-}
-
 /// Whether a process whose parent is `parent` and whose [`SUBPROCESS_ENV`]
-/// value is `marker` is the child [`isolated`] started for test `test_name`.
+/// value is `marker` is a child [`isolated`] started.
 ///
 /// Only a marker its own parent set counts. A value leaked into a whole-suite
 /// run names some other process, so it can neither run an isolated body in
-/// the shared harness nor disarm [`assert_isolated`] there.
-fn is_child_for(test_name: &str, parent: u32, marker: Option<&OsStr>) -> bool {
-    marker.and_then(parse_marker) == Some((parent, test_name))
-}
-
-/// Whether this process is a child [`isolated`] started, for whichever test.
-/// The child runs that one test, so the whole process, every thread of it,
-/// belongs to the test.
-fn started_by_parent(parent: u32, marker: Option<&OsStr>) -> bool {
-    marker
-        .and_then(parse_marker)
-        .is_some_and(|(marked, _)| marked == parent)
+/// the shared harness nor disarm [`assert_isolated`] there. The child runs
+/// the one test its parent named with `--exact`, so the whole process, every
+/// thread of it, belongs to that test.
+fn marked_by(parent: u32, marker: Option<&OsStr>) -> bool {
+    marker == Some(OsStr::new(&parent.to_string()))
 }
 
 /// Runs the calling test again in its own process. Returns `true` in that
@@ -100,11 +80,9 @@ pub(crate) fn isolated_output_with<F, A: AsRef<OsStr>>(
     Isolated::Parent(fixture, arg, output)
 }
 
-/// Whether this runs in the child [`isolated_output`] started for the
-/// calling test.
+/// Whether this runs in a child [`isolated_output`] started.
 fn in_isolated_child() -> bool {
-    is_child_for(
-        &current_test_name(),
+    marked_by(
         std::os::unix::process::parent_id(),
         std::env::var_os(SUBPROCESS_ENV).as_deref(),
     )
@@ -157,7 +135,7 @@ fn rerun(test_name: &str, arg: Option<&OsStr>) -> Output {
         // The child's prints and panic messages go to the captured streams as
         // they happen, so a report shows them whatever libtest would buffer.
         .arg("--nocapture")
-        .env(SUBPROCESS_ENV, marker_for(std::process::id(), test_name));
+        .env(SUBPROCESS_ENV, std::process::id().to_string());
     if let Some(arg) = arg {
         command.env(ARG_ENV, arg);
     }
@@ -298,10 +276,7 @@ pub(crate) fn read_pipe(rd: std::os::fd::OwnedFd) -> Vec<u8> {
 /// one test, so nothing else opens descriptors under it.
 pub(crate) fn assert_isolated(what: &str) {
     assert!(
-        started_by_parent(
-            std::os::unix::process::parent_id(),
-            std::env::var_os(SUBPROCESS_ENV).as_deref()
-        ),
+        in_isolated_child(),
         "{what} changes process-wide state under the shared test process; \
          open the test with `if !isolated() {{ return; }}`"
     );
@@ -435,18 +410,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_child_runs_the_body_only_for_the_test_its_marker_names() {
-        let me = "steps::process::tests::x";
-        let marker = marker_for(42, me);
-        assert!(is_child_for(me, 42, Some(marker.as_ref())));
-        assert!(!is_child_for(
-            "steps::process::tests::y",
-            42,
-            Some(marker.as_ref())
-        ));
-        assert!(!is_child_for(me, 43, Some(marker.as_ref())));
-        assert!(!is_child_for(me, 42, Some(me.as_ref())));
-        assert!(!is_child_for(me, 42, None));
+    fn a_child_counts_only_its_own_parents_marker() {
+        assert!(marked_by(42, Some("42".as_ref())));
+        assert!(!marked_by(43, Some("42".as_ref())));
+        assert!(!marked_by(42, Some("steps::process::tests::x".as_ref())));
+        assert!(!marked_by(42, None));
     }
 
     /// A thread named `main` names no test, so rerunning it would match nothing.
@@ -504,10 +472,10 @@ mod tests {
         let isolated =
             "kernel_facts::a_send_to_a_closed_peer_fails_with_epipe_and_raises_no_sigpipe";
         let unguarded = "steps::stdio::tests::redirect_output_refuses_the_shared_test_process";
-        for leaked in [isolated.to_owned(), format!("0:{isolated}")] {
+        for leaked in [isolated, "0"] {
             let output = Command::new(std::env::current_exe().unwrap())
                 .args(["--exact", isolated, unguarded, "--test-threads=1"])
-                .env(SUBPROCESS_ENV, &leaked)
+                .env(SUBPROCESS_ENV, leaked)
                 .output()
                 .unwrap();
             let stdout = String::from_utf8_lossy(&output.stdout);
