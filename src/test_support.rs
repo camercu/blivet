@@ -168,7 +168,7 @@ fn child_ran(test_name: &str, stdout: &str) -> bool {
 /// ended, and both of its captured streams.
 pub(crate) fn subprocess_report(output: &Output) -> String {
     format!(
-        "subprocess test {} failed: {}\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        "subprocess test {} ended: {}\n--- stdout ---\n{}\n--- stderr ---\n{}",
         current_test_name(),
         output.status,
         String::from_utf8_lossy(&output.stdout),
