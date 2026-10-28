@@ -441,6 +441,19 @@ mod tests {
         std::panic::resume_unwind(joined.unwrap_err());
     }
 
+    /// Run only through [`a_child_runs_an_ignored_test`].
+    #[test]
+    #[ignore = "a probe for the rerun below, which passes --include-ignored"]
+    fn an_ignored_probe() {}
+
+    /// A child runs its test even when the test is `#[ignore]`d: the root
+    /// tiers' isolated tests all are.
+    #[test]
+    fn a_child_runs_an_ignored_test() {
+        let output = rerun("test_support::tests::an_ignored_probe", None);
+        assert!(output.status.success(), "{}", subprocess_report(&output));
+    }
+
     /// A child that matched no test fails its parent, rather than passing
     /// with a body that never ran.
     #[test]
