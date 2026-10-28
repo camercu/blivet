@@ -20,10 +20,6 @@ const SUBPROCESS_ENV: &str = "__BLIVET_SUBPROCESS_TEST";
 /// The value [`isolated_output_with`] hands its child, for [`isolated_arg`].
 const ARG_ENV: &str = "__BLIVET_ISOLATED_ARG";
 
-/// Set in every child [`rerun`] starts: each child runs one test, so it alone owns the
-/// process-wide state [`assert_isolated`] guards.
-const ISOLATED_ENV: &str = "__BLIVET_ISOLATED_TEST";
-
 /// Whether test `test_name` runs in the child [`isolated`] started for it,
 /// given the [`SUBPROCESS_ENV`] value `marker`. A marker that names another
 /// test does not count: a value leaked into a whole-suite run must not let
@@ -67,11 +63,19 @@ pub(crate) fn isolated_arg() -> std::ffi::OsString {
 }
 
 fn rerun_unless_child(arg: Option<&OsStr>) -> Option<Output> {
-    let test_name = current_test_name();
-    if is_child_for(&test_name, std::env::var_os(SUBPROCESS_ENV).as_deref()) {
+    if in_isolated_child() {
         return None;
     }
-    Some(rerun(&test_name, arg))
+    Some(rerun(&current_test_name(), arg))
+}
+
+/// Whether this runs in the child [`isolated_output`] started for the
+/// calling test.
+fn in_isolated_child() -> bool {
+    is_child_for(
+        &current_test_name(),
+        std::env::var_os(SUBPROCESS_ENV).as_deref(),
+    )
 }
 
 /// The calling test's full name, from the libtest thread that runs it.
@@ -119,8 +123,7 @@ fn rerun(test_name: &str, arg: Option<&OsStr>) -> Output {
         .arg(test_name)
         .arg("--include-ignored")
         .arg("--nocapture")
-        .env(SUBPROCESS_ENV, test_name)
-        .env(ISOLATED_ENV, "1");
+        .env(SUBPROCESS_ENV, test_name);
     if let Some(arg) = arg {
         command.env(ARG_ENV, arg);
     }
@@ -261,7 +264,7 @@ pub(crate) fn read_pipe(rd: std::os::fd::OwnedFd) -> Vec<u8> {
 /// one test, so nothing else opens descriptors under it.
 pub(crate) fn assert_isolated(what: &str) {
     assert!(
-        std::env::var_os(ISOLATED_ENV).is_some(),
+        in_isolated_child(),
         "{what} changes process-wide state under the shared test process; \
          open the test with `if !isolated() {{ return; }}`"
     );
@@ -439,6 +442,24 @@ mod tests {
         }
     }
 
+    /// A marker leaked into a whole run, naming some other test, leaves the
+    /// guard armed: a test that skips `isolated()` still panics.
+    #[test]
+    fn a_leaked_marker_leaves_the_isolation_guard_armed() {
+        let unguarded = "steps::stdio::tests::redirect_output_refuses_the_shared_test_process";
+        let output = Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", unguarded, "--nocapture"])
+            .env(SUBPROCESS_ENV, "some::other::test")
+            .output()
+            .unwrap();
+        assert!(
+            child_ran(unguarded, &String::from_utf8_lossy(&output.stdout))
+                && output.status.success(),
+            "{}",
+            subprocess_report(&output)
+        );
+    }
+
     /// The parent gets the child's exit to judge as the test needs.
     #[test]
     fn the_parent_reads_how_its_isolated_child_exited() {
@@ -463,7 +484,7 @@ mod tests {
     #[test]
     fn an_isolated_test_runs_its_body_in_a_child_process() {
         let ran = |pid: u32| tmp_dir().join(format!("blivet-isolated-ran-{pid}"));
-        if std::env::var_os(SUBPROCESS_ENV).is_none() {
+        if !in_isolated_child() {
             // A marker left by a crashed run under a reused pid would pass.
             let _ = std::fs::remove_file(ran(std::process::id()));
         }
@@ -474,11 +495,7 @@ mod tests {
             assert!(body_ran, "the isolated body never ran");
             return;
         }
-        assert_ne!(
-            std::env::var_os(ISOLATED_ENV),
-            None,
-            "the body ran outside a child"
-        );
+        assert!(in_isolated_child(), "the body ran outside a child");
         let parent = std::os::unix::process::parent_id();
         // create_new refuses a path that already exists, symlinks included.
         std::fs::OpenOptions::new()
