@@ -1389,11 +1389,14 @@ unchecked entry points, and a crate-private `Forker`.
 `public-api.txt` records all of these, and the `public-api` CI job fails
 on any change to it, so the rows only copied the snapshot.
 
-- R79–R82: retired, see the note above.
+- R79. Retired, see the note above.
+- R80. Retired, see the note above.
+- R81. Retired, see the note above.
+- R82. Retired, see the note above.
 - R83. `Display` messages are lowercase, no trailing punctuation.
-- R84: retired, see the note above.
+- R84. Retired, see the note above.
 - R85. `daemonize_unchecked()` calls `validate()` before forking.
-- R86: retired, see the note above.
+- R86. Retired, see the note above.
 - R87. `daemonize()` is `pub fn` wherever the capability table grants
   `thread_count`; a `#[deprecated]` panic stub on other targets. The
   requirement names the capability rather than the platforms: a list
@@ -1407,7 +1410,7 @@ on any change to it, so the rows only copied the snapshot.
   `sequence.rs`, and the entry points in `lib.rs`.
 - R90. `daemonize()` delegates to `daemonize_inner()` with
   `&mut impl Forker`.
-- R91: retired, see the note above.
+- R91. Retired, see the note above.
 - R92. `NullForker` exists only under `#[cfg(test)]`.
 - R93. `Cargo.toml`: no `panic = "abort"` in dev/test profiles.
 - R94. Steps execute in specified order; ordering is load-bearing.
