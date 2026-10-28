@@ -18,7 +18,7 @@ use std::process::{Command, Output};
 /// test the child runs (see [`is_child_for`]).
 const SUBPROCESS_ENV: &str = "__BLIVET_SUBPROCESS_TEST";
 
-/// The value [`isolated_output_with`] hands its child, for [`isolated_arg`].
+/// The value [`isolated_output_with`] hands its child.
 const ARG_ENV: &str = "__BLIVET_ISOLATED_ARG";
 
 /// The [`SUBPROCESS_ENV`] value for a child of process `parent` that runs
@@ -75,26 +75,29 @@ pub(crate) fn isolated_output() -> Option<Output> {
     Some(rerun(&current_test_name(), None))
 }
 
+/// Which side of [`isolated_output_with`] this is.
+pub(crate) enum Isolated<F, A> {
+    /// The child, where the test body runs, with the value its parent handed
+    /// it.
+    Child(std::ffi::OsString),
+    /// The parent, with its fixture, the value it handed the child, and how
+    /// the child ended.
+    Parent(F, A, Output),
+}
+
 /// [`isolated_output`] for a test whose parent makes a fixture, such as a
 /// path it checks afterwards. `setup` runs in the parent alone and returns the
-/// fixture and a value the child reads with [`isolated_arg`]; the parent gets
-/// both back with the child's [`Output`].
+/// fixture and a value for the child, which [`Isolated::Child`] carries.
 pub(crate) fn isolated_output_with<F, A: AsRef<OsStr>>(
     setup: impl FnOnce() -> (F, A),
-) -> Option<(F, A, Output)> {
+) -> Isolated<F, A> {
     if in_isolated_child() {
-        return None;
+        let arg = std::env::var_os(ARG_ENV).expect("the parent hands every child its value");
+        return Isolated::Child(arg);
     }
     let (fixture, arg) = setup();
     let output = rerun(&current_test_name(), Some(arg.as_ref()));
-    Some((fixture, arg, output))
-}
-
-/// In the child [`isolated_output_with`] started, the value its parent
-/// handed it.
-pub(crate) fn isolated_arg() -> std::ffi::OsString {
-    std::env::var_os(ARG_ENV)
-        .expect("isolated_arg() runs only in a child of isolated_output_with()")
+    Isolated::Parent(fixture, arg, output)
 }
 
 /// Whether this runs in the child [`isolated_output`] started for the
@@ -153,12 +156,9 @@ fn rerun(test_name: &str, arg: Option<&OsStr>) -> Output {
         .arg("--include-ignored")
         .arg("--nocapture")
         .env(SUBPROCESS_ENV, marker_for(std::process::id(), test_name));
-    // A value leaked from the environment must not reach a child that was
-    // handed none.
-    match arg {
-        Some(arg) => command.env(ARG_ENV, arg),
-        None => command.env_remove(ARG_ENV),
-    };
+    if let Some(arg) = arg {
+        command.env(ARG_ENV, arg);
+    }
     let output = command.output().unwrap();
     assert!(
         child_ran(test_name, &String::from_utf8_lossy(&output.stdout)),
@@ -556,12 +556,15 @@ mod tests {
             assert!(!in_isolated_child(), "the parent's setup ran in the child");
             ((), std::process::id().to_string())
         };
-        let Some(((), _, output)) = isolated_output_with(setup) else {
-            let parent = std::os::unix::process::parent_id().to_string();
-            assert_eq!(isolated_arg(), OsStr::new(&parent));
-            return;
-        };
-        assert!(output.status.success(), "{}", subprocess_report(&output));
+        match isolated_output_with(setup) {
+            Isolated::Child(arg) => {
+                let parent = std::os::unix::process::parent_id().to_string();
+                assert_eq!(arg, OsStr::new(&parent));
+            }
+            Isolated::Parent((), _, output) => {
+                assert!(output.status.success(), "{}", subprocess_report(&output));
+            }
+        }
     }
 
     #[allow(clippy::disallowed_methods)] // the harness keeps stdio open

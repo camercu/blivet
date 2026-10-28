@@ -666,13 +666,15 @@ mod tests {
             std::fs::write(&pidfile, "12345\n").unwrap();
             (dir, pidfile)
         };
-        let Some((_dir, pidfile, output)) = crate::test_support::isolated_output_with(setup) else {
-            let pidfile = crate::test_support::isolated_arg();
-            let (rd, wr) = make_pipe();
-            drop(rd);
-            let mut ctx = ctx(&pidfile_config(pidfile), None, Some(NotifyChannel::new(wr)));
-            ctx.notify_parent_or_report();
-            std::process::exit(0);
+        let (_dir, pidfile, output) = match crate::test_support::isolated_output_with(setup) {
+            crate::test_support::Isolated::Parent(dir, pidfile, output) => (dir, pidfile, output),
+            crate::test_support::Isolated::Child(pidfile) => {
+                let (rd, wr) = make_pipe();
+                drop(rd);
+                let mut ctx = ctx(&pidfile_config(pidfile), None, Some(NotifyChannel::new(wr)));
+                ctx.notify_parent_or_report();
+                std::process::exit(0);
+            }
         };
         assert_eq!(
             (output.status.code(), pidfile.exists()),
@@ -1044,15 +1046,17 @@ mod tests {
             let pidfile = dir.path().join("daemon.pid");
             (dir, pidfile)
         };
-        let Some((_dir, pidfile, output)) = crate::test_support::isolated_output_with(setup) else {
-            let path = crate::test_support::isolated_arg();
-            std::fs::write(&path, "123").unwrap();
-            let mut cfg = DaemonConfig::new();
-            cfg.pidfile(&path);
-            let ctx = ctx(&cfg, None, None);
-            ctx.cleanup_on_signals(&[libc::SIGTERM]).unwrap();
-            nix::sys::signal::raise(nix::sys::signal::Signal::SIGTERM).unwrap();
-            unreachable!("should have been killed by the re-raised SIGTERM");
+        let (_dir, pidfile, output) = match crate::test_support::isolated_output_with(setup) {
+            crate::test_support::Isolated::Parent(dir, pidfile, output) => (dir, pidfile, output),
+            crate::test_support::Isolated::Child(path) => {
+                std::fs::write(&path, "123").unwrap();
+                let mut cfg = DaemonConfig::new();
+                cfg.pidfile(&path);
+                let ctx = ctx(&cfg, None, None);
+                ctx.cleanup_on_signals(&[libc::SIGTERM]).unwrap();
+                nix::sys::signal::raise(nix::sys::signal::Signal::SIGTERM).unwrap();
+                unreachable!("should have been killed by the re-raised SIGTERM");
+            }
         };
 
         assert_eq!(
@@ -1079,15 +1083,17 @@ mod tests {
             let pidfile = dir.path().join("daemon.pid");
             (dir, pidfile)
         };
-        let Some((_dir, pidfile, output)) = crate::test_support::isolated_output_with(setup) else {
-            let path = crate::test_support::isolated_arg();
-            std::fs::write(&path, "123").unwrap();
-            let mut cfg = DaemonConfig::new();
-            cfg.pidfile(&path);
-            let ctx = ctx(&cfg, None, None);
-            ctx.cleanup_on_term_signals().unwrap();
-            nix::sys::signal::raise(nix::sys::signal::Signal::SIGINT).unwrap();
-            unreachable!("should have been killed by the re-raised SIGINT");
+        let (_dir, pidfile, output) = match crate::test_support::isolated_output_with(setup) {
+            crate::test_support::Isolated::Parent(dir, pidfile, output) => (dir, pidfile, output),
+            crate::test_support::Isolated::Child(path) => {
+                std::fs::write(&path, "123").unwrap();
+                let mut cfg = DaemonConfig::new();
+                cfg.pidfile(&path);
+                let ctx = ctx(&cfg, None, None);
+                ctx.cleanup_on_term_signals().unwrap();
+                nix::sys::signal::raise(nix::sys::signal::Signal::SIGINT).unwrap();
+                unreachable!("should have been killed by the re-raised SIGINT");
+            }
         };
 
         assert_eq!(
@@ -1113,15 +1119,17 @@ mod tests {
             let pidfile = dir.path().join("daemon.pid");
             (dir, pidfile)
         };
-        let Some((_dir, pidfile, output)) = crate::test_support::isolated_output_with(setup) else {
-            let path = crate::test_support::isolated_arg();
-            std::fs::write(&path, "123").unwrap();
-            let mut cfg = DaemonConfig::new();
-            cfg.pidfile(&path);
-            let ctx = ctx(&cfg, None, None);
-            ctx.cleanup_on_term_signals().unwrap();
-            nix::sys::signal::raise(nix::sys::signal::Signal::SIGTERM).unwrap();
-            unreachable!("should have been killed by the re-raised SIGTERM");
+        let (_dir, pidfile, output) = match crate::test_support::isolated_output_with(setup) {
+            crate::test_support::Isolated::Parent(dir, pidfile, output) => (dir, pidfile, output),
+            crate::test_support::Isolated::Child(path) => {
+                std::fs::write(&path, "123").unwrap();
+                let mut cfg = DaemonConfig::new();
+                cfg.pidfile(&path);
+                let ctx = ctx(&cfg, None, None);
+                ctx.cleanup_on_term_signals().unwrap();
+                nix::sys::signal::raise(nix::sys::signal::Signal::SIGTERM).unwrap();
+                unreachable!("should have been killed by the re-raised SIGTERM");
+            }
         };
 
         assert_eq!(
