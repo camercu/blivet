@@ -143,9 +143,12 @@ fn rerun(test_name: &str, arg: Option<&OsStr>) -> Output {
         .arg("--include-ignored")
         .arg("--nocapture")
         .env(SUBPROCESS_ENV, test_name);
-    if let Some(arg) = arg {
-        command.env(ARG_ENV, arg);
-    }
+    // A value leaked from the environment must not reach a child that was
+    // handed none.
+    match arg {
+        Some(arg) => command.env(ARG_ENV, arg),
+        None => command.env_remove(ARG_ENV),
+    };
     let output = command.output().unwrap();
     assert!(
         child_ran(test_name, &String::from_utf8_lossy(&output.stdout)),
