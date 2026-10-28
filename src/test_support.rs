@@ -11,8 +11,8 @@
 use std::ffi::OsStr;
 use std::process::{Command, Output};
 
-/// Environment variable set in the child [`isolated`] starts, so the test body
-/// knows it runs there (see [`is_subprocess`]).
+/// Environment variable set in the child [`isolated`] starts, to the name of
+/// the one test the child runs (see [`is_child_for`]).
 const SUBPROCESS_ENV: &str = "__BLIVET_SUBPROCESS_TEST";
 
 /// Set in every child [`rerun_in_subprocess`] starts, whatever marker the
@@ -20,10 +20,12 @@ const SUBPROCESS_ENV: &str = "__BLIVET_SUBPROCESS_TEST";
 /// process-wide state [`assert_isolated`] guards.
 const ISOLATED_ENV: &str = "__BLIVET_ISOLATED_TEST";
 
-/// Returns `true` when running inside a subprocess spawned by
-/// [`run_in_subprocess`].
-fn is_subprocess() -> bool {
-    std::env::var(SUBPROCESS_ENV).is_ok()
+/// Whether test `test_name` runs in the child [`isolated`] started for it,
+/// given the [`SUBPROCESS_ENV`] value `marker`. A marker that names another
+/// test does not count: a value leaked into a whole-suite run must not let
+/// every isolated body run in the shared harness.
+fn is_child_for(test_name: &str, marker: Option<&OsStr>) -> bool {
+    marker == Some(OsStr::new(test_name))
 }
 
 /// Runs the calling test again in its own process. Returns `true` in that
@@ -34,13 +36,13 @@ fn is_subprocess() -> bool {
 /// the test, so no test spells its own name. A thread with no name means the
 /// caller is not a test, and this panics.
 pub(crate) fn isolated() -> bool {
-    if is_subprocess() {
-        return true;
-    }
     let thread = std::thread::current();
     let test_name = thread
         .name()
         .expect("isolated() runs only on a libtest thread, which carries the test's name");
+    if is_child_for(test_name, std::env::var_os(SUBPROCESS_ENV).as_deref()) {
+        return true;
+    }
     run_in_subprocess(test_name);
     false
 }
@@ -51,7 +53,7 @@ pub(crate) fn isolated() -> bool {
 /// The privileged tier runs root-only tests, which are `#[ignore]`, so the
 /// child gets `--include-ignored` (see [`rerun_in_subprocess`]).
 fn run_in_subprocess(test_name: &str) {
-    let output = rerun_in_subprocess(test_name, SUBPROCESS_ENV, "1");
+    let output = rerun_in_subprocess(test_name, SUBPROCESS_ENV, test_name);
     assert!(
         output.status.success(),
         "{}",
@@ -361,6 +363,14 @@ pub(crate) fn shed_root() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_child_runs_the_body_only_for_the_test_its_marker_names() {
+        let me = "steps::process::tests::x";
+        assert!(is_child_for(me, Some(me.as_ref())));
+        assert!(!is_child_for(me, Some("steps::process::tests::y".as_ref())));
+        assert!(!is_child_for(me, None));
+    }
 
     #[test]
     fn an_isolated_test_runs_its_body_once_in_a_child_process() {
