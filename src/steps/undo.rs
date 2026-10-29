@@ -134,6 +134,10 @@ mod tests {
     use crate::test_support::{current_umask, isolated};
     use nix::sys::stat::{Mode, umask};
 
+    /// The umask each test starts from: not 0o022, the usual default, so a
+    /// restore to a default instead of the saved value fails.
+    const CALLER_UMASK: libc::mode_t = 0o027;
+
     #[test]
     fn a_token_holding_no_descriptor_spares_none() {
         if !isolated() {
@@ -157,9 +161,9 @@ mod tests {
         if !isolated() {
             return;
         }
-        umask(Mode::from_bits_truncate(0o022));
+        umask(Mode::from_bits_truncate(CALLER_UMASK));
         drop(set_umask(0o077, Rollback::PutBack));
-        assert_eq!(current_umask().bits(), 0o022);
+        assert_eq!(current_umask().bits(), CALLER_UMASK);
     }
 
     #[test]
@@ -167,7 +171,7 @@ mod tests {
         if !isolated() {
             return;
         }
-        umask(Mode::from_bits_truncate(0o022));
+        umask(Mode::from_bits_truncate(CALLER_UMASK));
         set_umask(0o077, Rollback::PutBack).keep();
         assert_eq!(current_umask().bits(), 0o077);
     }
@@ -182,7 +186,7 @@ mod tests {
         if !isolated() {
             return;
         }
-        umask(Mode::from_bits_truncate(0o022));
+        umask(Mode::from_bits_truncate(CALLER_UMASK));
         drop(set_umask(0o077, Rollback::Skip));
         assert_eq!(current_umask().bits(), 0o077);
     }
@@ -205,10 +209,10 @@ mod tests {
         if !isolated() {
             return;
         }
-        umask(Mode::from_bits_truncate(0o022));
+        umask(Mode::from_bits_truncate(CALLER_UMASK));
         let mut undo = set_umask(0o077, Rollback::PutBack);
         undo.threads_may_start();
         drop(undo);
-        assert_eq!(current_umask().bits(), 0o022);
+        assert_eq!(current_umask().bits(), CALLER_UMASK);
     }
 }
