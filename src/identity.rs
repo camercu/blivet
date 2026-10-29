@@ -141,7 +141,9 @@ impl ResolvedIdentity {
         let Some(info) = self.user() else {
             return Ok(Undo::nothing());
         };
-        let undo = Undo::saving(rollback, || Groups(crate::sys::raw_getgroups().ok()));
+        let undo = Undo::saving(rollback, || {
+            crate::steps::Saved::Groups(Groups(crate::sys::raw_getgroups().ok()))
+        });
         crate::sys::raw_initgroups(&info.cname()?, info.gid.as_raw())
             .map_err(|e| DaemonizeError::PermissionDenied(format!("initgroups: {e}")))?;
         Ok(undo)
@@ -242,10 +244,10 @@ fn resolve_group_gid(spec: &str) -> Result<Gid, DaemonizeError> {
 
 /// The supplementary groups step 14 replaced. Best-effort, as the working
 /// directory is: a `getgroups` failure must not fail the start (R164).
-struct Groups(Option<Vec<libc::gid_t>>);
+pub(crate) struct Groups(Option<Vec<libc::gid_t>>);
 
-impl crate::steps::Restore for Groups {
-    fn restore(self: Box<Self>) {
+impl Groups {
+    pub(crate) fn restore(self) {
         if let Some(groups) = self.0 {
             let _ = crate::sys::raw_setgroups(&groups);
         }

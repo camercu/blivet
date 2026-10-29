@@ -18,42 +18,77 @@ pub(crate) enum Rollback {
     Skip,
 }
 
-/// How to put back one change.
-pub(crate) trait Restore {
+/// What one step saved before its change, to put back.
+///
+/// Every match on this is exhaustive, so a new kind of saved state must say
+/// how it restores, which descriptor it holds, and whether its restore is
+/// sound once other threads may run.
+pub(crate) enum Saved {
+    Umask(super::Umask),
+    Cwd(super::Cwd),
+    SignalMask(super::SignalMask),
+    EnvVars(super::EnvVars),
+    Dispositions(crate::signals::Dispositions),
+    Slot(super::SavedSlot),
+    Groups(crate::identity::Groups),
+}
+
+impl Saved {
     /// Puts the state back.
-    fn restore(self: Box<Self>);
+    fn restore(self) {
+        match self {
+            Self::Umask(s) => s.restore(),
+            Self::Cwd(s) => s.restore(),
+            Self::SignalMask(s) => s.restore(),
+            Self::EnvVars(s) => s.restore(),
+            Self::Dispositions(s) => s.restore(),
+            Self::Slot(s) => s.restore(),
+            Self::Groups(s) => s.restore(),
+        }
+    }
 
     /// A descriptor this holds, which step 13's sweep must spare.
     fn held_fd(&self) -> Option<RawFd> {
-        None
+        match self {
+            Self::Cwd(s) => s.held_fd(),
+            Self::Slot(s) => s.held_fd(),
+            Self::Umask(_)
+            | Self::SignalMask(_)
+            | Self::EnvVars(_)
+            | Self::Dispositions(_)
+            | Self::Groups(_) => None,
+        }
+    }
+
+    /// Whether restoring is unsound once other threads may run. Restoring
+    /// the env calls `setenv`, which is undefined behaviour then.
+    fn single_threaded(&self) -> bool {
+        match self {
+            Self::EnvVars(_) => true,
+            Self::Umask(_)
+            | Self::Cwd(_)
+            | Self::SignalMask(_)
+            | Self::Dispositions(_)
+            | Self::Slot(_)
+            | Self::Groups(_) => false,
+        }
     }
 }
 
 /// A change a step made, put back when this drops unless [`keep`](Self::keep)
 /// was called.
 #[must_use = "a dropped token puts its change back at once"]
-pub(crate) struct Undo {
-    restore: Option<Box<dyn Restore>>,
-    /// Restoring calls `setenv`, which is undefined behaviour once another
-    /// thread may run.
-    single_threaded: bool,
-}
+pub(crate) struct Undo(Option<Saved>);
 
 impl Undo {
-    /// A token that puts back what `restore` saved.
-    pub(crate) fn new(restore: impl Restore + 'static) -> Self {
-        Self {
-            restore: Some(Box::new(restore)),
-            single_threaded: false,
-        }
+    /// A token that puts back what `saved` holds.
+    pub(crate) fn new(saved: Saved) -> Self {
+        Self(Some(saved))
     }
 
     /// Under [`Rollback::PutBack`], a token from what `save` saves. Under
     /// [`Rollback::Skip`], `save` does not run, and the token restores nothing.
-    pub(crate) fn saving<R: Restore + 'static>(
-        rollback: Rollback,
-        save: impl FnOnce() -> R,
-    ) -> Self {
+    pub(crate) fn saving(rollback: Rollback, save: impl FnOnce() -> Saved) -> Self {
         match rollback {
             Rollback::PutBack => Self::new(save()),
             Rollback::Skip => Self::nothing(),
@@ -62,41 +97,32 @@ impl Undo {
 
     /// A token for a step that changed nothing.
     pub(crate) fn nothing() -> Self {
-        Self {
-            restore: None,
-            single_threaded: false,
-        }
-    }
-
-    /// Marks this token's restore as unsound once other threads may run.
-    pub(crate) fn single_threaded(mut self) -> Self {
-        self.single_threaded = true;
-        self
+        Self(None)
     }
 
     /// Other threads may run from here, so a single-threaded token restores
     /// nothing.
     pub(crate) fn threads_may_start(&mut self) {
-        if self.single_threaded {
-            self.restore = None;
+        if self.0.as_ref().is_some_and(Saved::single_threaded) {
+            self.0 = None;
         }
     }
 
     /// Leaves the change in place.
     pub(crate) fn keep(mut self) {
-        self.restore = None;
+        self.0 = None;
     }
 
     /// The descriptor this holds, which step 13's sweep must spare.
     pub(crate) fn held_fd(&self) -> Option<RawFd> {
-        self.restore.as_ref().and_then(|r| r.held_fd())
+        self.0.as_ref().and_then(Saved::held_fd)
     }
 }
 
 impl Drop for Undo {
     fn drop(&mut self) {
-        if let Some(restore) = self.restore.take() {
-            restore.restore();
+        if let Some(saved) = self.0.take() {
+            saved.restore();
         }
     }
 }

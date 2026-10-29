@@ -9,7 +9,7 @@ use nix::fcntl::{OFlag, open};
 use nix::sys::stat::Mode;
 use nix::unistd::{self};
 
-use super::{Restore, Rollback, Undo};
+use super::{Rollback, Saved, Undo};
 use crate::error::DaemonizeError;
 use crate::file_identity::FileId;
 use std::os::fd::AsRawFd;
@@ -307,7 +307,9 @@ fn move_slot(
     moved: &mut Vec<Undo>,
 ) -> Result<(), SlotError> {
     match rollback {
-        Rollback::PutBack => moved.push(Undo::new(SavedSlot::redirect(source, target)?)),
+        Rollback::PutBack => {
+            moved.push(Undo::new(Saved::Slot(SavedSlot::redirect(source, target)?)))
+        }
         Rollback::Skip => target.dup2(source).map_err(SlotError::Dup2)?,
     }
     Ok(())
@@ -339,7 +341,7 @@ fn open_checked_stderr<'a, 'o>(
 }
 
 /// A stdio slot a step has moved, and what it held before.
-struct SavedSlot {
+pub(crate) struct SavedSlot {
     target: StdioSlot,
     /// What the slot held, or `None` if it was closed.
     was: Option<OwnedFd>,
@@ -357,10 +359,8 @@ impl SavedSlot {
         target.dup2(source).map_err(SlotError::Dup2)?;
         Ok(Self { target, was })
     }
-}
 
-impl Restore for SavedSlot {
-    fn restore(self: Box<Self>) {
+    pub(crate) fn restore(self) {
         match &self.was {
             Some(fd) => {
                 let _ = self.target.dup2(fd);
@@ -370,7 +370,7 @@ impl Restore for SavedSlot {
     }
 
     /// The saved copy, which the fd sweep must spare.
-    fn held_fd(&self) -> Option<i32> {
+    pub(crate) fn held_fd(&self) -> Option<i32> {
         self.was.as_ref().map(AsRawFd::as_raw_fd)
     }
 }

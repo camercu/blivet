@@ -7,7 +7,7 @@
 
 #![allow(unsafe_code)]
 
-use crate::steps::{Restore, Rollback, Undo};
+use crate::steps::{Rollback, Saved, Undo};
 
 /// Reset signal dispositions from 1 through the signal ceiling to SIG_DFL.
 ///
@@ -54,14 +54,14 @@ pub(crate) fn reset_signal_dispositions(
             // EINVAL: signal cannot be caught, skip
             Err(err) if err.raw_os_error() == Some(libc::EINVAL) => {}
             Err(err) => {
-                drop(Undo::new(saved));
+                drop(Undo::new(Saved::Dispositions(saved)));
                 return Err(crate::error::DaemonizeError::SystemError(format!(
                     "sigaction({sig}): {err}"
                 )));
             }
         }
     }
-    Ok(Undo::saving(rollback, || saved))
+    Ok(Undo::saving(rollback, || Saved::Dispositions(saved)))
 }
 
 /// Sets `sig` to SIG_DFL, reporting what it replaced in `was`.
@@ -91,10 +91,10 @@ struct Disposition {
 }
 
 /// The dispositions step 9 replaced, in the order it replaced them.
-struct Dispositions(Vec<Disposition>);
+pub(crate) struct Dispositions(Vec<Disposition>);
 
-impl Restore for Dispositions {
-    fn restore(self: Box<Self>) {
+impl Dispositions {
+    pub(crate) fn restore(self) {
         for Disposition { sig, was } in self.0.into_iter().rev() {
             // SAFETY: `was` is a disposition sigaction itself reported for
             // `sig`.

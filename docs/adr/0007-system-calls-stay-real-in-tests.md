@@ -137,12 +137,12 @@ where planning fits.
     `#[ignore]` body and a test that ran it by name in a subprocess. The
     spike used a macro. `test_support::isolated` is a plain function
     instead, so rustfmt still formats the test bodies.
-  - A plain-data enum of saved state, with exhaustive matches for
-    restoring, for `single_threaded`, and for `held_fd`, replaces the
-    `Box<dyn Restore>` in each token. The enum stays inside `Undo`, so
-    `#[must_use]` still catches a dropped token. Whether a token restores
-    only while single-threaded becomes a match on the variant, not a flag
-    that `Undo::single_threaded` sets.
+  - Landed: a plain-data enum of saved state, `steps::Saved`, with
+    exhaustive matches for restoring, for `single_threaded`, and for
+    `held_fd`, replaces the `Box<dyn Restore>` in each token. The enum
+    stays inside `Undo`, so `#[must_use]` still catches a dropped token.
+    Whether a token restores only while single-threaded is a match on the
+    variant, not a flag that `Undo::single_threaded` set.
   - Restoring returns a `Result`, and rollback collects the failures.
     Every error variant carries them as structured data. An error from
     `init` keeps its own message (R154), because the failures go in a
