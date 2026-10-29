@@ -131,15 +131,8 @@ impl Drop for Undo {
 mod tests {
     use super::*;
     use crate::steps::{change_dir, set_env_vars, set_umask};
-    use crate::test_support::isolated;
+    use crate::test_support::{current_umask, isolated};
     use nix::sys::stat::{Mode, umask};
-
-    /// The umask now; reading it means setting it, so this puts it back.
-    fn current_umask() -> Mode {
-        let now = umask(Mode::empty());
-        umask(now);
-        now
-    }
 
     #[test]
     fn a_token_holding_no_descriptor_spares_none() {

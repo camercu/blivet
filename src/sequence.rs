@@ -1053,7 +1053,7 @@ mod tests {
     /// reaches its terminal, not the log file.
     #[test]
     fn a_failed_foreground_sequence_puts_the_callers_process_back() {
-        use nix::sys::stat::{Mode, fstat, umask};
+        use nix::sys::stat::{fstat, umask};
         if !isolated() {
             return;
         }
@@ -1072,8 +1072,7 @@ mod tests {
         };
         let before = stdio();
         let cwd_before = std::env::current_dir().unwrap();
-        let umask_before = umask(Mode::from_bits_truncate(0o022));
-        umask(umask_before);
+        let umask_before = crate::test_support::current_umask();
 
         let mut config = DaemonConfig::new();
         config

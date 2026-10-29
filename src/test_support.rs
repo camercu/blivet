@@ -343,6 +343,15 @@ pub(crate) fn signal_state() -> (Vec<SignalAction>, Vec<i32>) {
     (dispositions, blocked)
 }
 
+/// The umask now. Reading it sets it, for a moment, process-wide.
+pub(crate) fn current_umask() -> nix::sys::stat::Mode {
+    use nix::sys::stat::{Mode, umask};
+    assert_isolated("current_umask");
+    let mask = umask(Mode::empty());
+    umask(mask);
+    mask
+}
+
 /// The process state a failed foreground start must leave as it found it
 /// (R164), as the undo walk compares it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -363,11 +372,8 @@ pub(crate) struct ProcessSnapshot {
 impl ProcessSnapshot {
     /// Reads the state now. `pidfile` is the file the start writes.
     pub(crate) fn take(pidfile: &std::path::Path) -> Self {
-        use nix::sys::stat::{Mode, umask};
-        // Reading the umask sets it, for a moment, process-wide.
         assert_isolated("ProcessSnapshot::take");
-        let mask = umask(Mode::empty());
-        umask(mask);
+        let mask = current_umask();
         let stdio = [0, 1, 2].map(|fd| {
             // SAFETY: `fstat` only reads the slot; a closed one is EBADF.
             #[allow(unsafe_code)]
@@ -646,7 +652,7 @@ mod tests {
         fn identity() -> crate::identity::ResolvedIdentity {
             crate::identity::ResolvedIdentity::resolve(None, None).unwrap()
         }
-        let entry_points: [(&str, fn()); 18] = [
+        let entry_points: [(&str, fn()); 19] = [
             ("fill_fd_table", || drop(fill_fd_table(0))),
             ("with_fds_closed", || with_fds_closed(&[], || ())),
             ("writer_with_no_reader", || drop(writer_with_no_reader())),
@@ -691,6 +697,9 @@ mod tests {
             ("a failpoint", || failpoints::SETUID_FAILS.set()),
             ("the undo walk", || failpoints::fail_at_checkpoint(0)),
             ("the injected fd limit", || failpoints::set_max_fd(0)),
+            ("current_umask", || {
+                let _ = current_umask();
+            }),
             ("ProcessSnapshot::take", || {
                 let _ = ProcessSnapshot::take(std::path::Path::new("/nonexistent"));
             }),
