@@ -184,8 +184,9 @@ fn user_switch_sets_env_vars() {
     );
 
     let _daemon = wait_for_daemon(&pidfile).expect("pidfile should appear");
-    // Poll for the daemon's output instead of a fixed sleep.
-    let content = wait_for_file_content(&env_file, "USER=testuser");
+    // Poll for the daemon's output instead of a fixed sleep. Each echo is
+    // its own write, so wait for the last line, not the first.
+    let content = wait_for_file_content(&env_file, "LOGNAME=");
 
     // R28: USER and LOGNAME should be set to target user
     assert!(
