@@ -54,7 +54,7 @@ pub(crate) fn reset_signal_dispositions(
             // EINVAL: signal cannot be caught, skip
             Err(err) if err.raw_os_error() == Some(libc::EINVAL) => {}
             Err(err) => {
-                drop(Undo::new(Saved::Dispositions(saved)));
+                saved.restore();
                 return Err(crate::error::DaemonizeError::SystemError(format!(
                     "sigaction({sig}): {err}"
                 )));
