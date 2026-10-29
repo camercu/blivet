@@ -188,7 +188,6 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::disallowed_methods)] // setenv: the isolated child runs this test alone
     fn a_single_threaded_token_restores_nothing_once_threads_may_start() {
         if !isolated() {
             return;
