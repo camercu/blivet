@@ -364,6 +364,8 @@ impl ProcessSnapshot {
     /// Reads the state now. `pidfile` is the file the start writes.
     pub(crate) fn take(pidfile: &std::path::Path) -> Self {
         use nix::sys::stat::{Mode, umask};
+        // Reading the umask sets it, for a moment, process-wide.
+        assert_isolated("ProcessSnapshot::take");
         let mask = umask(Mode::empty());
         umask(mask);
         let stdio = [0, 1, 2].map(|fd| {
@@ -644,7 +646,7 @@ mod tests {
         fn identity() -> crate::identity::ResolvedIdentity {
             crate::identity::ResolvedIdentity::resolve(None, None).unwrap()
         }
-        let entry_points: [(&str, fn()); 17] = [
+        let entry_points: [(&str, fn()); 18] = [
             ("fill_fd_table", || drop(fill_fd_table(0))),
             ("with_fds_closed", || with_fds_closed(&[], || ())),
             ("writer_with_no_reader", || drop(writer_with_no_reader())),
@@ -689,6 +691,9 @@ mod tests {
             ("a failpoint", || failpoints::SETUID_FAILS.set()),
             ("the undo walk", || failpoints::fail_at_checkpoint(0)),
             ("the injected fd limit", || failpoints::set_max_fd(0)),
+            ("ProcessSnapshot::take", || {
+                let _ = ProcessSnapshot::take(std::path::Path::new("/nonexistent"));
+            }),
         ];
         for (what, call) in entry_points {
             let panic = std::panic::catch_unwind(call).expect_err(what);
