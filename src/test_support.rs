@@ -627,9 +627,19 @@ mod tests {
     /// Each guarded entry point refuses the shared test process before it
     /// changes anything. `redirect_output` and `StdioSlot::dup2` have their
     /// own tests in `steps::stdio`.
+    ///
+    /// The probes run in an isolated child that then drops its marker, so it
+    /// counts as shared: an entry point that lost its guard changes this child,
+    /// not the harness every other test runs in.
     #[test]
     #[allow(unsafe_code)]
+    #[allow(clippy::disallowed_methods)] // setenv: the child runs this test alone
     fn every_guarded_entry_point_refuses_the_shared_test_process() {
+        if !isolated() {
+            return;
+        }
+        // SAFETY: this child runs one test, and no other thread reads the env.
+        unsafe { std::env::set_var(SUBPROCESS_ENV, "0") };
         use crate::steps::{self, Rollback, failpoints};
         fn identity() -> crate::identity::ResolvedIdentity {
             crate::identity::ResolvedIdentity::resolve(None, None).unwrap()
