@@ -142,7 +142,12 @@ fn rerun(test_name: &str, arg: Option<&OsStr>) -> Output {
     if let Some(arg) = arg {
         command.env(ARG_ENV, arg);
     }
-    let output = command.output().unwrap();
+    // A pipe, not the `/dev/null` that `output()` would give: a step that
+    // puts `/dev/null` on fd 0 must change what the child's fd 0 is.
+    let output = command
+        .stdin(std::process::Stdio::piped())
+        .output()
+        .unwrap();
     assert!(
         child_ran(test_name, &String::from_utf8_lossy(&output.stdout)),
         "subprocess test {test_name} matched no test or was skipped as ignored, \
@@ -561,6 +566,21 @@ mod tests {
     fn a_test_reaches_one_isolation_point() {
         let _ = isolated_output();
         let _ = isolated_output();
+    }
+
+    /// A step that puts `/dev/null` on fd 0 must show up as a change, so the
+    /// child's stdin starts as something else.
+    #[test]
+    fn the_isolated_child_reads_no_dev_null_on_stdin() {
+        use std::os::fd::AsFd;
+        use std::os::unix::fs::MetadataExt;
+        if !isolated() {
+            return;
+        }
+        let fd0 = std::io::stdin().as_fd().try_clone_to_owned().unwrap();
+        let stdin = std::fs::File::from(fd0).metadata().unwrap();
+        let null = std::fs::metadata("/dev/null").unwrap();
+        assert_ne!((stdin.dev(), stdin.ino()), (null.dev(), null.ino()));
     }
 
     /// The child reads the parent's value, not the one it computes itself.
