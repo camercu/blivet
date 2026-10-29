@@ -118,7 +118,17 @@ fn current_test_name() -> String {
 /// inside the test binary. A caller that expects the child to fail, or to die
 /// on a signal, still gets its own verdict from the returned [`Output`]; this
 /// only rules out the child having run nothing.
+#[allow(clippy::missing_const_for_thread_local)] // RERAN is const; the lint misfires on Android
 fn rerun(test_name: &str, arg: Option<&OsStr>) -> Output {
+    // libtest runs each test on a thread of its own, so this is per test.
+    thread_local! {
+        static RERAN: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+    assert!(
+        !RERAN.replace(true),
+        "{test_name} reached a second isolation point; its child stops at the \
+         first, so the body behind this one would never run"
+    );
     let exe = std::env::current_exe().unwrap();
     let mut command = Command::new(exe);
     command
@@ -541,6 +551,15 @@ mod tests {
             std::process::exit(5);
         };
         assert_eq!(output.status.code(), Some(5));
+    }
+
+    /// A child reruns its whole test and stops at the first isolation point,
+    /// so a body behind a second one would never run.
+    #[test]
+    #[should_panic(expected = "reached a second isolation point")]
+    fn a_test_reaches_one_isolation_point() {
+        let _ = isolated_output();
+        let _ = isolated_output();
     }
 
     /// The child reads the parent's value, not the one it computes itself.
