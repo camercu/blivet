@@ -633,8 +633,7 @@ mod tests {
             return;
         }
         let wr = writer_with_no_reader();
-        let (err_rd, err_wr) = make_pipe();
-        drop(err_rd);
+        let err_wr = writer_with_no_reader();
         #[allow(clippy::disallowed_methods)] // the test's own process
         nix::unistd::dup2_stderr(err_wr).unwrap();
 
