@@ -135,14 +135,14 @@ impl ResolvedIdentity {
         &self,
         rollback: crate::steps::Rollback,
     ) -> Result<crate::steps::Undo, DaemonizeError> {
-        use crate::steps::Undo;
+        use crate::steps::{Saved, Undo};
         #[cfg(test)]
         crate::test_support::assert_isolated("joining the user's groups");
         let Some(info) = self.user() else {
             return Ok(Undo::nothing());
         };
         let undo = Undo::saving(rollback, || {
-            crate::steps::Saved::Groups(Groups(crate::sys::raw_getgroups().ok()))
+            Saved::Groups(Groups(crate::sys::raw_getgroups().ok()))
         });
         crate::sys::raw_initgroups(&info.cname()?, info.gid.as_raw())
             .map_err(|e| DaemonizeError::PermissionDenied(format!("initgroups: {e}")))?;
