@@ -594,7 +594,7 @@ mod tests {
         fn identity() -> crate::identity::ResolvedIdentity {
             crate::identity::ResolvedIdentity::resolve(None, None).unwrap()
         }
-        let entry_points: [(&str, fn()); 16] = [
+        let entry_points: [(&str, fn()); 17] = [
             ("fill_fd_table", || drop(fill_fd_table(0))),
             ("with_fds_closed", || with_fds_closed(&[], || ())),
             ("writer_with_no_reader", || drop(writer_with_no_reader())),
@@ -619,6 +619,9 @@ mod tests {
             }),
             ("reset_signal_dispositions", || {
                 drop(crate::signals::reset_signal_dispositions(Rollback::PutBack));
+            }),
+            ("restore_default_sigpipe", || {
+                let _ = crate::signals::restore_default_sigpipe();
             }),
             ("install_pidfile_cleanup_signals", || {
                 drop(crate::signals::install_pidfile_cleanup_signals(

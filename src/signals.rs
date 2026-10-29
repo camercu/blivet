@@ -229,6 +229,8 @@ pub(crate) fn may_clean_up_on(sig: i32) -> bool {
 /// the exec'd program expects the default (R128). If the exec fails,
 /// [`CallerSigpipe::restore`] puts the caller's disposition back.
 pub(crate) fn restore_default_sigpipe() -> CallerSigpipe {
+    #[cfg(test)]
+    crate::test_support::assert_isolated("restore_default_sigpipe");
     let sa = new_sigaction(libc::SIG_DFL, 0);
     let mut old = zeroed_sigaction();
     // SAFETY: SIG_DFL with an empty mask is a valid disposition for SIGPIPE,
