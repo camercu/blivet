@@ -180,6 +180,11 @@ mod tests {
     }
 
     #[test]
+    fn under_skip_nothing_is_saved() {
+        Undo::saving(Rollback::Skip, || unreachable!("Skip must not save")).keep();
+    }
+
+    #[test]
     fn under_skip_nothing_is_restored() {
         if !isolated() {
             return;
