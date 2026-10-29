@@ -30,6 +30,41 @@ fn caller_state() {
     blocked.add(Signal::SIGUSR2);
     blocked.thread_block().unwrap();
     nix::sys::stat::umask(nix::sys::stat::Mode::from_bits_truncate(0o022));
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    realtime_caller_state();
+}
+
+/// The same for the real-time signals above 31, which a snapshot that read
+/// only the classic ones would miss.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+#[allow(unsafe_code)]
+fn realtime_caller_state() {
+    let handled = libc::SIGRTMIN();
+    let blocked = libc::SIGRTMIN() + 1;
+    let handler = caller_handler as extern "C" fn(libc::c_int);
+    // SAFETY: all-zero bytes are a valid `sigaction` and `sigset_t`.
+    let (mut sa, mut set): (libc::sigaction, libc::sigset_t) = unsafe { std::mem::zeroed() };
+    sa.sa_sigaction = handler as libc::sighandler_t;
+    // SAFETY: `sa.sa_mask` is a valid set to empty.
+    unsafe { libc::sigemptyset(&mut sa.sa_mask) };
+    // SAFETY: the handler does nothing, so it is async-signal-safe.
+    let ret = unsafe { libc::sigaction(handled, &sa, std::ptr::null_mut()) };
+    assert_eq!(ret, 0, "sigaction");
+    // SAFETY: `set` is a valid set to fill.
+    unsafe { libc::sigemptyset(&mut set) };
+    // SAFETY: `set` is initialised and `blocked` is a real-time signal.
+    unsafe { libc::sigaddset(&mut set, blocked) };
+    // SAFETY: `set` is initialised; a null old set reads nothing back.
+    let ret = unsafe { libc::pthread_sigmask(libc::SIG_BLOCK, &set, std::ptr::null_mut()) };
+    assert_eq!(ret, 0, "pthread_sigmask");
+    let (dispositions, mask) = crate::test_support::signal_state();
+    assert!(
+        mask.contains(&blocked)
+            && dispositions
+                .iter()
+                .any(|d| d.0 == handled && d.1 == handler as usize),
+        "the snapshot misses the real-time signals"
+    );
 }
 
 /// Walks `config`'s foreground start; `pidfile` is the one it writes.
