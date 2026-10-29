@@ -1039,8 +1039,11 @@ mod tests {
         let (_dir, pidfile, output) = crate::test_support::isolated_output_with(setup, |path| {
             std::fs::write(&path, "123").unwrap();
             let mut cfg = DaemonConfig::new();
-            cfg.pidfile(&path);
-            install(&ctx(&cfg, None, None));
+            // Only the handler may remove the pidfile: the context's own drop
+            // would hide a handler that never ran.
+            cfg.pidfile(&path).cleanup_on_drop(false);
+            let ctx = ctx(&cfg, None, None);
+            install(&ctx);
             nix::sys::signal::raise(sig).unwrap();
             unreachable!("should have been killed by the re-raised {sig}");
         });
