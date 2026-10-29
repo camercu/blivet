@@ -104,77 +104,87 @@ impl Drop for Undo {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::cell::Cell;
-    use std::rc::Rc;
+    use crate::steps::{change_dir, set_env_vars, set_umask};
+    use crate::test_support::isolated;
+    use nix::sys::stat::{Mode, umask};
 
-    struct Count(Rc<Cell<u32>>);
-
-    impl Restore for Count {
-        fn restore(self: Box<Self>) {
-            self.0.set(self.0.get() + 1);
-        }
-    }
-
-    fn counter() -> (Rc<Cell<u32>>, Count) {
-        let n = Rc::new(Cell::new(0));
-        (n.clone(), Count(n))
+    /// The umask now; reading it means setting it, so this puts it back.
+    fn current_umask() -> Mode {
+        let now = umask(Mode::empty());
+        umask(now);
+        now
     }
 
     #[test]
     fn a_token_holding_no_descriptor_spares_none() {
-        let (_, count) = counter();
-        let undo = Undo::new(count);
+        if !isolated() {
+            return;
+        }
+        let undo = set_umask(0o077, Rollback::PutBack);
         assert_eq!(undo.held_fd(), None);
-        undo.keep();
+    }
+
+    #[test]
+    fn a_token_holding_a_descriptor_spares_it() {
+        if !isolated() {
+            return;
+        }
+        let undo = change_dir(std::path::Path::new("/"), Rollback::PutBack).unwrap();
+        assert!(undo.held_fd().is_some());
     }
 
     #[test]
     fn a_dropped_token_restores() {
-        let (n, count) = counter();
-        drop(Undo::new(count));
-        assert_eq!(n.get(), 1);
+        if !isolated() {
+            return;
+        }
+        umask(Mode::from_bits_truncate(0o022));
+        drop(set_umask(0o077, Rollback::PutBack));
+        assert_eq!(current_umask().bits(), 0o022);
     }
 
     #[test]
     fn a_kept_token_restores_nothing() {
-        let (n, count) = counter();
-        Undo::new(count).keep();
-        assert_eq!(n.get(), 0);
+        if !isolated() {
+            return;
+        }
+        umask(Mode::from_bits_truncate(0o022));
+        set_umask(0o077, Rollback::PutBack).keep();
+        assert_eq!(current_umask().bits(), 0o077);
     }
 
     #[test]
-    fn under_skip_nothing_is_saved_or_restored() {
-        let (n, count) = counter();
-        let saved = Cell::new(false);
-        drop(Undo::saving(Rollback::Skip, || {
-            saved.set(true);
-            count
-        }));
-        assert_eq!((saved.get(), n.get()), (false, 0));
+    fn under_skip_nothing_is_restored() {
+        if !isolated() {
+            return;
+        }
+        umask(Mode::from_bits_truncate(0o022));
+        drop(set_umask(0o077, Rollback::Skip));
+        assert_eq!(current_umask().bits(), 0o077);
     }
 
     #[test]
-    fn under_put_back_the_saved_state_is_restored() {
-        let (n, count) = counter();
-        drop(Undo::saving(Rollback::PutBack, || count));
-        assert_eq!(n.get(), 1);
-    }
-
-    #[test]
+    #[allow(clippy::disallowed_methods)] // setenv: the isolated child runs this test alone
     fn a_single_threaded_token_restores_nothing_once_threads_may_start() {
-        let (n, count) = counter();
-        let mut undo = Undo::new(count).single_threaded();
+        if !isolated() {
+            return;
+        }
+        let key = "BLIVET_UNDO_TEST";
+        let mut undo = set_env_vars(&[(key.into(), "set".into())], Rollback::PutBack);
         undo.threads_may_start();
         drop(undo);
-        assert_eq!(n.get(), 0);
+        assert_eq!(std::env::var(key).as_deref(), Ok("set"));
     }
 
     #[test]
     fn other_tokens_still_restore_once_threads_may_start() {
-        let (n, count) = counter();
-        let mut undo = Undo::new(count);
+        if !isolated() {
+            return;
+        }
+        umask(Mode::from_bits_truncate(0o022));
+        let mut undo = set_umask(0o077, Rollback::PutBack);
         undo.threads_may_start();
         drop(undo);
-        assert_eq!(n.get(), 1);
+        assert_eq!(current_umask().bits(), 0o022);
     }
 }
