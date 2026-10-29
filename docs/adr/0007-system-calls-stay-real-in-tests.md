@@ -11,9 +11,10 @@
 The daemonize sequence in `src/sequence.rs` changes process-wide state
 through system calls. A failed foreground start must put every change back,
 newest first ([R164](../SPEC.md)). Each step that changes state returns an
-undo token, an `Undo` from `src/steps/undo.rs` that holds a
-`Box<dyn Restore>`. `AbortGuard` in `src/sequence.rs` holds the tokens and
-drops them in reverse. Tests prove the rollback in three ways:
+undo token, an `Undo` from `src/steps/undo.rs` that held a
+`Box<dyn Restore>` when this was decided. `AbortGuard` in
+`src/sequence.rs` holds the tokens and drops them in reverse. Tests prove
+the rollback in three ways:
 
 - Isolated tests (`src/test_support.rs`) run one start in a fresh process,
   so a change to the umask, the cwd, or the signal mask cannot leak into
