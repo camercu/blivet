@@ -261,9 +261,10 @@ pub(crate) fn make_pipe() -> (std::os::fd::OwnedFd, std::os::fd::OwnedFd) {
 /// with `EPIPE`.
 ///
 /// Only an isolated child can promise that. In the shared harness a parallel
-/// test may spawn a subprocess in the window before the read end gets
-/// close-on-exec (macOS has no `SOCK_CLOEXEC`); the subprocess then holds a
-/// reader, and the write succeeds.
+/// test may fork a subprocess while the read end is open, and the subprocess
+/// holds a reader until its `exec`, or for good when it forked before the
+/// read end got close-on-exec (macOS has no `SOCK_CLOEXEC`). The write then
+/// succeeds.
 pub(crate) fn writer_with_no_reader() -> std::os::fd::OwnedFd {
     assert_isolated("writer_with_no_reader");
     let (rd, wr) = make_pipe();
