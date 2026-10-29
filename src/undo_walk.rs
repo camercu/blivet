@@ -15,8 +15,7 @@ use crate::{DaemonConfig, DaemonizeError};
 extern "C" fn caller_handler(_: libc::c_int) {}
 
 /// Gives the caller state each step would visibly change: a handler, a blocked
-/// signal, a umask neither the config nor the usual default 0o022 asks for, so
-/// a restore to a default instead of the saved value shows.
+/// signal, a umask the config does not ask for.
 #[allow(unsafe_code)]
 fn caller_state() {
     use nix::sys::signal::{SaFlags, SigAction, SigHandler, SigSet, Signal, sigaction};
@@ -30,7 +29,9 @@ fn caller_state() {
     let mut blocked = SigSet::empty();
     blocked.add(Signal::SIGUSR2);
     blocked.thread_block().unwrap();
-    nix::sys::stat::umask(nix::sys::stat::Mode::from_bits_truncate(0o027));
+    nix::sys::stat::umask(nix::sys::stat::Mode::from_bits_truncate(
+        crate::test_support::CALLER_UMASK,
+    ));
     #[cfg(any(target_os = "linux", target_os = "android"))]
     realtime_caller_state();
 }

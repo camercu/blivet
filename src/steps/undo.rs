@@ -131,12 +131,8 @@ impl Drop for Undo {
 mod tests {
     use super::*;
     use crate::steps::{change_dir, set_env_vars, set_umask};
-    use crate::test_support::{current_umask, isolated};
+    use crate::test_support::{CALLER_UMASK, current_umask, isolated};
     use nix::sys::stat::{Mode, umask};
-
-    /// The umask each test starts from: not 0o022, the usual default, so a
-    /// restore to a default instead of the saved value fails.
-    const CALLER_UMASK: libc::mode_t = 0o027;
 
     #[test]
     fn a_token_holding_no_descriptor_spares_none() {

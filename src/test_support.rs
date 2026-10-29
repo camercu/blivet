@@ -343,6 +343,10 @@ pub(crate) fn signal_state() -> (Vec<SignalAction>, Vec<i32>) {
     (dispositions, blocked)
 }
 
+/// The umask a test that checks umask restore sets first: not 0o022, the
+/// usual default, so a restore to a default instead of the saved value fails.
+pub(crate) const CALLER_UMASK: libc::mode_t = 0o027;
+
 /// The umask now. Reading it sets it, for a moment, process-wide.
 pub(crate) fn current_umask() -> nix::sys::stat::Mode {
     use nix::sys::stat::{Mode, umask};
