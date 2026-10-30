@@ -377,9 +377,9 @@ checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
 
 [[package]]
 name = "relentless"
-version = "0.18.3"
+version = "0.18.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4bef8f092960d0d019898709f019e634fe943b6a01d2fde240b90e5cc9d78061"
+checksum = "b0960fa879f68720eda13b774ca391402bce11e04c02b1678a1609673f641e8a"
 dependencies = [
  "embassy-time",
  "pin-project-lite",
