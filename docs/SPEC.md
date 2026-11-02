@@ -1722,3 +1722,9 @@ on any change to it, so the rows only copied the snapshot.
   stdio slot, is close-on-exec. A program `init` spawns or the daemon
   execs inherits none of them, except the lockfile `DaemonContext::exec`
   hands on (R110).
+- R169. Step 7's lock counts only when the lockfile path still names
+  the file locked, compared by device and inode. A rollback or a
+  daemon's cleanup unlinks the file it locked, and a lock taken on the
+  unlinked file would let the next instance lock a new one beside it.
+  On a mismatch, or a path gone, step 7 opens the path again, up to 8
+  times, then fails with `LockfileError`.

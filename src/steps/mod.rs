@@ -77,6 +77,28 @@ pub(crate) mod failpoints {
     /// disk then is not this process's to remove.
     pub(crate) static PIDFILE_OPEN_FAILS: Failpoint = Failpoint::new();
 
+    /// How many more times step 7 unlinks the lockfile between its `open`
+    /// and its `flock`, as another instance's rollback can. 0 unlinks none.
+    static UNLINKS_BEFORE_LOCK: AtomicUsize = AtomicUsize::new(0);
+
+    /// Sets [`UNLINKS_BEFORE_LOCK`], in this whole process; asserts the test
+    /// runs in its own process.
+    pub(crate) fn unlink_before_lock(times: usize) {
+        crate::test_support::assert_isolated("the lockfile unlink");
+        UNLINKS_BEFORE_LOCK.store(times, Ordering::Relaxed);
+    }
+
+    /// Whether step 7 unlinks the lockfile now, counting the unlink.
+    pub(crate) fn unlinks_before_lock() -> bool {
+        // Set before the sequence runs and never read concurrently.
+        let left = UNLINKS_BEFORE_LOCK.load(Ordering::Relaxed);
+        if left == 0 {
+            return false;
+        }
+        UNLINKS_BEFORE_LOCK.store(left - 1, Ordering::Relaxed);
+        true
+    }
+
     /// Fails step 12's truncation of a stream file, the last thing it does:
     /// every stdio slot has moved by then.
     pub(crate) static STREAM_TRUNCATE_FAILS: Failpoint = Failpoint::new();

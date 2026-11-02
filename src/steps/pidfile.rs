@@ -13,13 +13,52 @@ use crate::error::ErrorKind;
 use crate::file_identity::{FileId, file_id, paths_same};
 
 /// Step 7: Open and exclusively lock a lockfile.
+///
+/// A rollback, or a daemon's cleanup, unlinks the file it locked, so the file
+/// this opened may be gone from the path by the time the lock is taken. That
+/// lock would guard nothing: the next instance creates the path anew and locks
+/// that. So the lock counts only once the path still names the locked file;
+/// else the step opens the path again, up to [`LOCK_ATTEMPTS`] times.
 pub(crate) fn open_and_lock(path: &Path) -> Result<Flock<OwnedFd>, ErrorKind> {
+    for _ in 0..LOCK_ATTEMPTS {
+        let flock = lock_once(path)?;
+        let locked = file_id(&*flock)
+            .map_err(|e| ErrorKind::LockfileError(format!("fstat {}: {e}", path.display())))?;
+        match nix::sys::stat::stat(path) {
+            Ok(st) if FileId::of(&st) == locked => return Ok(flock),
+            Ok(_) | Err(nix::errno::Errno::ENOENT) => {}
+            Err(e) => {
+                return Err(ErrorKind::LockfileError(format!(
+                    "stat {}: {e}",
+                    path.display()
+                )));
+            }
+        }
+    }
+    Err(ErrorKind::LockfileError(format!(
+        "{} kept changing while it was locked",
+        path.display()
+    )))
+}
+
+/// How often step 7 opens the lockfile again when the path stopped naming the
+/// file it locked. Each retry means another instance removed the file in the
+/// moment between this one's `open` and `flock`, so a few suffice.
+const LOCK_ATTEMPTS: usize = 8;
+
+/// Opens the lockfile and takes its lock, without checking the path.
+fn lock_once(path: &Path) -> Result<Flock<OwnedFd>, ErrorKind> {
     let fd = open_above_stdio(
         path,
         OFlag::O_WRONLY | OFlag::O_CREAT,
         Mode::from_bits_truncate(0o644),
     )
     .map_err(|e| ErrorKind::LockfileError(format!("cannot open {}: {e}", path.display())))?;
+
+    #[cfg(test)]
+    if crate::steps::failpoints::unlinks_before_lock() {
+        std::fs::remove_file(path).unwrap();
+    }
 
     Flock::lock(fd, FlockArg::LockExclusiveNonblock).map_err(|(_fd, e)| {
         if e == nix::errno::Errno::EWOULDBLOCK {
@@ -203,6 +242,44 @@ mod tests {
                 lock.as_raw_fd()
             );
         }
+    }
+
+    // Covers: R169
+    /// Another instance's rollback can unlink the lockfile after this one
+    /// opened it and before it locked it. A lock on the unlinked file guards
+    /// nothing: a third instance creates the path anew and locks that.
+    #[test]
+    fn the_lock_held_is_on_the_file_the_path_names() {
+        if !isolated() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.lock");
+        crate::steps::failpoints::unlink_before_lock(1);
+        let flock = open_and_lock(&path).unwrap();
+        assert_eq!(
+            file_id(&*flock).ok(),
+            nix::sys::stat::stat(&path).ok().map(|st| FileId::of(&st)),
+        );
+    }
+
+    // Covers: R169
+    /// A lockfile unlinked under every attempt fails the step instead of
+    /// spinning.
+    #[test]
+    fn a_lockfile_that_keeps_vanishing_fails_the_lock() {
+        if !isolated() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.lock");
+        crate::steps::failpoints::unlink_before_lock(usize::MAX);
+        let result = open_and_lock(&path);
+        assert!(
+            matches!(&result, Err(ErrorKind::LockfileError(m)) if m.contains("kept changing")),
+            "{:?}",
+            result.err()
+        );
     }
 
     #[test]
