@@ -157,17 +157,17 @@ fn panicked(payload: &(dyn std::any::Any + Send)) -> ErrorKind {
 }
 
 /// What a failed sequence undoes (R164): each step's [`Undo`](steps::Undo)
-/// token, in the reverse of the order the steps ran, then the pidfile (step 8),
-/// and last the lock (step 7). A half-done identity switch (step 17) undoes
-/// itself. [`roll_back`](Self::roll_back) returns what it could not undo, for
-/// the error; a panic unwinding past the sequence rolls back in `Drop`, with
+/// token, in the reverse of the order the steps ran, and last the lock
+/// (step 7). A half-done identity switch (step 17) undoes itself.
+/// [`roll_back`](Self::roll_back) returns what it could not undo, for the
+/// error; a panic unwinding past the sequence rolls back in `Drop`, with
 /// nowhere to report.
 ///
 /// In foreground mode the process is the caller's, and it gets back the parts
-/// that can be restored. In daemon mode the process exits on failure, so the
-/// tokens hold nothing and only the pidfile is removed. What cannot be
-/// restored is in R164. [`disarm`](Self::disarm) at step 18 keeps every change
-/// and hands over the lock.
+/// that can be restored. In daemon mode the process exits on failure, so only
+/// the tokens for files on disk hold anything. What cannot be restored is in
+/// R164. [`disarm`](Self::disarm) at step 18 keeps every change and hands over
+/// the lock.
 ///
 /// The pidfile goes while the lock is still held: released first, the lock
 /// would let a second instance in to write its pid into a file this one then
@@ -182,12 +182,6 @@ struct AbortGuard<'a> {
     /// The checkpoints passed, where the undo walk may fail the sequence.
     #[cfg(test)]
     checkpoints: usize,
-    /// The pidfile this process owns from the second half of step 8: written
-    /// or truncated by it, so a failure must not leave it naming a process
-    /// that never started. Removed whatever
-    /// [`cleanup_on_drop`](crate::DaemonConfig::cleanup_on_drop) says, which
-    /// governs only a daemon that started (R145).
-    pidfile: Option<&'a std::path::Path>,
     /// The files steps 7, 8 and 12 opened, the lock among them.
     files: steps::OpenedFiles<'a>,
 }
@@ -203,7 +197,6 @@ impl AbortGuard<'_> {
             undo: Vec::new(),
             #[cfg(test)]
             checkpoints: 0,
-            pidfile: None,
             files: steps::OpenedFiles::default(),
         }
     }
@@ -259,25 +252,15 @@ impl AbortGuard<'_> {
         self.undo.iter().filter_map(steps::Undo::held_fd)
     }
 
-    /// Puts back every recorded change, latest first, removes the pidfile,
-    /// and returns what could not be undone.
+    /// Puts back every recorded change, latest first, and returns what could
+    /// not be put back.
     fn roll_back(&mut self) -> Vec<RestoreFailure> {
-        let mut failures = steps::restore_all(std::mem::take(&mut self.undo));
-        if let Some(path) = self.pidfile.take() {
-            match std::fs::remove_file(path) {
-                Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
-                    failures.push(RestoreFailure::new(ChangedState::Pidfile, e));
-                }
-                _ => {}
-            }
-        }
-        failures
+        steps::restore_all(std::mem::take(&mut self.undo))
     }
 
     /// The sequence finished: keep every change, and hand over the lock.
     fn disarm(&mut self) -> Option<Flock<OwnedFd>> {
         self.undo.drain(..).for_each(steps::Undo::keep);
-        self.pidfile = None;
         self.files.take_lock()
     }
 }
@@ -359,12 +342,19 @@ unsafe fn run_steps<'a, T>(
     // write succeeds: a write that fails half way leaves an empty file naming
     // no process at all. Nor any earlier: an `open_pidfile` that fails, or a
     // lock conflict at step 7, leaves a file that belongs to someone else.
-    // The abort guard removes the pidfile from the second half of step 8 on.
+    // Its token removes the pidfile from the second half of step 8 on, in
+    // both modes: the file outlives a daemon that exits.
     let mut pidfile_id = None;
     if let Some(ref pidfile_path) = config.pidfile {
         let pidfile = steps::open_pidfile(pidfile_path, abort.files.lock())?;
-        abort.pidfile = Some(pidfile_path);
+        let removal = steps::Removal::new(pidfile_path, pidfile.id()?, ChangedState::Pidfile);
+        // `pidfile` borrows the lock from `abort.files`, so the token goes in
+        // by field, and its checkpoint follows the write.
+        abort
+            .undo
+            .push(steps::Undo::new(steps::Saved::Removal(removal)));
         let (id, fd) = pidfile.write_pid()?;
+        abort.checkpoint()?;
         pidfile_id = Some(id);
         // A standalone pidfile's descriptor, kept for step 16's chown (R163).
         if let Some(fd) = fd {
@@ -1248,28 +1238,78 @@ mod tests {
     }
 
     // Covers: R164
+    /// A pidfile in a directory init made read-only stays, and the rollback
+    /// says so with the path and the reason.
     #[test]
     fn a_pidfile_the_rollback_cannot_remove_is_reported() {
         use crate::ChangedState;
+        use std::os::unix::fs::PermissionsExt;
         if !isolated() {
             return;
         }
+        crate::test_support::shed_root();
         let dir = tempfile::tempdir().unwrap();
         let pidfile = dir.path().join("app.pid");
         let mut config = DaemonConfig::new();
         config.foreground(true).close_fds(false).pidfile(&pidfile);
+        let read_only = |mode| {
+            std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(mode)).unwrap();
+        };
 
         let result: Result<(DaemonContext, ()), _> =
             run_inner_with(&config, &mut NullForker::new(vec![], Ok(())), || {
-                std::fs::remove_file(&pidfile).unwrap();
-                std::fs::create_dir(&pidfile).unwrap();
-                std::fs::write(pidfile.join("keep"), "").unwrap();
+                read_only(0o555);
                 Err(DaemonizeError::application(75, "init failed"))
             });
+        read_only(0o755);
+
+        let err = result.expect_err("init failed the start");
+        let report: Vec<_> = err
+            .rollback_failures()
+            .iter()
+            .map(|f| (f.state(), f.path(), f.error().raw_os_error()))
+            .collect();
+        assert_eq!(
+            report,
+            [(ChangedState::Pidfile, Some(&*pidfile), Some(libc::EACCES))]
+        );
+    }
+
+    // Covers: R164
+    /// Latest first: the pidfile (step 8) before the working directory
+    /// (step 5).
+    #[test]
+    fn rollback_failures_come_latest_step_first() {
+        use crate::ChangedState;
+        use std::os::unix::fs::PermissionsExt;
+        if !isolated() {
+            return;
+        }
+        let start = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(start.path(), std::fs::Permissions::from_mode(0o311)).unwrap();
+        crate::test_support::shed_root();
+        std::env::set_current_dir(start.path()).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let pidfile = dir.path().join("app.pid");
+        let mut config = DaemonConfig::new();
+        config.foreground(true).close_fds(false).pidfile(&pidfile);
+        let read_only = |mode| {
+            std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(mode)).unwrap();
+        };
+
+        let result: Result<(DaemonContext, ()), _> =
+            run_inner_with(&config, &mut NullForker::new(vec![], Ok(())), || {
+                read_only(0o555);
+                Err(DaemonizeError::application(75, "init failed"))
+            });
+        read_only(0o755);
 
         let err = result.expect_err("init failed the start");
         let states: Vec<_> = err.rollback_failures().iter().map(|f| f.state()).collect();
-        assert_eq!(states, [ChangedState::Pidfile]);
+        assert_eq!(
+            states,
+            [ChangedState::Pidfile, ChangedState::WorkingDirectory]
+        );
     }
 
     // Covers: R164

@@ -225,9 +225,9 @@ meaningful status:
 
 A foreground start that fails puts back what it changed in your process. Each
 change it could not put back is in `rollback_failures()`: the `ChangedState`
-left changed, and the `io::Error` that stopped it. The error's message stays
-the kind's. The CLI prints one `rollback left <state> changed: <error>` line for
-each, after the error.
+left changed, the path for a file, and the `io::Error` that stopped it. The
+error's message stays the kind's. The CLI prints one `rollback left <state>
+[<path>] changed: <error>` line for each, after the error.
 
 ## Recipes
 

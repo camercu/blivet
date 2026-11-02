@@ -151,6 +151,7 @@ impl !core::panic::unwind_safe::UnwindSafe for blivet::DaemonizeError
 pub struct blivet::RestoreFailure
 impl blivet::RestoreFailure
 pub fn blivet::RestoreFailure::error(&self) -> &core::io::error::Error
+pub fn blivet::RestoreFailure::path(&self) -> core::option::Option<&std::path::Path>
 pub fn blivet::RestoreFailure::state(&self) -> blivet::ChangedState
 impl core::error::Error for blivet::RestoreFailure
 pub fn blivet::RestoreFailure::source(&self) -> core::option::Option<&(dyn core::error::Error + 'static)>

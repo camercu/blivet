@@ -8,10 +8,11 @@
 //! files as opened, not whatever `init` left on fds 1 and 2.
 
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd, RawFd};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use nix::fcntl::Flock;
 
+use crate::error::{ChangedState, RestoreFailure};
 use crate::file_identity::FileId;
 
 /// What a file is to the sequence, with the descriptor that holds it.
@@ -35,6 +36,37 @@ impl AsFd for Role {
         match self {
             Self::Lockfile(flock) => flock.as_fd(),
             Self::Pidfile(fd) | Self::Stream(fd) => fd.as_fd(),
+        }
+    }
+}
+
+/// A file a step left on disk, to remove on failure in either mode (R164).
+///
+/// Removed only while the path still names it: a file another process put
+/// there since is not this one's to remove.
+pub(crate) struct Removal {
+    path: PathBuf,
+    id: FileId,
+    state: ChangedState,
+}
+
+impl Removal {
+    pub(crate) fn new(path: &Path, id: FileId, state: ChangedState) -> Self {
+        Self {
+            path: path.to_path_buf(),
+            id,
+            state,
+        }
+    }
+
+    pub(crate) fn restore(self) -> Result<(), RestoreFailure> {
+        let failed = |e: std::io::Error| RestoreFailure::at(self.state, &self.path, e);
+        match nix::sys::stat::stat(&self.path) {
+            Ok(st) if FileId::of(&st) == self.id => {
+                std::fs::remove_file(&self.path).map_err(failed)
+            }
+            Ok(_) | Err(nix::errno::Errno::ENOENT) => Ok(()),
+            Err(e) => Err(failed(e.into())),
         }
     }
 }

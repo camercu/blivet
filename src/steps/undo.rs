@@ -6,6 +6,10 @@
 //! failure it restores them in reverse and reports each that could not be put
 //! back; at step 18 it keeps them all. A token that drops unrestored puts its
 //! change back and reports nothing.
+//!
+//! Most tokens hold process state, which a daemon's exit discards, so a
+//! daemon saves none ([`Rollback::Skip`]). A file a step left on disk outlives
+//! the process: its token is made with [`Undo::new`] in both modes.
 
 use std::os::fd::RawFd;
 
@@ -35,6 +39,7 @@ pub(crate) enum Saved {
     Dispositions(crate::signals::Dispositions),
     Slot(super::SavedSlot),
     Groups(crate::identity::Groups),
+    Removal(super::Removal),
 }
 
 impl Saved {
@@ -54,6 +59,7 @@ impl Saved {
             Self::Dispositions(s) => s.restore(),
             Self::Slot(s) => s.restore(),
             Self::Groups(s) => s.restore(),
+            Self::Removal(s) => s.restore(),
         }
     }
 
@@ -66,7 +72,8 @@ impl Saved {
             | Self::SignalMask(_)
             | Self::EnvVars(_)
             | Self::Dispositions(_)
-            | Self::Groups(_) => None,
+            | Self::Groups(_)
+            | Self::Removal(_) => None,
         }
     }
 
@@ -80,7 +87,8 @@ impl Saved {
             | Self::SignalMask(_)
             | Self::Dispositions(_)
             | Self::Slot(_)
-            | Self::Groups(_) => false,
+            | Self::Groups(_)
+            | Self::Removal(_) => false,
         }
     }
 }

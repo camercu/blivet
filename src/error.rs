@@ -99,6 +99,7 @@ impl std::error::Error for DaemonizeError {
 #[derive(Debug)]
 pub struct RestoreFailure {
     state: ChangedState,
+    path: Option<std::path::PathBuf>,
     error: std::io::Error,
 }
 
@@ -106,13 +107,31 @@ impl RestoreFailure {
     pub(crate) fn new(state: ChangedState, error: impl Into<std::io::Error>) -> Self {
         Self {
             state,
+            path: None,
             error: error.into(),
+        }
+    }
+
+    /// A failure to put back the file at `path`.
+    pub(crate) fn at(
+        state: ChangedState,
+        path: &std::path::Path,
+        error: impl Into<std::io::Error>,
+    ) -> Self {
+        Self {
+            path: Some(path.to_path_buf()),
+            ..Self::new(state, error)
         }
     }
 
     /// The state left changed.
     pub fn state(&self) -> ChangedState {
         self.state
+    }
+
+    /// The file left changed, for state that is a file on disk.
+    pub fn path(&self) -> Option<&std::path::Path> {
+        self.path.as_deref()
     }
 
     /// Why it could not be put back: the restore's error, or the error that
@@ -124,7 +143,10 @@ impl RestoreFailure {
 
 impl std::fmt::Display for RestoreFailure {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}: {}", self.state, self.error)
+        match &self.path {
+            Some(path) => write!(f, "{} {}: {}", self.state, path.display(), self.error),
+            None => write!(f, "{}: {}", self.state, self.error),
+        }
     }
 }
 
@@ -613,6 +635,22 @@ mod tests {
             format!(
                 "supplementary groups: {}",
                 std::io::Error::from_raw_os_error(libc::EPERM)
+            )
+        );
+    }
+
+    #[test]
+    fn a_restore_failure_on_a_file_names_its_path() {
+        let failure = RestoreFailure::at(
+            ChangedState::Pidfile,
+            std::path::Path::new("/run/app.pid"),
+            std::io::Error::from_raw_os_error(libc::EACCES),
+        );
+        assert_eq!(
+            failure.to_string(),
+            format!(
+                "pidfile /run/app.pid: {}",
+                std::io::Error::from_raw_os_error(libc::EACCES)
             )
         );
     }

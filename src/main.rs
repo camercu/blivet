@@ -211,11 +211,19 @@ fn main() -> ExitCode {
         Err(e) => {
             eprintln!("{e}");
             for failure in e.rollback_failures() {
-                eprintln!(
-                    "rollback left {} changed: {}",
-                    failure.state(),
-                    failure.error()
-                );
+                match failure.path() {
+                    Some(path) => eprintln!(
+                        "rollback left {} {} changed: {}",
+                        failure.state(),
+                        path.display(),
+                        failure.error()
+                    ),
+                    None => eprintln!(
+                        "rollback left {} changed: {}",
+                        failure.state(),
+                        failure.error()
+                    ),
+                }
             }
             return ExitCode::from(e.exit_code());
         }

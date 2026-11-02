@@ -117,6 +117,15 @@ pub(crate) enum Pidfile<'a> {
 }
 
 impl Pidfile<'_> {
+    /// The identity of the file taken hold of, for its removal on failure.
+    pub(crate) fn id(&self) -> Result<FileId, ErrorKind> {
+        let fd = match self {
+            Pidfile::Locked(flock) => flock.as_fd(),
+            Pidfile::Opened { fd, .. } => fd.as_fd(),
+        };
+        file_id(fd).map_err(|e| ErrorKind::PidfileError(format!("fstat: {e}")))
+    }
+
     /// Step 8, second half: write this process's PID, replacing any content.
     ///
     /// Returns the identity of the file written, so step 12 can refuse a

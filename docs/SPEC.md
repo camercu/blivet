@@ -290,9 +290,11 @@ kind's, so an `init` error keeps its message (R154). Constructors:
 `application(code, message)` and `From<ErrorKind>`. Must be `Send + Sync`
 (compile-time assertion in tests).
 
-A `RestoreFailure` holds the `ChangedState` left changed, `state()`, and
-why, `error() -> &io::Error`: the restore's error, or the error that kept
-the step from saving the state. `Display` is `<state>: <error>`.
+A `RestoreFailure` holds the `ChangedState` left changed, `state()`; for
+a file, its path, `path() -> Option<&Path>`; and why, `error() ->
+&io::Error`: the restore's error, or the error that kept the step from
+saving the state. `Display` is `<state>: <error>`, or `<state> <path>:
+<error>` for a file.
 `ChangedState` is `#[non_exhaustive]`: `Stdin`, `Stdout`, `Stderr`,
 `WorkingDirectory`, `SignalMask`, `SignalDispositions`,
 `SupplementaryGroups`, `PrimaryGroup`, `Pidfile`. The umask and the
