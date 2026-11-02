@@ -81,22 +81,32 @@ pub(crate) mod failpoints {
     /// and its `flock`, as another instance's rollback can. 0 unlinks none.
     static UNLINKS_BEFORE_LOCK: AtomicUsize = AtomicUsize::new(0);
 
-    /// Sets [`UNLINKS_BEFORE_LOCK`], in this whole process; asserts the test
-    /// runs in its own process.
-    pub(crate) fn unlink_before_lock(times: usize) {
+    /// Whether each unlink also creates a new file at the path, as a third
+    /// instance starting then would.
+    static RECREATE_AFTER_UNLINK: AtomicBool = AtomicBool::new(false);
+
+    /// Sets [`UNLINKS_BEFORE_LOCK`] and [`RECREATE_AFTER_UNLINK`], in this
+    /// whole process; asserts the test runs in its own process.
+    pub(crate) fn unlink_before_lock(times: usize, recreate: bool) {
         crate::test_support::assert_isolated("the lockfile unlink");
         UNLINKS_BEFORE_LOCK.store(times, Ordering::Relaxed);
+        RECREATE_AFTER_UNLINK.store(recreate, Ordering::Relaxed);
     }
 
-    /// Whether step 7 unlinks the lockfile now, counting the unlink.
-    pub(crate) fn unlinks_before_lock() -> bool {
+    /// Unlinks `path` if a test asked for it now, counting the unlink, and
+    /// creates a new file there if it asked for that too.
+    pub(crate) fn unlink_if_injected(path: &std::path::Path) {
         // Set before the sequence runs and never read concurrently.
         let left = UNLINKS_BEFORE_LOCK.load(Ordering::Relaxed);
         if left == 0 {
-            return false;
+            return;
         }
         UNLINKS_BEFORE_LOCK.store(left - 1, Ordering::Relaxed);
-        true
+        std::fs::remove_file(path).unwrap();
+        if RECREATE_AFTER_UNLINK.load(Ordering::Relaxed) {
+            #[allow(clippy::disallowed_methods)] // a test's stand-in for another instance
+            std::fs::File::create(path).unwrap();
+        }
     }
 
     /// Fails step 12's truncation of a stream file, the last thing it does:

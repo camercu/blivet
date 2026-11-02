@@ -56,9 +56,7 @@ fn lock_once(path: &Path) -> Result<Flock<OwnedFd>, ErrorKind> {
     .map_err(|e| ErrorKind::LockfileError(format!("cannot open {}: {e}", path.display())))?;
 
     #[cfg(test)]
-    if crate::steps::failpoints::unlinks_before_lock() {
-        std::fs::remove_file(path).unwrap();
-    }
+    crate::steps::failpoints::unlink_if_injected(path);
 
     Flock::lock(fd, FlockArg::LockExclusiveNonblock).map_err(|(_fd, e)| {
         if e == nix::errno::Errno::EWOULDBLOCK {
@@ -246,8 +244,8 @@ mod tests {
 
     // Covers: R169
     /// Another instance's rollback can unlink the lockfile after this one
-    /// opened it and before it locked it. A lock on the unlinked file guards
-    /// nothing: a third instance creates the path anew and locks that.
+    /// opened it and before it locked it, and a third instance create the
+    /// path anew. A lock on the unlinked file guards nothing.
     #[test]
     fn the_lock_held_is_on_the_file_the_path_names() {
         if !isolated() {
@@ -255,7 +253,7 @@ mod tests {
         }
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("test.lock");
-        crate::steps::failpoints::unlink_before_lock(1);
+        crate::steps::failpoints::unlink_before_lock(1, true);
         let flock = open_and_lock(&path).unwrap();
         assert_eq!(
             file_id(&*flock).ok(),
@@ -273,7 +271,7 @@ mod tests {
         }
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("test.lock");
-        crate::steps::failpoints::unlink_before_lock(usize::MAX);
+        crate::steps::failpoints::unlink_before_lock(usize::MAX, false);
         let result = open_and_lock(&path);
         assert!(
             matches!(&result, Err(ErrorKind::LockfileError(m)) if m.contains("kept changing")),
