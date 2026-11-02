@@ -2,7 +2,7 @@
 //! stderr to the configured files (step 12), and keeping every descriptor
 //! the sequence opens above fd 2 (R152).
 
-use std::os::fd::{AsFd, OwnedFd};
+use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
 use std::path::Path;
 
 use nix::fcntl::{OFlag, open};
@@ -120,12 +120,11 @@ pub(crate) fn plan_output_redirect(
     })
 }
 
-/// A stream's file, opened but not yet truncated or redirected.
+/// A stream's file, opened but not yet redirected.
 struct OpenStream<'a> {
     path: &'a Path,
     fd: OwnedFd,
     id: FileId,
-    regular: bool,
 }
 
 /// Opens `path` for a stream without truncating it: nothing on disk may
@@ -147,31 +146,72 @@ fn open_stream<'a>(
     let id = FileId::of(&st);
     if created {
         let removal = super::Removal::new(path, id, ChangedState::OutputFile);
-        moved.push(Undo::new(super::Saved::Removal(removal)));
+        moved.push(Undo::new(Saved::Removal(removal)));
     }
-    Ok(OpenStream {
-        path,
-        id,
-        // A FIFO or a device (`-o /dev/null`) has no length to truncate:
-        // `ftruncate` refuses one, where `O_TRUNC` used to ignore it.
-        regular: st.st_mode & libc::S_IFMT == libc::S_IFREG,
-        fd,
-    })
+    Ok(OpenStream { path, id, fd })
 }
 
-/// Empties a stream's file, as `O_TRUNC` would have when it was opened.
-fn truncate(stream: &OpenStream) -> Result<(), ErrorKind> {
-    if !stream.regular {
-        return Ok(());
+/// Step 15's first act: empties each stream file step 12 opened, as
+/// `O_TRUNC` would have, unless appending (R11).
+///
+/// The truncation cannot be undone, so it waits until just before `init`: a
+/// start that fails before it leaves the previous run's logs as they were.
+/// A file it empties of content gets a token in either mode that reports the
+/// loss if the start then fails (R164). A failure part way reports the files
+/// it already emptied.
+pub(crate) fn truncate_streams<'p>(
+    files: impl IntoIterator<Item = (&'p Path, BorrowedFd<'p>)>,
+) -> Result<Vec<Undo>, DaemonizeError> {
+    let mut emptied = Vec::new();
+    match truncate_streams_into(files, &mut emptied) {
+        Ok(()) => Ok(emptied),
+        Err(e) => {
+            let failures = super::restore_all(emptied);
+            Err(DaemonizeError::from(e).with_rollback_failures(failures))
+        }
     }
-    #[cfg(test)]
-    if crate::steps::failpoints::STREAM_TRUNCATE_FAILS.injected() {
-        return Err(ErrorKind::OutputFileError(
-            "truncate: injected failure".into(),
-        ));
+}
+
+/// The work of [`truncate_streams`], leaving each loss's token in `emptied`.
+fn truncate_streams_into<'p>(
+    files: impl IntoIterator<Item = (&'p Path, BorrowedFd<'p>)>,
+    emptied: &mut Vec<Undo>,
+) -> Result<(), ErrorKind> {
+    for (path, fd) in files {
+        let failed =
+            |what, e| ErrorKind::OutputFileError(format!("{what} {}: {e}", path.display()));
+        let st = nix::sys::stat::fstat(fd).map_err(|e| failed("fstat", e))?;
+        // A FIFO or a device (`-o /dev/null`) has no length to truncate:
+        // `ftruncate` refuses one, where `O_TRUNC` used to ignore it.
+        if st.st_mode & libc::S_IFMT != libc::S_IFREG {
+            continue;
+        }
+        #[cfg(test)]
+        if crate::steps::failpoints::STREAM_TRUNCATE_FAILS.injected() {
+            return Err(ErrorKind::OutputFileError(
+                "truncate: injected failure".into(),
+            ));
+        }
+        nix::unistd::ftruncate(fd, 0).map_err(|e| failed("truncate", e))?;
+        if st.st_size > 0 {
+            emptied.push(Undo::new(Saved::Emptied(Emptied(path.to_path_buf()))));
+        }
     }
-    nix::unistd::ftruncate(&stream.fd, 0)
-        .map_err(|e| ErrorKind::OutputFileError(format!("truncate {}: {e}", stream.path.display())))
+    Ok(())
+}
+
+/// A stream file step 15 emptied of content, which no rollback can put back.
+pub(crate) struct Emptied(std::path::PathBuf);
+
+impl Emptied {
+    /// Reports the content lost.
+    pub(crate) fn restore(self) -> Result<(), RestoreFailure> {
+        Err(RestoreFailure::at(
+            ChangedState::OutputFile,
+            &self.0,
+            std::io::Error::other("truncated, so its earlier content is lost"),
+        ))
+    }
 }
 
 /// Step 12: Redirect stdout/stderr to configured files.
@@ -187,13 +227,12 @@ fn truncate(stream: &OpenStream) -> Result<(), ErrorKind> {
 ///
 /// With [`Rollback::PutBack`], a failure undoes what this did (R147), and on
 /// success the saved slots are returned, so a later failure in the sequence
-/// can put them back too (R164). The opened files come back too: step 16
-/// chowns them by these descriptors, not by whatever `init` left on fds 1
-/// and 2 (R163). Each stdio slot is saved before it moves; the
-/// truncations, which cannot be undone, come last. A stream file it created
-/// has a token in either mode, which removes it on failure; an I/O error
-/// truncating stderr after stdout's truncation succeeded leaves stdout
-/// emptied.
+/// can put them back too (R164). The opened files come back too: step 15
+/// truncates them and step 16 chowns them, by these descriptors, not by
+/// whatever `init` left on fds 1 and 2 (R163). Each stdio slot is saved
+/// before it moves. A stream file it created has a token in either mode,
+/// which removes it on failure. It truncates nothing: see
+/// [`truncate_streams`].
 #[must_use = "the slot tokens put stdio back when dropped; keep() them to leave it redirected"]
 pub(crate) fn redirect_output<'a>(
     stdout: Option<&'a Path>,
@@ -248,14 +287,6 @@ fn redirect_output_into<'a>(
         None => None,
     };
 
-    if !append {
-        if let Some(out) = &out {
-            truncate(out)?;
-        }
-        if let Some(Stderr::Own(err)) = &err {
-            truncate(err)?;
-        }
-    }
     let files = err
         .and_then(|err| match err {
             Stderr::Own(err) => Some((err.path, err.fd, err.id)),
@@ -470,6 +501,28 @@ mod tests {
         result
             .map(|done| done.undo.into_iter().for_each(super::Undo::keep))
             .map_err(crate::DaemonizeError::into_kind)
+    }
+
+    /// [`kept`], then step 15's truncation unless appending, as the sequence
+    /// runs them.
+    fn kept_truncated(
+        result: Result<super::Redirected<'_>, crate::DaemonizeError>,
+        append: bool,
+    ) -> Result<(), crate::ErrorKind> {
+        let done = result.map_err(crate::DaemonizeError::into_kind)?;
+        if !append {
+            let files: Vec<_> = done
+                .files
+                .iter()
+                .map(|(p, fd, _)| (*p, fd.as_fd()))
+                .collect();
+            super::truncate_streams(files)
+                .map_err(crate::DaemonizeError::into_kind)?
+                .into_iter()
+                .for_each(super::Undo::keep);
+        }
+        done.undo.into_iter().for_each(super::Undo::keep);
+        Ok(())
     }
 
     use crate::file_identity::file_id;
@@ -760,13 +813,10 @@ mod tests {
         // Truncate mode. The old content is longer than the new, so a skipped
         // truncate leaves a tail behind instead of being overwritten exactly.
         std::fs::write(&stdout_path, "old content, longer than what replaces it\n").unwrap();
-        kept(redirect_output(
-            Some(&stdout_path),
-            None,
+        kept_truncated(
+            redirect_output(Some(&stdout_path), None, false, &[], Rollback::PutBack),
             false,
-            &[],
-            Rollback::PutBack,
-        ))
+        )
         .unwrap();
         std::io::stdout().write_all(b"new content\n").unwrap();
         std::io::stdout().flush().unwrap();
@@ -777,13 +827,10 @@ mod tests {
         );
 
         // Append mode
-        kept(redirect_output(
-            Some(&stdout_path),
-            None,
+        kept_truncated(
+            redirect_output(Some(&stdout_path), None, true, &[], Rollback::PutBack),
             true,
-            &[],
-            Rollback::PutBack,
-        ))
+        )
         .unwrap();
         std::io::stdout().write_all(b"appended\n").unwrap();
         std::io::stdout().flush().unwrap();
@@ -894,40 +941,6 @@ mod tests {
     }
 
     // Covers: R147
-    /// The fd 2 counterpart: a failure after stderr moved must close fd 2
-    /// again, not fd 1.
-    #[test]
-    fn execute_redirect_that_fails_with_stderr_closed_leaves_it_closed() {
-        if !isolated() {
-            return;
-        }
-        let dir = tempfile::tempdir().unwrap();
-        let log = dir.path().join("app.err");
-        std::fs::write(&log, "the previous run\n").unwrap();
-        nix::unistd::close(2).unwrap();
-        crate::steps::failpoints::STREAM_TRUNCATE_FAILS.set();
-
-        let result = kept(redirect_output(
-            None,
-            Some(&log),
-            false,
-            &[],
-            Rollback::PutBack,
-        ));
-
-        assert!(
-            matches!(result, Err(ErrorKind::OutputFileError(_))),
-            "{result:?}"
-        );
-        assert_eq!(
-            nix::fcntl::fcntl(std::io::stderr(), nix::fcntl::FcntlArg::F_GETFD),
-            Err(nix::errno::Errno::EBADF),
-            "a failed redirect left fd 2 open"
-        );
-        assert_eq!(std::fs::read_to_string(&log).unwrap(), "the previous run\n");
-    }
-
-    // Covers: R147
     /// With no descriptor left to save fd 1 in, the redirect must fail before
     /// moving it, not treat fd 1 as closed and carry on.
     #[test]
@@ -966,49 +979,6 @@ mod tests {
             "a failed redirect left fd 1 redirected"
         );
         assert_eq!(std::fs::read_to_string(&log).unwrap(), "the previous run\n");
-    }
-
-    // Covers: R147
-    /// A failure after both slots have moved — here, the truncation, the last
-    /// step — must put fd 1 and fd 2 back as they were.
-    #[test]
-    fn execute_redirect_that_fails_late_puts_both_slots_back() {
-        use nix::sys::stat::fstat;
-
-        if !isolated() {
-            return;
-        }
-        let dir = tempfile::tempdir().unwrap();
-        let out = dir.path().join("app.log");
-        let err = dir.path().join("app.err");
-        std::fs::write(&out, "previous out\n").unwrap();
-        std::fs::write(&err, "previous err\n").unwrap();
-        let id = |st: nix::sys::stat::FileStat| (st.st_dev, st.st_ino);
-        let before = (
-            id(fstat(std::io::stdout()).unwrap()),
-            id(fstat(std::io::stderr()).unwrap()),
-        );
-        crate::steps::failpoints::STREAM_TRUNCATE_FAILS.set();
-
-        let result = kept(redirect_output(
-            Some(&out),
-            Some(&err),
-            false,
-            &[],
-            Rollback::PutBack,
-        ));
-
-        let after = (
-            id(fstat(std::io::stdout()).unwrap()),
-            id(fstat(std::io::stderr()).unwrap()),
-        );
-        assert!(
-            matches!(result, Err(ErrorKind::OutputFileError(_))),
-            "{result:?}"
-        );
-        assert_eq!(before, after, "a failed redirect left fd 1 or fd 2 moved");
-        assert_eq!(std::fs::read_to_string(&out).unwrap(), "previous out\n");
-        assert_eq!(std::fs::read_to_string(&err).unwrap(), "previous err\n");
     }
 
     // Covers: R146
@@ -1078,13 +1048,16 @@ mod tests {
         let stderr_path = dir.path().join("stderr.log");
         std::fs::write(&stderr_path, "stale stderr from a previous run\n").unwrap();
 
-        kept(redirect_output(
-            Some(&stdout_path),
-            Some(&stderr_path),
+        kept_truncated(
+            redirect_output(
+                Some(&stdout_path),
+                Some(&stderr_path),
+                false,
+                &[],
+                Rollback::PutBack,
+            ),
             false,
-            &[],
-            Rollback::PutBack,
-        ))
+        )
         .unwrap();
 
         let content = std::fs::read_to_string(&stderr_path).unwrap();
@@ -1186,13 +1159,16 @@ mod tests {
         }
         // ftruncate refuses a device where O_TRUNC ignored it; `-o /dev/null`
         // must keep working.
-        kept(redirect_output(
-            Some(Path::new("/dev/null")),
-            None,
+        kept_truncated(
+            redirect_output(
+                Some(Path::new("/dev/null")),
+                None,
+                false,
+                &[],
+                Rollback::PutBack,
+            ),
             false,
-            &[],
-            Rollback::PutBack,
-        ))
+        )
         .unwrap();
     }
 }

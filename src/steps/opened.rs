@@ -106,6 +106,17 @@ impl<'a> OpenedFiles<'a> {
             .collect()
     }
 
+    /// Step 12's stream files, by the path each was opened by.
+    pub(crate) fn streams(&self) -> Vec<(&'a Path, BorrowedFd<'_>)> {
+        self.0
+            .iter()
+            .filter_map(|o| match &o.role {
+                Role::Stream(fd) => Some((o.path, fd.as_fd())),
+                Role::Lockfile(_) | Role::Pidfile(_) => None,
+            })
+            .collect()
+    }
+
     /// The lock step 7 holds, with the path it was opened by.
     pub(crate) fn lock(&self) -> Option<(&'a Path, &Flock<OwnedFd>)> {
         self.0.iter().find_map(|o| match &o.role {

@@ -420,7 +420,14 @@ unsafe fn run_steps<'a, T>(
         abort.record(identity.join_groups(abort.rollback())?)?;
     }
 
-    // Step 15: The caller's privileged init (R153). After the lock, so only
+    // Step 15: Empty the stream files, the one change no rollback can undo,
+    // so it comes as late as `init` allows: init writes to them.
+    if !config.append {
+        let emptied = steps::truncate_streams(abort.files.streams())?;
+        abort.record_all(emptied)?;
+    }
+
+    // The caller's privileged init (R153). After the lock, so only
     // the instance holding it runs; after the fd sweep, so what it opens
     // stays open. An error is the sequence's, and the abort guard removes the
     // pidfile (R154). From here other threads may run, and `setenv` with one
@@ -1505,6 +1512,91 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&pidfile).unwrap(), "4242\n");
     }
 
+    // Covers: R11, R164
+    /// Truncation is the last thing before `init`: a start that fails before
+    /// it, here on a user that does not exist, leaves the previous run's log.
+    #[test]
+    fn a_start_failing_before_init_leaves_the_previous_log() {
+        if !isolated() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("app.log");
+        std::fs::write(&log, "the previous run\n").unwrap();
+        let mut config = DaemonConfig::new();
+        config
+            .foreground(true)
+            .close_fds(false)
+            .stdout(&log)
+            .user("blivet-no-such-user");
+
+        let result = run_inner(&config, &mut NullForker::new(vec![], Ok(())));
+
+        assert!(
+            matches!(
+                result.as_ref().map_err(DaemonizeError::kind),
+                Err(ErrorKind::UserNotFound(_))
+            ),
+            "{result:?}"
+        );
+        assert_eq!(std::fs::read_to_string(&log).unwrap(), "the previous run\n");
+    }
+
+    // Covers: R164
+    /// A log emptied for `init` cannot get its content back: a failure from
+    /// `init` on says so.
+    #[test]
+    fn a_log_emptied_before_a_failed_init_is_reported() {
+        use crate::ChangedState;
+        if !isolated() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("app.log");
+        std::fs::write(&log, "the previous run\n").unwrap();
+        let mut config = DaemonConfig::new();
+        config.foreground(true).close_fds(false).stdout(&log);
+
+        let result: Result<(DaemonContext, ()), _> =
+            run_inner_with(&config, &mut NullForker::new(vec![], Ok(())), || {
+                Err(DaemonizeError::application(75, "init failed"))
+            });
+
+        let err = result.expect_err("init failed the start");
+        let report: Vec<_> = err
+            .rollback_failures()
+            .iter()
+            .map(|f| (f.state(), f.path()))
+            .collect();
+        assert_eq!(report, [(ChangedState::OutputFile, Some(&*log))]);
+    }
+
+    // Covers: R164
+    /// An empty log loses nothing to the truncation.
+    #[test]
+    fn an_empty_log_is_no_rollback_failure() {
+        if !isolated() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("app.log");
+        std::fs::write(&log, "").unwrap();
+        let mut config = DaemonConfig::new();
+        config.foreground(true).close_fds(false).stdout(&log);
+
+        let result: Result<(DaemonContext, ()), _> =
+            run_inner_with(&config, &mut NullForker::new(vec![], Ok(())), || {
+                Err(DaemonizeError::application(75, "init failed"))
+            });
+
+        let err = result.expect_err("init failed the start");
+        assert!(
+            err.rollback_failures().is_empty(),
+            "{:?}",
+            err.rollback_failures()
+        );
+    }
+
     // Covers: R154
     #[test]
     fn daemon_init_error_reaches_the_launcher() {
@@ -1805,6 +1897,75 @@ mod tests {
                 Err(ErrorKind::SystemError(_))
             ),
             "{result:?}"
+        );
+    }
+
+    // Covers: R164
+    /// A failure after both slots moved, here step 15's truncation, puts fd 1
+    /// and fd 2 back as they were, and the logs keep the previous run.
+    #[test]
+    fn a_failed_truncation_puts_both_slots_back() {
+        use nix::sys::stat::fstat;
+        if !isolated() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("app.log");
+        let err = dir.path().join("app.err");
+        std::fs::write(&out, "previous out\n").unwrap();
+        std::fs::write(&err, "previous err\n").unwrap();
+        let mut config = DaemonConfig::new();
+        config
+            .foreground(true)
+            .close_fds(false)
+            .stdout(&out)
+            .stderr(&err);
+        let id = |st: nix::sys::stat::FileStat| (st.st_dev, st.st_ino);
+        let before = (
+            id(fstat(std::io::stdout()).unwrap()),
+            id(fstat(std::io::stderr()).unwrap()),
+        );
+        steps::failpoints::STREAM_TRUNCATE_FAILS.set();
+
+        let result = run_inner(&config, &mut NullForker::new(vec![], Ok(())));
+
+        let after = (
+            id(fstat(std::io::stdout()).unwrap()),
+            id(fstat(std::io::stderr()).unwrap()),
+        );
+        assert!(
+            matches!(
+                result.as_ref().map_err(DaemonizeError::kind),
+                Err(ErrorKind::OutputFileError(_))
+            ),
+            "{result:?}"
+        );
+        assert_eq!(before, after, "a failed start left fd 1 or fd 2 moved");
+        assert_eq!(std::fs::read_to_string(&out).unwrap(), "previous out\n");
+        assert_eq!(std::fs::read_to_string(&err).unwrap(), "previous err\n");
+    }
+
+    // Covers: R164
+    /// The fd 2 counterpart with fd 2 closed: a later failure closes it again.
+    #[test]
+    fn a_failed_truncation_leaves_a_closed_stderr_closed() {
+        if !isolated() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let err = dir.path().join("app.err");
+        let mut config = DaemonConfig::new();
+        config.foreground(true).close_fds(false).stderr(&err);
+        nix::unistd::close(2).unwrap();
+        steps::failpoints::STREAM_TRUNCATE_FAILS.set();
+
+        let result = run_inner(&config, &mut NullForker::new(vec![], Ok(())));
+
+        assert!(result.is_err());
+        assert_eq!(
+            nix::fcntl::fcntl(std::io::stderr(), nix::fcntl::FcntlArg::F_GETFD),
+            Err(nix::errno::Errno::EBADF),
+            "a failed start left fd 2 open"
         );
     }
 

@@ -41,6 +41,7 @@ pub(crate) enum Saved {
     Groups(crate::identity::Groups),
     Removal(super::Removal),
     Owner(crate::identity::Owner),
+    Emptied(super::Emptied),
 }
 
 impl Saved {
@@ -62,6 +63,7 @@ impl Saved {
             Self::Groups(s) => s.restore(),
             Self::Removal(s) => s.restore(),
             Self::Owner(s) => s.restore(),
+            Self::Emptied(s) => s.restore(),
         }
     }
 
@@ -76,8 +78,8 @@ impl Saved {
             | Self::Dispositions(_)
             | Self::Groups(_)
             | Self::Removal(_) => None,
-            // Made at step 16, after the sweep.
-            Self::Owner(_) => None,
+            // Made at steps 15 and 16, after the sweep.
+            Self::Owner(_) | Self::Emptied(_) => None,
         }
     }
 
@@ -93,7 +95,8 @@ impl Saved {
             | Self::Slot(_)
             | Self::Groups(_)
             | Self::Removal(_)
-            | Self::Owner(_) => false,
+            | Self::Owner(_)
+            | Self::Emptied(_) => false,
         }
     }
 }

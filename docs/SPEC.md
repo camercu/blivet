@@ -631,10 +631,15 @@ undefined behaviour.
     so a missing one fails before `init` runs (R155), and with a user,
     set the supplementary groups (`initgroups`) from the real group
     database, before `init` can change root (R162).
-15. **Run `init`** (`daemonize_with()` only; `daemonize()` runs none).
-    It runs after the lock and the fd sweep, so only the instance
-    holding the lock runs it and what it opens stays open (R153). Its
-    error is the sequence's (R154).
+15. **Truncate the stream files, then run `init`**
+    (`daemonize_with()` only; `daemonize()` runs none). Unless
+    appending, each distinct regular stream file step 12 opened is
+    emptied once (R11); a FIFO or a device such as `/dev/null` has
+    nothing to truncate. The truncation cannot be undone, so it is the
+    last change before `init`, which writes to the files (R164). `init`
+    runs after the lock and the fd sweep, so only the instance holding
+    the lock runs it and what it opens stays open (R153). Its error is
+    the sequence's (R154).
 16. **Chown** the pidfile, lockfile, stdout, and stderr to the target
     identity, unless `chown_paths(false)`. See path ownership.
 17. **Switch identity.** See user/group switching.
@@ -723,15 +728,13 @@ root); step 16 chowns them to the target user before step 17 switches.
 
 In foreground mode a failed step 12 undoes what it did (R147). Each
 stdio slot is saved before it moves and put back if anything after
-fails: to what it held, or closed again if it was closed. In both modes
-the truncations, which cannot be undone, come last, once both streams
-are open, compared and in place. So a failed step 12 leaves the previous
-run's logs, and a foreground caller's stdout and stderr, as they were.
-A stream file it created is removed again, in both modes. One thing
-stays: after an I/O error truncating stderr once stdout's truncation
-succeeded, an emptied stdout log. A later step that fails puts the
-slots back and removes the created files too, through the abort guard
-(R164).
+fails: to what it held, or closed again if it was closed. A stream file
+it created is removed again, in both modes. It truncates nothing, so a
+failed step 12 leaves the previous run's logs, and a foreground
+caller's stdout and stderr, as they were. A later step that fails puts
+the slots back and removes the created files too, through the abort
+guard (R164). The truncation at step 15 cannot be undone: a failure
+from there on reports each log it emptied of content.
 
 Daemon mode moves the slots without saving them: the child exits on any
 failure, so no one sees them. Saving needs a free descriptor, and a
@@ -756,11 +759,10 @@ step 12; with `close_fds` on, step 13 then closes them.
    file description and write offset rather than overwriting each
    other. Then save fd 2 (foreground mode) and `dup2` stderr's
    descriptor onto it.
-3. Unless appending, truncate each distinct regular file once — a FIFO
-   or a device such as `/dev/null` has nothing to truncate.
+Step 12 truncates nothing: step 15 does, just before `init`.
 
 A foreground slot that cannot be saved (other than because it is
-closed), a `dup2` failure and a truncation failure return
+closed), a `dup2` failure, and step 15's truncation failure return
 `OutputFileError`.
 
 The append flag applies uniformly to both stdout and stderr.
@@ -1606,13 +1608,11 @@ on any change to it, so the rows only copied the snapshot.
   pidfile or the lockfile, under any name, is refused with
   `ValidationError`; stdout and stderr that are one file share a
   descriptor.
-- R147. A step 12 that fails truncates no file until both streams are
-  open, compared and in place. In foreground mode it also puts every
-  stdio slot it moved back as it was, closed if it was closed; daemon
-  mode does not save the slots, so it gets past step 12 with no
-  descriptor free. In both modes it removes a stream file it created.
-  The one truncation it cannot undo is stdout's, when truncating stderr
-  then fails with an I/O error.
+- R147. Step 12 truncates no file. A step 12 that fails puts every
+  stdio slot it moved back as it was, closed if it was closed, in
+  foreground mode; daemon mode does not save the slots, so it gets
+  past step 12 with no descriptor free. In both modes it removes a
+  stream file it created.
 - R148. Failure to create the notification pipe — no descriptor free,
   say — returns `SystemError` to the caller before any fork; it does
   not panic.
@@ -1715,7 +1715,8 @@ on any change to it, so the rows only copied the snapshot.
   lists each change the rollback could not put back, with the reason,
   in `rollback_failures()`: a failed restore, a working directory it
   could not save, a file it could not remove, with its path (one
-  already gone is not a failure). The CLI prints one line for each after the error.
+  already gone is not a failure), and a log step 15 emptied of content,
+  which no rollback can put back. The CLI prints one line for each after the error.
 - R165. The notification pipe is a connected `AF_UNIX` stream socket
   pair, one-way: the launcher's end cannot send and the daemon's end
   cannot receive. The daemon writes to it only with `send` and
