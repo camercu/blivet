@@ -220,6 +220,22 @@ pub(crate) fn fill_fd_table(free: usize) -> Vec<std::os::fd::OwnedFd> {
     held
 }
 
+/// The file open on descriptor `fd`, or `None` when the slot is closed.
+///
+/// Raw `fstat`, since a `BorrowedFd` must name an open descriptor.
+#[allow(unsafe_code)]
+fn slot_file_id(fd: std::os::fd::RawFd) -> Option<crate::file_identity::FileId> {
+    let mut st = std::mem::MaybeUninit::<libc::stat>::uninit();
+    // SAFETY: `fstat` writes only `st`; a closed slot is EBADF.
+    if unsafe { libc::fstat(fd, st.as_mut_ptr()) } != 0 {
+        return None;
+    }
+    // SAFETY: `fstat` succeeded, so it filled `st`.
+    Some(crate::file_identity::FileId::of(&unsafe {
+        st.assume_init()
+    }))
+}
+
 /// Points every descriptor above stdio open on the file at `path` at
 /// `/dev/null` instead, so a token holding one restores from the wrong file.
 /// Closing it would trip the owner's I/O-safety check.
@@ -230,9 +246,7 @@ pub(crate) fn swap_out_fds_open_on(path: &std::path::Path) {
     #[allow(clippy::disallowed_methods)] // a test's own file, held across no dup2
     let null = std::fs::File::open("/dev/null").unwrap();
     for fd in 3..1024 {
-        // SAFETY: `fstat` only reads the slot; a closed one is EBADF.
-        let borrowed = unsafe { std::os::fd::BorrowedFd::borrow_raw(fd) };
-        if crate::file_identity::file_id(borrowed) == Ok(target) {
+        if slot_file_id(fd) == Some(target) {
             #[allow(clippy::disallowed_methods)] // swaps the file under a held fd
             // SAFETY: `dup2` touches no memory; the owner keeps an open fd.
             let swapped = unsafe { libc::dup2(std::os::fd::AsRawFd::as_raw_fd(&null), fd) };
@@ -399,12 +413,7 @@ impl ProcessSnapshot {
     pub(crate) fn take(pidfile: &std::path::Path) -> Self {
         assert_isolated("ProcessSnapshot::take");
         let mask = current_umask();
-        let stdio = [0, 1, 2].map(|fd| {
-            // SAFETY: `fstat` only reads the slot; a closed one is EBADF.
-            #[allow(unsafe_code)]
-            let fd = unsafe { std::os::fd::BorrowedFd::borrow_raw(fd) };
-            crate::file_identity::file_id(fd).ok()
-        });
+        let stdio = [0, 1, 2].map(slot_file_id);
         let mut env: Vec<_> = std::env::vars_os().collect();
         env.sort();
         let mut groups = supplementary_gids();
