@@ -2,10 +2,14 @@
 //!
 //! A step that changes state a caller can see returns an [`Undo`], so the
 //! change and its undo are one value: a step cannot make one without the
-//! other. The sequence holds the tokens in the order the steps ran and drops
-//! them in reverse on failure; at step 18 it keeps them all.
+//! other. The sequence holds the tokens in the order the steps ran. On
+//! failure it restores them in reverse and reports each that could not be put
+//! back; at step 18 it keeps them all. A token that drops unrestored puts its
+//! change back and reports nothing.
 
 use std::os::fd::RawFd;
+
+use crate::error::RestoreFailure;
 
 /// Whether a step saves what it changes, so a failure can put it back
 /// (R147, R164).
@@ -35,12 +39,18 @@ pub(crate) enum Saved {
 
 impl Saved {
     /// Puts the state back.
-    fn restore(self) {
+    fn restore(self) -> Result<(), RestoreFailure> {
         match self {
-            Self::Umask(s) => s.restore(),
+            Self::Umask(s) => {
+                s.restore();
+                Ok(())
+            }
             Self::Cwd(s) => s.restore(),
             Self::SignalMask(s) => s.restore(),
-            Self::EnvVars(s) => s.restore(),
+            Self::EnvVars(s) => {
+                s.restore();
+                Ok(())
+            }
             Self::Dispositions(s) => s.restore(),
             Self::Slot(s) => s.restore(),
             Self::Groups(s) => s.restore(),
@@ -108,6 +118,11 @@ impl Undo {
         }
     }
 
+    /// Puts the change back now, unless it was kept.
+    pub(crate) fn restore(mut self) -> Result<(), RestoreFailure> {
+        self.0.take().map_or(Ok(()), Saved::restore)
+    }
+
     /// Leaves the change in place.
     pub(crate) fn keep(mut self) {
         self.0 = None;
@@ -122,9 +137,20 @@ impl Undo {
 impl Drop for Undo {
     fn drop(&mut self) {
         if let Some(saved) = self.0.take() {
-            saved.restore();
+            // A token restored by dropping has no one to report to.
+            let _ = saved.restore();
         }
     }
+}
+
+/// Puts back what `tokens` hold, latest first, and returns what could not
+/// be put back. For a step that fails part way, and for the sequence.
+pub(crate) fn restore_all(tokens: Vec<Undo>) -> Vec<RestoreFailure> {
+    tokens
+        .into_iter()
+        .rev()
+        .filter_map(|undo| undo.restore().err())
+        .collect()
 }
 
 #[cfg(test)]

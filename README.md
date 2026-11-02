@@ -196,10 +196,11 @@ on a target where the thread count can't be read (see
 
 ### Errors & exit codes
 
-`DaemonizeError` covers validation, fork, setsid, lock, permission, chown, exec,
-and parent-notify failures, plus a caller-supplied `Application` variant. Each
-variant maps to a `sysexits.h` exit code via `exit_code()`, so failures reach
-the shell with a meaningful status:
+A `DaemonizeError` says what failed in `kind()`, an `ErrorKind`. The kinds cover
+validation, fork, setsid, lock, permission, chown, exec, and parent-notify
+failures, plus a caller-supplied `Application` variant. Each variant maps to a
+`sysexits.h` exit code through `exit_code()`, so failures reach the shell with a
+meaningful status:
 
 | Variant            | Exit code   | Meaning                                  |
 | ------------------ | ----------- | ---------------------------------------- |
@@ -221,6 +222,12 @@ the shell with a meaningful status:
 | `NotifyFailed`     | 71          | Can't write readiness to launcher        |
 | `InitLeftThreads`  | 70          | `daemonize_with` init left threads running before an identity switch to a user |
 | `Application`      | caller's    | App-level failure you report yourself    |
+
+A foreground start that fails puts back what it changed in your process. Each
+change it could not put back is in `rollback_failures()`: the `ChangedState`
+left changed, and the `io::Error` that stopped it. The error's message stays
+the kind's. The CLI prints one `rollback left <state> changed: <error>` line for
+each, after the error.
 
 ## Recipes
 

@@ -7,7 +7,7 @@ use std::process::ExitCode;
 
 use clap::Parser;
 
-use blivet::{DaemonConfig, DaemonizeError};
+use blivet::{DaemonConfig, DaemonizeError, ErrorKind};
 
 /// Run a program as a Unix daemon.
 #[derive(Parser)]
@@ -210,23 +210,28 @@ fn main() -> ExitCode {
         Ok(ctx) => ctx,
         Err(e) => {
             eprintln!("{e}");
+            for failure in e.rollback_failures() {
+                eprintln!(
+                    "rollback left {} changed: {}",
+                    failure.state(),
+                    failure.error()
+                );
+            }
             return ExitCode::from(e.exit_code());
         }
     };
 
     // Build argv for execvp
     let c_program = CString::new(program_path.as_str()).unwrap_or_else(|_| {
-        ctx.report_error(&DaemonizeError::ExecFailed(
-            "program path contains null byte".into(),
-        ));
+        ctx.report_error(&ErrorKind::ExecFailed("program path contains null byte".into()).into());
     });
     let c_args: Vec<CString> = std::iter::once(&argv0)
         .chain(&args.program[1..])
         .map(|a| {
             CString::new(a.as_str()).unwrap_or_else(|_| {
-                ctx.report_error(&DaemonizeError::ExecFailed(format!(
-                    "argument contains null byte: {a}"
-                )));
+                ctx.report_error(
+                    &ErrorKind::ExecFailed(format!("argument contains null byte: {a}")).into(),
+                );
             })
         })
         .collect();
@@ -256,20 +261,18 @@ fn resolve_program(program: &str) -> Result<Program, DaemonizeError> {
             argv0: program.to_string(),
         });
     }
-    let not_found = |e: std::io::Error| {
-        DaemonizeError::ProgramNotFound(format!("cannot resolve {program}: {e}"))
-    };
+    let not_found =
+        |e: std::io::Error| ErrorKind::ProgramNotFound(format!("cannot resolve {program}: {e}"));
     let utf8 = |p: PathBuf| {
         p.into_os_string()
             .into_string()
-            .map_err(|_| DaemonizeError::ProgramNotFound("path is not valid UTF-8".into()))
+            .map_err(|_| ErrorKind::ProgramNotFound("path is not valid UTF-8".into()))
     };
     let canonical = std::fs::canonicalize(program).map_err(not_found)?;
     if nix::unistd::access(&canonical, nix::unistd::AccessFlags::X_OK).is_err() {
-        return Err(DaemonizeError::ProgramNotFound(format!(
-            "not executable: {}",
-            canonical.display()
-        )));
+        return Err(
+            ErrorKind::ProgramNotFound(format!("not executable: {}", canonical.display())).into(),
+        );
     }
     Ok(Program {
         path: utf8(canonical)?,

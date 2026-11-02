@@ -9,25 +9,25 @@ use nix::sys::stat::Mode;
 use nix::unistd::Whence;
 
 use super::*;
-use crate::error::DaemonizeError;
+use crate::error::ErrorKind;
 use crate::file_identity::{FileId, file_id, paths_same};
 
 /// Step 7: Open and exclusively lock a lockfile.
-pub(crate) fn open_and_lock(path: &Path) -> Result<Flock<OwnedFd>, DaemonizeError> {
+pub(crate) fn open_and_lock(path: &Path) -> Result<Flock<OwnedFd>, ErrorKind> {
     let fd = open_above_stdio(
         path,
         OFlag::O_WRONLY | OFlag::O_CREAT,
         Mode::from_bits_truncate(0o644),
     )
-    .map_err(|e| DaemonizeError::LockfileError(format!("cannot open {}: {e}", path.display())))?;
+    .map_err(|e| ErrorKind::LockfileError(format!("cannot open {}: {e}", path.display())))?;
 
     Flock::lock(fd, FlockArg::LockExclusiveNonblock).map_err(|(_fd, e)| {
         if e == nix::errno::Errno::EWOULDBLOCK {
-            DaemonizeError::LockConflict {
+            ErrorKind::LockConflict {
                 path: path.to_path_buf(),
             }
         } else {
-            DaemonizeError::LockfileError(format!("flock {}: {e}", path.display()))
+            ErrorKind::LockfileError(format!("flock {}: {e}", path.display()))
         }
     })
 }
@@ -42,7 +42,7 @@ pub(crate) fn open_and_lock(path: &Path) -> Result<Flock<OwnedFd>, DaemonizeErro
 pub(crate) fn open_pidfile<'a>(
     pidfile_path: &'a Path,
     lockfile: Option<(&Path, &'a Flock<OwnedFd>)>,
-) -> Result<Pidfile<'a>, DaemonizeError> {
+) -> Result<Pidfile<'a>, ErrorKind> {
     // The lockfile is the pidfile: step 7 already opened and locked it.
     if let Some((lp, flock)) = lockfile {
         if paths_same(pidfile_path, lp) {
@@ -52,7 +52,7 @@ pub(crate) fn open_pidfile<'a>(
 
     #[cfg(test)]
     if crate::steps::failpoints::PIDFILE_OPEN_FAILS.injected() {
-        return Err(DaemonizeError::PidfileError(format!(
+        return Err(ErrorKind::PidfileError(format!(
             "open {}: injected failure",
             pidfile_path.display()
         )));
@@ -64,7 +64,7 @@ pub(crate) fn open_pidfile<'a>(
         OFlag::O_WRONLY | OFlag::O_CREAT | OFlag::O_TRUNC,
         Mode::from_bits_truncate(0o644),
     )
-    .map_err(|e| DaemonizeError::PidfileError(format!("open {}: {e}", pidfile_path.display())))?;
+    .map_err(|e| ErrorKind::PidfileError(format!("open {}: {e}", pidfile_path.display())))?;
     Ok(Pidfile::Opened {
         fd,
         path: pidfile_path,
@@ -86,28 +86,28 @@ impl Pidfile<'_> {
     /// stream that is this file under another name (R146), and a standalone
     /// pidfile's descriptor, which step 16 chowns (R163). A pidfile that is
     /// the lockfile has none: the lockfile's descriptor serves.
-    pub(crate) fn write_pid(self) -> Result<(FileId, Option<OwnedFd>), DaemonizeError> {
+    pub(crate) fn write_pid(self) -> Result<(FileId, Option<OwnedFd>), ErrorKind> {
         let content = format!("{}\n", std::process::id());
         match self {
             Pidfile::Locked(flock) => {
                 nix::unistd::lseek(flock.as_fd(), 0, Whence::SeekSet)
-                    .map_err(|e| DaemonizeError::PidfileError(format!("seek: {e}")))?;
+                    .map_err(|e| ErrorKind::PidfileError(format!("seek: {e}")))?;
                 nix::unistd::ftruncate(flock.as_fd(), 0)
-                    .map_err(|e| DaemonizeError::PidfileError(format!("truncate: {e}")))?;
+                    .map_err(|e| ErrorKind::PidfileError(format!("truncate: {e}")))?;
                 inject_pidfile_write_failure()?;
                 write_all_fd(flock.as_fd(), content.as_bytes())
-                    .map_err(|e| DaemonizeError::PidfileError(format!("write: {e}")))?;
+                    .map_err(|e| ErrorKind::PidfileError(format!("write: {e}")))?;
                 let id = file_id(flock.as_fd())
-                    .map_err(|e| DaemonizeError::PidfileError(format!("fstat: {e}")))?;
+                    .map_err(|e| ErrorKind::PidfileError(format!("fstat: {e}")))?;
                 Ok((id, None))
             }
             Pidfile::Opened { fd, path } => {
                 inject_pidfile_write_failure()?;
                 write_all_fd(&fd, content.as_bytes()).map_err(|e| {
-                    DaemonizeError::PidfileError(format!("write {}: {e}", path.display()))
+                    ErrorKind::PidfileError(format!("write {}: {e}", path.display()))
                 })?;
                 let id = file_id(&fd).map_err(|e| {
-                    DaemonizeError::PidfileError(format!("fstat {}: {e}", path.display()))
+                    ErrorKind::PidfileError(format!("fstat {}: {e}", path.display()))
                 })?;
                 Ok((id, Some(fd)))
             }
@@ -121,17 +121,17 @@ impl Pidfile<'_> {
 pub(crate) fn write_pidfile(
     pidfile_path: &Path,
     lockfile: Option<(&Path, &Flock<OwnedFd>)>,
-) -> Result<(), DaemonizeError> {
+) -> Result<(), ErrorKind> {
     open_pidfile(pidfile_path, lockfile)?.write_pid().map(drop)
 }
 
 /// Stands in for a write that fails once the pidfile already exists and is
 /// empty. Compiled away outside tests.
 #[inline]
-fn inject_pidfile_write_failure() -> Result<(), DaemonizeError> {
+fn inject_pidfile_write_failure() -> Result<(), ErrorKind> {
     #[cfg(test)]
     if crate::steps::failpoints::PIDFILE_WRITE_FAILS.injected() {
-        return Err(DaemonizeError::PidfileError(
+        return Err(ErrorKind::PidfileError(
             "write: injected failure".to_string(),
         ));
     }
@@ -212,7 +212,7 @@ mod tests {
         let _first = open_and_lock(&path).unwrap();
         let second = open_and_lock(&path);
         match second {
-            Err(DaemonizeError::LockConflict { path: conflicting }) => {
+            Err(ErrorKind::LockConflict { path: conflicting }) => {
                 assert_eq!(conflicting, path);
             }
             other => panic!("expected LockConflict, got {other:?}"),
@@ -221,7 +221,7 @@ mod tests {
 
     #[test]
     fn lock_conflict_display_names_the_path() {
-        let err = DaemonizeError::LockConflict {
+        let err = ErrorKind::LockConflict {
             path: PathBuf::from("/run/app.pid"),
         };
         assert_eq!(
@@ -282,7 +282,7 @@ mod tests {
     #[test]
     fn write_pidfile_standalone_open_error() {
         let result = write_pidfile(Path::new("/nonexistent_blivet_dir/x.pid"), None);
-        assert!(matches!(result, Err(DaemonizeError::PidfileError(msg)) if msg.contains("open")));
+        assert!(matches!(result, Err(ErrorKind::PidfileError(msg)) if msg.contains("open")));
     }
 
     #[test]

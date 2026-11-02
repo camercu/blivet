@@ -7,6 +7,7 @@
 
 #![allow(unsafe_code)]
 
+use crate::error::{ChangedState, DaemonizeError, RestoreFailure};
 use crate::steps::{Rollback, Saved, Undo};
 
 /// Reset signal dispositions from 1 through the signal ceiling to SIG_DFL.
@@ -24,7 +25,7 @@ use crate::steps::{Rollback, Saved, Undo};
 /// just before `execvp` (R128), so exec'd programs still start with the
 /// conventional disposition.
 ///
-/// Returns [`SystemError`](crate::error::DaemonizeError::SystemError) on a
+/// Returns [`SystemError`](crate::error::ErrorKind::SystemError) on a
 /// non-`EINVAL` `sigaction` failure (POSIX documents only `EINVAL` for these
 /// arguments, so this is a should-not-happen guard) so the caller reports it
 /// to the parent rather than panicking. `EINVAL` — an uncatchable or invalid
@@ -32,9 +33,7 @@ use crate::steps::{Rollback, Saved, Undo};
 ///
 /// The token puts back each disposition it replaced, latest first (R164). A
 /// failure part way puts back those already replaced before it returns.
-pub(crate) fn reset_signal_dispositions(
-    rollback: Rollback,
-) -> Result<Undo, crate::error::DaemonizeError> {
+pub(crate) fn reset_signal_dispositions(rollback: Rollback) -> Result<Undo, DaemonizeError> {
     #[cfg(test)]
     crate::test_support::assert_isolated("reset_signal_dispositions");
     let mut saved = Dispositions(Vec::new());
@@ -54,10 +53,11 @@ pub(crate) fn reset_signal_dispositions(
             // EINVAL: signal cannot be caught, skip
             Err(err) if err.raw_os_error() == Some(libc::EINVAL) => {}
             Err(err) => {
-                saved.restore();
-                return Err(crate::error::DaemonizeError::SystemError(format!(
-                    "sigaction({sig}): {err}"
-                )));
+                let failed =
+                    crate::error::ErrorKind::SystemError(format!("sigaction({sig}): {err}"));
+                return Err(
+                    DaemonizeError::from(failed).with_rollback_failures(saved.restore().err())
+                );
             }
         }
     }
@@ -94,12 +94,21 @@ struct Disposition {
 pub(crate) struct Dispositions(Vec<Disposition>);
 
 impl Dispositions {
-    pub(crate) fn restore(self) {
+    /// Puts each disposition back, and reports the first that failed.
+    pub(crate) fn restore(self) -> Result<(), RestoreFailure> {
+        let mut first = Ok(());
         for Disposition { sig, was } in self.0.into_iter().rev() {
             // SAFETY: `was` is a disposition sigaction itself reported for
             // `sig`.
-            unsafe { libc::sigaction(sig, &was, std::ptr::null_mut()) };
+            let ret = unsafe { libc::sigaction(sig, &was, std::ptr::null_mut()) };
+            if ret != 0 && first.is_ok() {
+                first = Err(RestoreFailure::new(
+                    ChangedState::SignalDispositions,
+                    std::io::Error::last_os_error(),
+                ));
+            }
         }
+        first
     }
 }
 
@@ -352,8 +361,8 @@ mod tests {
         let result = reset_signal_dispositions(Rollback::PutBack);
 
         let failed_at_sigterm = matches!(
-            &result,
-            Err(crate::error::DaemonizeError::SystemError(m)) if m.starts_with("sigaction(15)")
+            result.as_ref().map_err(DaemonizeError::kind),
+            Err(crate::error::ErrorKind::SystemError(m)) if m.starts_with("sigaction(15)")
         );
         assert!(failed_at_sigterm, "{:?}", result.err());
         assert_eq!(crate::test_support::signal_state(), before);

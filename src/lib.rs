@@ -79,7 +79,7 @@
 //!
 //! [`daemonize`] and [`daemonize_with`] check for you: at the call they panic
 //! if threads are running, and after `init`, when an identity switch to a user
-//! follows, they fail with [`DaemonizeError::InitLeftThreads`], which reaches
+//! follows, they fail with [`ErrorKind::InitLeftThreads`], which reaches
 //! the launcher. An `init` may start threads only if it joins them before it
 //! returns.
 //! [`daemonize_unchecked`] and [`daemonize_with_unchecked`] are the `unsafe`
@@ -226,7 +226,7 @@ pub use config::DaemonConfig;
 #[cfg(unix)]
 pub use context::DaemonContext;
 #[cfg(unix)]
-pub use error::{DaemonizeError, WithExitCode};
+pub use error::{ChangedState, DaemonizeError, ErrorKind, RestoreFailure, WithExitCode};
 
 #[cfg(unix)]
 use forker::RealForker;
@@ -334,7 +334,7 @@ pub fn daemonize(config: &DaemonConfig) -> Result<DaemonContext, DaemonizeError>
 /// that must happen only once per running daemon: binding a port below 1024,
 /// opening root-only files, setting rlimits. `init` runs in the daemon process after
 /// the pidfile lock is taken, so a second instance fails with
-/// [`LockConflict`](DaemonizeError::LockConflict) before its `init` runs. It
+/// [`LockConflict`](ErrorKind::LockConflict) before its `init` runs. It
 /// runs after inherited descriptors are closed, so what it opens stays open.
 /// Whatever it returns comes back beside the [`DaemonContext`].
 ///
@@ -367,7 +367,7 @@ pub fn daemonize(config: &DaemonConfig) -> Result<DaemonContext, DaemonizeError>
 /// # Errors
 ///
 /// As [`daemonize_with_unchecked`], and
-/// [`InitLeftThreads`](DaemonizeError::InitLeftThreads) (exit 70) when a user
+/// [`InitLeftThreads`](ErrorKind::InitLeftThreads) (exit 70) when a user
 /// switch is configured and `init` returns with threads still running.
 ///
 /// # Panics

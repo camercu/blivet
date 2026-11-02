@@ -220,6 +220,27 @@ pub(crate) fn fill_fd_table(free: usize) -> Vec<std::os::fd::OwnedFd> {
     held
 }
 
+/// Points every descriptor above stdio open on the file at `path` at
+/// `/dev/null` instead, so a token holding one restores from the wrong file.
+/// Closing it would trip the owner's I/O-safety check.
+#[allow(unsafe_code)]
+pub(crate) fn swap_out_fds_open_on(path: &std::path::Path) {
+    assert_isolated("swap_out_fds_open_on");
+    let target = crate::file_identity::FileId::of(&nix::sys::stat::stat(path).unwrap());
+    #[allow(clippy::disallowed_methods)] // a test's own file, held across no dup2
+    let null = std::fs::File::open("/dev/null").unwrap();
+    for fd in 3..1024 {
+        // SAFETY: `fstat` only reads the slot; a closed one is EBADF.
+        let borrowed = unsafe { std::os::fd::BorrowedFd::borrow_raw(fd) };
+        if crate::file_identity::file_id(borrowed) == Ok(target) {
+            #[allow(clippy::disallowed_methods)] // swaps the file under a held fd
+            // SAFETY: `dup2` touches no memory; the owner keeps an open fd.
+            let swapped = unsafe { libc::dup2(std::os::fd::AsRawFd::as_raw_fd(&null), fd) };
+            assert_eq!(swapped, fd, "could not swap out fd {fd}");
+        }
+    }
+}
+
 /// Runs `f` with the descriptors in `closed` closed, then puts each back.
 ///
 /// For tests of what lands in a freed stdio slot. Closing stdio changes the

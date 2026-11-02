@@ -1,6 +1,6 @@
 //! Closing inherited file descriptors (step 13).
 
-use crate::error::DaemonizeError;
+use crate::error::ErrorKind;
 use crate::sys;
 
 /// Convert an `rlim_cur` value to the exclusive upper bound of the fd-close
@@ -20,12 +20,12 @@ pub(crate) fn clamp_max_fd(rlim_cur: libc::rlim_t) -> i32 {
 
 /// Query the process fd limit via getrlimit.
 ///
-/// Returns [`SystemError`](DaemonizeError::SystemError) if `getrlimit` fails
+/// Returns [`SystemError`](ErrorKind::SystemError) if `getrlimit` fails
 /// (e.g. blocked by a seccomp filter) so the caller can report it.
-pub(crate) fn get_max_fd() -> Result<i32, DaemonizeError> {
+pub(crate) fn get_max_fd() -> Result<i32, ErrorKind> {
     #[cfg(test)]
     if crate::steps::failpoints::GETRLIMIT_FAILS.injected() {
-        return Err(DaemonizeError::SystemError(
+        return Err(ErrorKind::SystemError(
             "getrlimit(RLIMIT_NOFILE): injected failure".into(),
         ));
     }
@@ -34,7 +34,7 @@ pub(crate) fn get_max_fd() -> Result<i32, DaemonizeError> {
         return Ok(max_fd);
     }
     let limit = nix::sys::resource::getrlimit(nix::sys::resource::Resource::RLIMIT_NOFILE)
-        .map_err(|e| DaemonizeError::SystemError(format!("getrlimit(RLIMIT_NOFILE): {e}")))?;
+        .map_err(|e| ErrorKind::SystemError(format!("getrlimit(RLIMIT_NOFILE): {e}")))?;
     Ok(clamp_max_fd(limit.0))
 }
 
@@ -86,9 +86,9 @@ pub(crate) fn list_open_fds() -> Option<Vec<i32>> {
 /// to `i32::MAX`, turning the brute-force loop into billions of `close`
 /// calls that stall daemon startup.
 ///
-/// Returns [`SystemError`](DaemonizeError::SystemError) if the fallback path's
+/// Returns [`SystemError`](ErrorKind::SystemError) if the fallback path's
 /// `getrlimit` fails; the fd-listing path is infallible.
-pub(crate) fn close_inherited_fds(skip_fds: &[i32]) -> Result<(), DaemonizeError> {
+pub(crate) fn close_inherited_fds(skip_fds: &[i32]) -> Result<(), ErrorKind> {
     #[cfg(test)]
     crate::test_support::assert_isolated("close_inherited_fds");
     if let Some(open_fds) = list_open_fds() {

@@ -11,7 +11,7 @@ use nix::sys::signal::SigSet;
 use nix::sys::stat::Mode;
 
 use super::{Rollback, Saved, Undo};
-use crate::error::DaemonizeError;
+use crate::error::{ChangedState, ErrorKind, RestoreFailure};
 
 /// Step 4: Set process umask.
 ///
@@ -36,46 +36,47 @@ impl Umask {
 }
 
 /// Step 5: Change working directory.
-pub(crate) fn change_dir(path: &Path, rollback: Rollback) -> Result<Undo, DaemonizeError> {
+pub(crate) fn change_dir(path: &Path, rollback: Rollback) -> Result<Undo, ErrorKind> {
     #[cfg(test)]
     crate::test_support::assert_isolated("change_dir");
     let undo = Undo::saving(rollback, || Saved::Cwd(Cwd::save()));
     nix::unistd::chdir(path)
-        .map_err(|e| DaemonizeError::ChdirFailed(format!("{}: {e}", path.display())))?;
+        .map_err(|e| ErrorKind::ChdirFailed(format!("{}: {e}", path.display())))?;
     Ok(undo)
 }
 
 /// A descriptor of the working directory step 5 left, to `fchdir` back to.
 ///
 /// Best-effort: a directory the caller may enter but not read cannot be
-/// opened, and an undo aid must not fail the start (R164).
-pub(crate) struct Cwd(Option<OwnedFd>);
+/// opened, and an undo aid must not fail the start (R164). The restore then
+/// reports why it could not go back.
+pub(crate) struct Cwd(std::io::Result<OwnedFd>);
 
 impl Cwd {
     fn save() -> Self {
-        Self(super::open_above_stdio(".", OFlag::O_RDONLY, Mode::empty()).ok())
+        Self(super::open_above_stdio(".", OFlag::O_RDONLY, Mode::empty()))
     }
 
-    pub(crate) fn restore(self) {
-        if let Some(cwd) = self.0 {
-            let _ = nix::unistd::fchdir(cwd.as_fd());
-        }
+    pub(crate) fn restore(self) -> Result<(), RestoreFailure> {
+        let failed = |e| RestoreFailure::new(ChangedState::WorkingDirectory, e);
+        let cwd = self.0.map_err(failed)?;
+        nix::unistd::fchdir(cwd.as_fd()).map_err(|e| failed(e.into()))
     }
 
     pub(crate) fn held_fd(&self) -> Option<i32> {
-        self.0.as_ref().map(AsRawFd::as_raw_fd)
+        self.0.as_ref().ok().map(AsRawFd::as_raw_fd)
     }
 }
 
 /// Step 10: Clear the signal mask.
 ///
-/// Returns [`SystemError`](DaemonizeError::SystemError) if `sigprocmask` fails
+/// Returns [`SystemError`](ErrorKind::SystemError) if `sigprocmask` fails
 /// (e.g. blocked by a seccomp filter) so the caller can report it.
-pub(crate) fn clear_signal_mask(rollback: Rollback) -> Result<Undo, DaemonizeError> {
+pub(crate) fn clear_signal_mask(rollback: Rollback) -> Result<Undo, ErrorKind> {
     use nix::sys::signal::SigmaskHow;
     #[cfg(test)]
     if crate::steps::failpoints::SIGPROCMASK_FAILS.injected() {
-        return Err(DaemonizeError::SystemError(
+        return Err(ErrorKind::SystemError(
             "sigprocmask: injected failure".into(),
         ));
     }
@@ -85,7 +86,7 @@ pub(crate) fn clear_signal_mask(rollback: Rollback) -> Result<Undo, DaemonizeErr
         Some(&SigSet::empty()),
         Some(&mut was),
     )
-    .map_err(|e| DaemonizeError::SystemError(format!("sigprocmask: {e}")))?;
+    .map_err(|e| ErrorKind::SystemError(format!("sigprocmask: {e}")))?;
     Ok(Undo::saving(rollback, || {
         Saved::SignalMask(SignalMask(was))
     }))
@@ -95,8 +96,10 @@ pub(crate) fn clear_signal_mask(rollback: Rollback) -> Result<Undo, DaemonizeErr
 pub(crate) struct SignalMask(SigSet);
 
 impl SignalMask {
-    pub(crate) fn restore(self) {
-        let _ = self.0.thread_set_mask();
+    pub(crate) fn restore(self) -> Result<(), RestoreFailure> {
+        self.0
+            .thread_set_mask()
+            .map_err(|e| RestoreFailure::new(ChangedState::SignalMask, e))
     }
 }
 
@@ -192,7 +195,7 @@ mod tests {
             Rollback::Skip,
         )
         .map(Undo::keep);
-        assert!(matches!(result, Err(DaemonizeError::ChdirFailed(_))));
+        assert!(matches!(result, Err(ErrorKind::ChdirFailed(_))));
     }
 
     // sigprocmask changes only the calling thread's mask, so this runs in the

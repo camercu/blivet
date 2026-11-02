@@ -1,6 +1,181 @@
 //! Error types for the daemonization sequence, with `sysexits.h` exit codes.
 
-/// Errors produced during configuration validation or the daemonization sequence.
+/// An error from configuration validation or the daemonization sequence:
+/// what failed, and what a foreground rollback could not put back.
+///
+/// [`Display`](std::fmt::Display) and [`source`](std::error::Error::source)
+/// are the [`kind`](Self::kind)'s, so an error from a
+/// [`daemonize_with`](crate::daemonize_with) init keeps its own message (R154).
+/// The [`rollback_failures`](Self::rollback_failures) are separate (R164).
+#[derive(Debug)]
+pub struct DaemonizeError {
+    kind: ErrorKind,
+    rollback_failures: Vec<RestoreFailure>,
+}
+
+impl DaemonizeError {
+    /// Constructs an [`Application`](ErrorKind::Application) error with a
+    /// caller-chosen exit `code` and `message`.
+    ///
+    /// Return it from a [`daemonize_with`](crate::daemonize_with) init, or use
+    /// it to report a failure after the daemonize call, before
+    /// [`notify_parent`](crate::DaemonContext::notify_parent), to the parent
+    /// process via [`report_error`](crate::DaemonContext::report_error):
+    ///
+    /// ```no_run
+    /// # use blivet::DaemonizeError;
+    /// # fn bind() -> std::io::Result<()> { Ok(()) }
+    /// // `75` is EX_TEMPFAIL; pick whichever sysexits code fits the failure.
+    /// if let Err(e) = bind() {
+    ///     let err = DaemonizeError::application(75, format!("bind failed: {e}"));
+    ///     // ctx.report_error(&err);
+    ///     # let _ = err;
+    /// }
+    /// ```
+    pub fn application(code: u8, message: impl Into<String>) -> Self {
+        ErrorKind::application(code, message).into()
+    }
+
+    /// What failed.
+    pub fn kind(&self) -> &ErrorKind {
+        &self.kind
+    }
+
+    /// Each change a foreground failure could not put back, latest first
+    /// (R164). Empty in daemon mode, whose process exits on failure and so
+    /// puts nothing back.
+    pub fn rollback_failures(&self) -> &[RestoreFailure] {
+        &self.rollback_failures
+    }
+
+    /// Returns the `sysexits.h` exit code for the [`kind`](Self::kind).
+    ///
+    /// Always non-zero, so it is safe to pass to `std::process::exit`: a
+    /// reported error can never be mistaken for success. A caller-supplied
+    /// [`Application`](ErrorKind::Application) code of 0 is remapped to
+    /// `70` (`EX_SOFTWARE`).
+    pub fn exit_code(&self) -> u8 {
+        self.kind.exit_code()
+    }
+
+    /// What failed, for a test that matches on an owned kind.
+    #[cfg(test)]
+    pub(crate) fn into_kind(self) -> ErrorKind {
+        self.kind
+    }
+
+    /// This error, with `failures` after the ones it holds.
+    pub(crate) fn with_rollback_failures(
+        mut self,
+        failures: impl IntoIterator<Item = RestoreFailure>,
+    ) -> Self {
+        self.rollback_failures.extend(failures);
+        self
+    }
+}
+
+impl From<ErrorKind> for DaemonizeError {
+    fn from(kind: ErrorKind) -> Self {
+        Self {
+            kind,
+            rollback_failures: Vec::new(),
+        }
+    }
+}
+
+impl std::fmt::Display for DaemonizeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.kind.fmt(f)
+    }
+}
+
+impl std::error::Error for DaemonizeError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        self.kind.source()
+    }
+}
+
+/// A change a foreground rollback could not put back (R164).
+#[derive(Debug)]
+pub struct RestoreFailure {
+    state: ChangedState,
+    error: std::io::Error,
+}
+
+impl RestoreFailure {
+    pub(crate) fn new(state: ChangedState, error: impl Into<std::io::Error>) -> Self {
+        Self {
+            state,
+            error: error.into(),
+        }
+    }
+
+    /// The state left changed.
+    pub fn state(&self) -> ChangedState {
+        self.state
+    }
+
+    /// Why it could not be put back: the restore's error, or the error that
+    /// kept the step from saving it.
+    pub fn error(&self) -> &std::io::Error {
+        &self.error
+    }
+}
+
+impl std::fmt::Display for RestoreFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: {}", self.state, self.error)
+    }
+}
+
+impl std::error::Error for RestoreFailure {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.error)
+    }
+}
+
+/// Process state the sequence changed and a rollback puts back (R164).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum ChangedState {
+    /// Descriptor 0.
+    Stdin,
+    /// Descriptor 1.
+    Stdout,
+    /// Descriptor 2.
+    Stderr,
+    /// The working directory.
+    WorkingDirectory,
+    /// The signal mask.
+    SignalMask,
+    /// The signal dispositions.
+    SignalDispositions,
+    /// The supplementary groups.
+    SupplementaryGroups,
+    /// The real and effective group of an identity switch whose `setuid`
+    /// failed.
+    PrimaryGroup,
+    /// The pidfile the sequence wrote, still on disk.
+    Pidfile,
+}
+
+impl std::fmt::Display for ChangedState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Stdin => "stdin",
+            Self::Stdout => "stdout",
+            Self::Stderr => "stderr",
+            Self::WorkingDirectory => "working directory",
+            Self::SignalMask => "signal mask",
+            Self::SignalDispositions => "signal dispositions",
+            Self::SupplementaryGroups => "supplementary groups",
+            Self::PrimaryGroup => "primary group",
+            Self::Pidfile => "pidfile",
+        })
+    }
+}
+
+/// What failed: the [`kind`](DaemonizeError::kind) of a [`DaemonizeError`].
 ///
 /// Each variant maps to a `sysexits.h` exit code via [`exit_code`](DaemonizeError::exit_code).
 /// `ProgramNotFound` and `ExecFailed` come only from
@@ -11,11 +186,11 @@
 /// `String` payloads are human-readable display text, not a stable API:
 /// match on the variant and [`exit_code`](DaemonizeError::exit_code), not
 /// on payload contents. Only named struct fields (e.g.
-/// [`LockConflict::path`](DaemonizeError::LockConflict),
-/// [`Application::code`](DaemonizeError::Application)) are stable.
+/// [`LockConflict::path`](ErrorKind::LockConflict),
+/// [`Application::code`](ErrorKind::Application)) are stable.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
-pub enum DaemonizeError {
+pub enum ErrorKind {
     /// Bad path, bad env key, path overlap, or other config error.
     #[error("validation error: {0}")]
     ValidationError(String),
@@ -135,60 +310,39 @@ pub enum DaemonizeError {
     },
 }
 
-impl DaemonizeError {
-    /// Constructs an [`Application`](DaemonizeError::Application) error with a
-    /// caller-chosen exit `code` and `message`.
-    ///
-    /// Return it from a [`daemonize_with`](crate::daemonize_with) init, or use
-    /// it to report a failure after the daemonize call, before
-    /// [`notify_parent`](crate::DaemonContext::notify_parent), to the parent
-    /// process via [`report_error`](crate::DaemonContext::report_error):
-    ///
-    /// ```no_run
-    /// # use blivet::DaemonizeError;
-    /// # fn bind() -> std::io::Result<()> { Ok(()) }
-    /// // `75` is EX_TEMPFAIL; pick whichever sysexits code fits the failure.
-    /// if let Err(e) = bind() {
-    ///     let err = DaemonizeError::application(75, format!("bind failed: {e}"));
-    ///     // ctx.report_error(&err);
-    ///     # let _ = err;
-    /// }
-    /// ```
-    pub fn application(code: u8, message: impl Into<String>) -> Self {
-        DaemonizeError::Application {
+impl ErrorKind {
+    /// An [`Application`](Self::Application) error; see
+    /// [`DaemonizeError::application`].
+    pub(crate) fn application(code: u8, message: impl Into<String>) -> Self {
+        ErrorKind::Application {
             code,
             message: message.into(),
         }
     }
 
-    /// Returns the `sysexits.h` exit code for this error variant.
-    ///
-    /// Always non-zero, so it is safe to pass to `std::process::exit`: a
-    /// reported error can never be mistaken for success. A caller-supplied
-    /// [`Application`](DaemonizeError::Application) code of 0 is remapped to
-    /// `70` (`EX_SOFTWARE`).
-    pub fn exit_code(&self) -> u8 {
+    /// See [`DaemonizeError::exit_code`].
+    pub(crate) fn exit_code(&self) -> u8 {
         match self {
-            DaemonizeError::ValidationError(_) => 64,  // EX_USAGE
-            DaemonizeError::ProgramNotFound(_) => 66,  // EX_NOINPUT
-            DaemonizeError::UserNotFound(_) => 67,     // EX_NOUSER
-            DaemonizeError::GroupNotFound(_) => 67,    // EX_NOUSER
-            DaemonizeError::LockConflict { .. } => 69, // EX_UNAVAILABLE
-            DaemonizeError::LockfileError(_) => 73,    // EX_CANTCREAT
-            DaemonizeError::ForkFailed(_) => 71,       // EX_OSERR
-            DaemonizeError::SetsidFailed(_) => 71,     // EX_OSERR
-            DaemonizeError::ChdirFailed(_) => 71,      // EX_OSERR
-            DaemonizeError::SystemError(_) => 71,      // EX_OSERR
-            DaemonizeError::PermissionDenied(_) => 77, // EX_NOPERM
-            DaemonizeError::PidfileError(_) => 73,     // EX_CANTCREAT
-            DaemonizeError::OutputFileError(_) => 73,  // EX_CANTCREAT
-            DaemonizeError::ChownError(_) => 73,       // EX_CANTCREAT
-            DaemonizeError::ExecFailed(_) => 71,       // EX_OSERR
-            DaemonizeError::NotifyFailed(_) => 71,     // EX_OSERR
-            DaemonizeError::InitLeftThreads(_) => 70,  // EX_SOFTWARE
+            ErrorKind::ValidationError(_) => 64,  // EX_USAGE
+            ErrorKind::ProgramNotFound(_) => 66,  // EX_NOINPUT
+            ErrorKind::UserNotFound(_) => 67,     // EX_NOUSER
+            ErrorKind::GroupNotFound(_) => 67,    // EX_NOUSER
+            ErrorKind::LockConflict { .. } => 69, // EX_UNAVAILABLE
+            ErrorKind::LockfileError(_) => 73,    // EX_CANTCREAT
+            ErrorKind::ForkFailed(_) => 71,       // EX_OSERR
+            ErrorKind::SetsidFailed(_) => 71,     // EX_OSERR
+            ErrorKind::ChdirFailed(_) => 71,      // EX_OSERR
+            ErrorKind::SystemError(_) => 71,      // EX_OSERR
+            ErrorKind::PermissionDenied(_) => 77, // EX_NOPERM
+            ErrorKind::PidfileError(_) => 73,     // EX_CANTCREAT
+            ErrorKind::OutputFileError(_) => 73,  // EX_CANTCREAT
+            ErrorKind::ChownError(_) => 73,       // EX_CANTCREAT
+            ErrorKind::ExecFailed(_) => 71,       // EX_OSERR
+            ErrorKind::NotifyFailed(_) => 71,     // EX_OSERR
+            ErrorKind::InitLeftThreads(_) => 70,  // EX_SOFTWARE
             // Caller-chosen, but never 0: that would alias success.
-            DaemonizeError::Application { code: 0, .. } => 70, // EX_SOFTWARE
-            DaemonizeError::Application { code, .. } => *code,
+            ErrorKind::Application { code: 0, .. } => 70, // EX_SOFTWARE
+            ErrorKind::Application { code, .. } => *code,
         }
     }
 }
@@ -211,7 +365,7 @@ impl DaemonizeError {
 /// # }
 /// ```
 pub trait WithExitCode<T> {
-    /// Maps the error to [`DaemonizeError::Application`] with `code` and the
+    /// Maps the error to [`Application`](ErrorKind::Application) with `code` and the
     /// error's `Display` text. A `code` of 0 reports as 70, as
     /// [`application`](DaemonizeError::application) does.
     fn with_exit_code(self, code: u8) -> Result<T, DaemonizeError>;
@@ -230,54 +384,42 @@ mod tests {
     // Covers: R49
     #[test]
     fn exit_codes() {
+        assert_eq!(ErrorKind::ValidationError(String::new()).exit_code(), 64);
+        assert_eq!(ErrorKind::ProgramNotFound(String::new()).exit_code(), 66);
+        assert_eq!(ErrorKind::UserNotFound(String::new()).exit_code(), 67);
+        assert_eq!(ErrorKind::GroupNotFound(String::new()).exit_code(), 67);
         assert_eq!(
-            DaemonizeError::ValidationError(String::new()).exit_code(),
-            64
-        );
-        assert_eq!(
-            DaemonizeError::ProgramNotFound(String::new()).exit_code(),
-            66
-        );
-        assert_eq!(DaemonizeError::UserNotFound(String::new()).exit_code(), 67);
-        assert_eq!(DaemonizeError::GroupNotFound(String::new()).exit_code(), 67);
-        assert_eq!(
-            DaemonizeError::LockConflict {
+            ErrorKind::LockConflict {
                 path: std::path::PathBuf::new()
             }
             .exit_code(),
             69
         );
-        assert_eq!(DaemonizeError::LockfileError(String::new()).exit_code(), 73);
-        assert_eq!(DaemonizeError::ForkFailed(String::new()).exit_code(), 71);
-        assert_eq!(DaemonizeError::SetsidFailed(String::new()).exit_code(), 71);
-        assert_eq!(DaemonizeError::ChdirFailed(String::new()).exit_code(), 71);
+        assert_eq!(ErrorKind::LockfileError(String::new()).exit_code(), 73);
+        assert_eq!(ErrorKind::ForkFailed(String::new()).exit_code(), 71);
+        assert_eq!(ErrorKind::SetsidFailed(String::new()).exit_code(), 71);
+        assert_eq!(ErrorKind::ChdirFailed(String::new()).exit_code(), 71);
+        assert_eq!(ErrorKind::PermissionDenied(String::new()).exit_code(), 77);
+        assert_eq!(ErrorKind::PidfileError(String::new()).exit_code(), 73);
+        assert_eq!(ErrorKind::OutputFileError(String::new()).exit_code(), 73);
+        assert_eq!(ErrorKind::ChownError(String::new()).exit_code(), 73);
+        assert_eq!(ErrorKind::ExecFailed(String::new()).exit_code(), 71);
         assert_eq!(
-            DaemonizeError::PermissionDenied(String::new()).exit_code(),
-            77
-        );
-        assert_eq!(DaemonizeError::PidfileError(String::new()).exit_code(), 73);
-        assert_eq!(
-            DaemonizeError::OutputFileError(String::new()).exit_code(),
-            73
-        );
-        assert_eq!(DaemonizeError::ChownError(String::new()).exit_code(), 73);
-        assert_eq!(DaemonizeError::ExecFailed(String::new()).exit_code(), 71);
-        assert_eq!(
-            DaemonizeError::NotifyFailed(std::io::Error::from(std::io::ErrorKind::BrokenPipe))
+            ErrorKind::NotifyFailed(std::io::Error::from(std::io::ErrorKind::BrokenPipe))
                 .exit_code(),
             71
         );
-        assert_eq!(DaemonizeError::InitLeftThreads(2).exit_code(), 70);
+        assert_eq!(ErrorKind::InitLeftThreads(2).exit_code(), 70);
         // Application errors carry a caller-chosen sysexits code.
         assert_eq!(
-            DaemonizeError::application(75, "queued").exit_code(),
+            ErrorKind::application(75, "queued").exit_code(),
             75 // EX_TEMPFAIL, chosen by the caller
         );
         // exit_code() is always non-zero: a 0 would make process::exit treat a
         // reported error as success. It is remapped to EX_SOFTWARE.
-        assert_eq!(DaemonizeError::application(0, "boom").exit_code(), 70);
+        assert_eq!(ErrorKind::application(0, "boom").exit_code(), 70);
         assert_eq!(
-            DaemonizeError::application(71, "bind failed").to_string(),
+            ErrorKind::application(71, "bind failed").to_string(),
             "application error: bind failed"
         );
     }
@@ -287,52 +429,52 @@ mod tests {
     /// there, which is the prompt to sample it here. Nothing checks that it
     /// was: a variant left out of this list escapes the README guard below.
     /// Every test that needs every variant iterates this list.
-    fn every_variant() -> Vec<DaemonizeError> {
+    fn every_variant() -> Vec<ErrorKind> {
         vec![
-            DaemonizeError::ValidationError("detail".into()),
-            DaemonizeError::ProgramNotFound("detail".into()),
-            DaemonizeError::UserNotFound("detail".into()),
-            DaemonizeError::GroupNotFound("detail".into()),
-            DaemonizeError::LockConflict {
+            ErrorKind::ValidationError("detail".into()),
+            ErrorKind::ProgramNotFound("detail".into()),
+            ErrorKind::UserNotFound("detail".into()),
+            ErrorKind::GroupNotFound("detail".into()),
+            ErrorKind::LockConflict {
                 path: "/detail".into(),
             },
-            DaemonizeError::LockfileError("detail".into()),
-            DaemonizeError::ForkFailed("detail".into()),
-            DaemonizeError::SetsidFailed("detail".into()),
-            DaemonizeError::ChdirFailed("detail".into()),
-            DaemonizeError::SystemError("detail".into()),
-            DaemonizeError::PermissionDenied("detail".into()),
-            DaemonizeError::PidfileError("detail".into()),
-            DaemonizeError::OutputFileError("detail".into()),
-            DaemonizeError::ChownError("detail".into()),
-            DaemonizeError::ExecFailed("detail".into()),
-            DaemonizeError::NotifyFailed(std::io::Error::from(std::io::ErrorKind::BrokenPipe)),
-            DaemonizeError::InitLeftThreads(2),
-            DaemonizeError::application(42, "detail"),
+            ErrorKind::LockfileError("detail".into()),
+            ErrorKind::ForkFailed("detail".into()),
+            ErrorKind::SetsidFailed("detail".into()),
+            ErrorKind::ChdirFailed("detail".into()),
+            ErrorKind::SystemError("detail".into()),
+            ErrorKind::PermissionDenied("detail".into()),
+            ErrorKind::PidfileError("detail".into()),
+            ErrorKind::OutputFileError("detail".into()),
+            ErrorKind::ChownError("detail".into()),
+            ErrorKind::ExecFailed("detail".into()),
+            ErrorKind::NotifyFailed(std::io::Error::from(std::io::ErrorKind::BrokenPipe)),
+            ErrorKind::InitLeftThreads(2),
+            ErrorKind::application(42, "detail"),
         ]
     }
 
     /// The variant's name, as the README table writes it.
-    fn variant_name(err: &DaemonizeError) -> &'static str {
+    fn variant_name(err: &ErrorKind) -> &'static str {
         match err {
-            DaemonizeError::ValidationError(_) => "ValidationError",
-            DaemonizeError::ProgramNotFound(_) => "ProgramNotFound",
-            DaemonizeError::UserNotFound(_) => "UserNotFound",
-            DaemonizeError::GroupNotFound(_) => "GroupNotFound",
-            DaemonizeError::LockConflict { .. } => "LockConflict",
-            DaemonizeError::LockfileError(_) => "LockfileError",
-            DaemonizeError::ForkFailed(_) => "ForkFailed",
-            DaemonizeError::SetsidFailed(_) => "SetsidFailed",
-            DaemonizeError::ChdirFailed(_) => "ChdirFailed",
-            DaemonizeError::SystemError(_) => "SystemError",
-            DaemonizeError::PermissionDenied(_) => "PermissionDenied",
-            DaemonizeError::PidfileError(_) => "PidfileError",
-            DaemonizeError::OutputFileError(_) => "OutputFileError",
-            DaemonizeError::ChownError(_) => "ChownError",
-            DaemonizeError::ExecFailed(_) => "ExecFailed",
-            DaemonizeError::NotifyFailed(_) => "NotifyFailed",
-            DaemonizeError::InitLeftThreads(_) => "InitLeftThreads",
-            DaemonizeError::Application { .. } => "Application",
+            ErrorKind::ValidationError(_) => "ValidationError",
+            ErrorKind::ProgramNotFound(_) => "ProgramNotFound",
+            ErrorKind::UserNotFound(_) => "UserNotFound",
+            ErrorKind::GroupNotFound(_) => "GroupNotFound",
+            ErrorKind::LockConflict { .. } => "LockConflict",
+            ErrorKind::LockfileError(_) => "LockfileError",
+            ErrorKind::ForkFailed(_) => "ForkFailed",
+            ErrorKind::SetsidFailed(_) => "SetsidFailed",
+            ErrorKind::ChdirFailed(_) => "ChdirFailed",
+            ErrorKind::SystemError(_) => "SystemError",
+            ErrorKind::PermissionDenied(_) => "PermissionDenied",
+            ErrorKind::PidfileError(_) => "PidfileError",
+            ErrorKind::OutputFileError(_) => "OutputFileError",
+            ErrorKind::ChownError(_) => "ChownError",
+            ErrorKind::ExecFailed(_) => "ExecFailed",
+            ErrorKind::NotifyFailed(_) => "NotifyFailed",
+            ErrorKind::InitLeftThreads(_) => "InitLeftThreads",
+            ErrorKind::Application { .. } => "Application",
         }
     }
 
@@ -423,6 +565,83 @@ mod tests {
         }
         assert!(!map.is_empty(), "parsed no rows from the exit-code table");
         map
+    }
+
+    // Covers: R154
+    #[test]
+    fn rollback_failures_leave_the_message_alone() {
+        let err = DaemonizeError::application(75, "init failed").with_rollback_failures([
+            RestoreFailure::new(
+                ChangedState::WorkingDirectory,
+                std::io::Error::from_raw_os_error(libc::EBADF),
+            ),
+        ]);
+        assert_eq!(err.to_string(), "application error: init failed");
+    }
+
+    #[test]
+    fn rollback_failures_keep_their_order() {
+        let failure = |state| RestoreFailure::new(state, std::io::ErrorKind::Other);
+        let err = DaemonizeError::from(ErrorKind::SystemError("x".into()))
+            .with_rollback_failures([failure(ChangedState::Stdout)])
+            .with_rollback_failures([failure(ChangedState::Pidfile)]);
+        let states: Vec<_> = err
+            .rollback_failures()
+            .iter()
+            .map(RestoreFailure::state)
+            .collect();
+        assert_eq!(states, [ChangedState::Stdout, ChangedState::Pidfile]);
+    }
+
+    #[test]
+    fn the_source_is_the_kinds() {
+        use std::error::Error;
+        let err = DaemonizeError::from(ErrorKind::NotifyFailed(
+            std::io::ErrorKind::BrokenPipe.into(),
+        ));
+        assert_eq!(err.source().unwrap().to_string(), "broken pipe");
+    }
+
+    #[test]
+    fn a_restore_failure_names_the_state_and_why() {
+        let failure = RestoreFailure::new(
+            ChangedState::SupplementaryGroups,
+            std::io::Error::from_raw_os_error(libc::EPERM),
+        );
+        assert_eq!(
+            failure.to_string(),
+            format!(
+                "supplementary groups: {}",
+                std::io::Error::from_raw_os_error(libc::EPERM)
+            )
+        );
+    }
+
+    #[test]
+    fn a_restore_failures_source_is_its_error() {
+        use std::error::Error;
+        let failure = RestoreFailure::new(ChangedState::Stdin, std::io::ErrorKind::BrokenPipe);
+        assert_eq!(failure.source().unwrap().to_string(), "broken pipe");
+    }
+
+    // Covers: R83
+    #[test]
+    fn changed_state_names_are_lowercase() {
+        use ChangedState as S;
+        for state in [
+            S::Stdin,
+            S::Stdout,
+            S::Stderr,
+            S::WorkingDirectory,
+            S::SignalMask,
+            S::SignalDispositions,
+            S::SupplementaryGroups,
+            S::PrimaryGroup,
+            S::Pidfile,
+        ] {
+            let name = state.to_string();
+            assert_eq!(name, name.to_lowercase());
+        }
     }
 
     // Covers: R156

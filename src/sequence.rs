@@ -10,10 +10,11 @@ use std::os::fd::{AsRawFd, OwnedFd};
 use nix::fcntl::Flock;
 use nix::unistd::ForkResult;
 
+use crate::error::{ChangedState, RestoreFailure};
 use crate::forker::Forker;
 use crate::identity::ResolvedIdentity;
 use crate::notify::{self, NotifyChannel};
-use crate::{DaemonConfig, DaemonContext, DaemonizeError, signals, steps};
+use crate::{DaemonConfig, DaemonContext, DaemonizeError, ErrorKind, signals, steps};
 
 /// Internal daemonization logic, generic over the Forker trait for testability.
 ///
@@ -70,7 +71,7 @@ pub(crate) unsafe fn daemonize_inner_with<T>(
                 // NotifyChannel Drop safety net write into a channel whose only
                 // reader is this same process.
                 pipe_wr.close();
-                return Err(e);
+                return Err(e.into());
             }
         };
         match first_fork {
@@ -130,14 +131,14 @@ pub(crate) unsafe fn daemonize_inner_with<T>(
         // unwinding on would run the caller's frames in a detached process
         // whose launcher has already read a failure (R166).
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(run))
-            .unwrap_or_else(|panic| Err(panicked(&*panic)))
+            .unwrap_or_else(|panic| Err(panicked(&*panic).into()))
     };
     match result {
         Ok(done) => Ok(done),
         Err(e) if foreground => Err(e),
         Err(e) => {
             if let Some(pipe) = pipe_wr.take() {
-                pipe.signal_error(&e);
+                pipe.signal_error(e.kind());
             }
             forker.exit(e.exit_code() as i32);
         }
@@ -146,19 +147,21 @@ pub(crate) unsafe fn daemonize_inner_with<T>(
 
 /// The error a daemon reports for a panic in the sequence: exit 70
 /// (`EX_SOFTWARE`), with the panic's text when it has one.
-fn panicked(payload: &(dyn std::any::Any + Send)) -> DaemonizeError {
+fn panicked(payload: &(dyn std::any::Any + Send)) -> ErrorKind {
     let text = payload
         .downcast_ref::<&str>()
         .copied()
         .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
         .unwrap_or("no message");
-    DaemonizeError::application(70, format!("daemon panicked during startup: {text}"))
+    ErrorKind::application(70, format!("daemon panicked during startup: {text}"))
 }
 
 /// What a failed sequence undoes (R164): each step's [`Undo`](steps::Undo)
 /// token, in the reverse of the order the steps ran, then the pidfile (step 8),
 /// and last the lock (step 7). A half-done identity switch (step 17) undoes
-/// itself.
+/// itself. [`roll_back`](Self::roll_back) returns what it could not undo, for
+/// the error; a panic unwinding past the sequence rolls back in `Drop`, with
+/// nowhere to report.
 ///
 /// In foreground mode the process is the caller's, and it gets back the parts
 /// that can be restored. In daemon mode the process exits on failure, so the
@@ -211,18 +214,18 @@ impl AbortGuard<'_> {
     }
 
     /// Holds a step's token, to drop on failure.
-    fn record(&mut self, undo: steps::Undo) -> Result<(), DaemonizeError> {
+    fn record(&mut self, undo: steps::Undo) -> Result<(), ErrorKind> {
         self.undo.push(undo);
         self.checkpoint()
     }
 
     /// A point the undo walk may fail the sequence at; nothing outside tests.
-    fn checkpoint(&mut self) -> Result<(), DaemonizeError> {
+    fn checkpoint(&mut self) -> Result<(), ErrorKind> {
         #[cfg(test)]
         {
             self.checkpoints += 1;
             if steps::failpoints::checkpoint_fails(self.checkpoints) {
-                return Err(DaemonizeError::SystemError(
+                return Err(ErrorKind::SystemError(
                     steps::failpoints::CHECKPOINT_FAILURE.into(),
                 ));
             }
@@ -236,8 +239,8 @@ impl AbortGuard<'_> {
         while let Some(next) = undo.next() {
             if let Err(e) = self.record(next) {
                 // The rest restore now, latest first, before the recorded.
-                undo.rev().for_each(drop);
-                return Err(e);
+                let failures = steps::restore_all(undo.collect());
+                return Err(DaemonizeError::from(e).with_rollback_failures(failures));
             }
         }
         Ok(())
@@ -256,6 +259,21 @@ impl AbortGuard<'_> {
         self.undo.iter().filter_map(steps::Undo::held_fd)
     }
 
+    /// Puts back every recorded change, latest first, removes the pidfile,
+    /// and returns what could not be undone.
+    fn roll_back(&mut self) -> Vec<RestoreFailure> {
+        let mut failures = steps::restore_all(std::mem::take(&mut self.undo));
+        if let Some(path) = self.pidfile.take() {
+            match std::fs::remove_file(path) {
+                Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+                    failures.push(RestoreFailure::new(ChangedState::Pidfile, e));
+                }
+                _ => {}
+            }
+        }
+        failures
+    }
+
     /// The sequence finished: keep every change, and hand over the lock.
     fn disarm(&mut self) -> Option<Flock<OwnedFd>> {
         self.undo.drain(..).for_each(steps::Undo::keep);
@@ -266,11 +284,9 @@ impl AbortGuard<'_> {
 
 impl Drop for AbortGuard<'_> {
     fn drop(&mut self) {
-        // Latest first: each token restores as it drops.
-        while self.undo.pop().is_some() {}
-        if let Some(path) = self.pidfile.take() {
-            let _ = std::fs::remove_file(path);
-        }
+        // Empty unless a panic unwound past `run_post_fork`, which leaves no
+        // error to report the failures in.
+        let _ = self.roll_back();
         // `files` drops after this body, so the pidfile is gone first.
     }
 }
@@ -296,7 +312,23 @@ unsafe fn run_post_fork<T>(
     // mode, where the process is the caller's; only the pidfile in a daemon,
     // whose process exits on failure.
     let mut abort = AbortGuard::new(config.foreground);
+    // SAFETY: this function's contract, passed on.
+    let result = unsafe { run_steps(config, pipe_wr, init, &mut abort) };
+    result.map_err(|e| e.with_rollback_failures(abort.roll_back()))
+}
 
+/// The steps of [`run_post_fork`], recording in `abort` what each changed.
+///
+/// # Safety
+///
+/// As [`run_post_fork`].
+#[allow(unsafe_code)]
+unsafe fn run_steps<'a, T>(
+    config: &'a DaemonConfig,
+    pipe_wr: &mut Option<NotifyChannel>,
+    init: impl FnOnce() -> Result<T, DaemonizeError>,
+    abort: &mut AbortGuard<'a>,
+) -> Result<(DaemonContext, T), DaemonizeError> {
     // Step 4: Set umask
     abort.record(steps::set_umask(config.umask, abort.rollback()))?;
 
@@ -317,7 +349,7 @@ unsafe fn run_post_fork<T>(
     if let Some(path) = lockfile_path {
         let lock = steps::open_and_lock(path)?;
         let id = crate::file_identity::file_id(&*lock)
-            .map_err(|e| DaemonizeError::LockfileError(format!("fstat: {e}")))?;
+            .map_err(|e| ErrorKind::LockfileError(format!("fstat: {e}")))?;
         abort.files.push(path, steps::Role::Lockfile(lock), id);
     }
 
@@ -409,9 +441,7 @@ unsafe fn run_post_fork<T>(
     }
     #[cfg(test)]
     if steps::failpoints::BEFORE_SWITCH_FAILS.injected() {
-        return Err(DaemonizeError::SystemError(
-            steps::failpoints::SWITCH_FAILURE.into(),
-        ));
+        return Err(ErrorKind::SystemError(steps::failpoints::SWITCH_FAILURE.into()).into());
     }
     if let Some(identity) = identity {
         // SAFETY: this function's contract requires a single thread, and the
@@ -490,7 +520,10 @@ mod tests {
         });
 
         assert!(
-            matches!(result, Err(DaemonizeError::LockConflict { .. })),
+            matches!(
+                result.as_ref().map_err(DaemonizeError::kind),
+                Err(ErrorKind::LockConflict { .. })
+            ),
             "{result:?}"
         );
         assert!(!ran, "init ran in the instance that lost the lock");
@@ -630,7 +663,10 @@ mod tests {
         let result = run_inner(&config, &mut NullForker::new(vec![], Ok(())));
 
         assert!(
-            matches!(result, Err(DaemonizeError::OutputFileError(_))),
+            matches!(
+                result.as_ref().map_err(DaemonizeError::kind),
+                Err(ErrorKind::OutputFileError(_))
+            ),
             "{result:?}"
         );
         assert_eq!(std::env::var("BLIVET_KEPT").unwrap(), "caller");
@@ -713,7 +749,7 @@ mod tests {
 
         assert!(ran, "init did not run before the chown");
         assert!(
-            matches!(&result, Err(DaemonizeError::ChownError(m)) if m.contains("app.pid")),
+            matches!(result.as_ref().map_err(DaemonizeError::kind), Err(ErrorKind::ChownError(m)) if m.contains("app.pid")),
             "the pidfile is chowned before the switch: {result:?}"
         );
     }
@@ -737,7 +773,7 @@ mod tests {
         let result = run_inner_with(&config, &mut NullForker::new(vec![], Ok(())), || Ok(()));
 
         assert!(
-            matches!(&result, Err(DaemonizeError::PermissionDenied(m)) if m.contains("setgid")),
+            matches!(result.as_ref().map_err(DaemonizeError::kind), Err(ErrorKind::PermissionDenied(m)) if m.contains("setgid")),
             "with chown_paths(false) the unprivileged failure is setgid's: {result:?}"
         );
     }
@@ -764,7 +800,7 @@ mod tests {
         let result = run_inner_with(&config, &mut NullForker::new(vec![], Ok(())), || Ok(()));
 
         assert!(
-            matches!(&result, Err(DaemonizeError::PermissionDenied(m)) if m.contains("setgid")),
+            matches!(result.as_ref().map_err(DaemonizeError::kind), Err(ErrorKind::PermissionDenied(m)) if m.contains("setgid")),
             "the device was chowned: {result:?}"
         );
     }
@@ -820,7 +856,7 @@ mod tests {
         });
 
         assert!(
-            matches!(&result, Err(DaemonizeError::PermissionDenied(m)) if m.contains("setgid")),
+            matches!(result.as_ref().map_err(DaemonizeError::kind), Err(ErrorKind::PermissionDenied(m)) if m.contains("setgid")),
             "the file init put on fd 1 was chowned: {result:?}"
         );
     }
@@ -882,7 +918,10 @@ mod tests {
         });
 
         assert!(
-            matches!(result, Err(DaemonizeError::UserNotFound(_))),
+            matches!(
+                result.as_ref().map_err(DaemonizeError::kind),
+                Err(ErrorKind::UserNotFound(_))
+            ),
             "{result:?}"
         );
         assert!(!ran, "init ran for a user that does not exist");
@@ -914,7 +953,7 @@ mod tests {
         });
 
         assert!(
-            matches!(&result, Err(DaemonizeError::ChownError(m)) if m.contains("app.pid")),
+            matches!(result.as_ref().map_err(DaemonizeError::kind), Err(ErrorKind::ChownError(m)) if m.contains("app.pid")),
             "the opened pidfile was not chowned: {result:?}"
         );
     }
@@ -979,10 +1018,42 @@ mod tests {
         });
 
         assert!(
-            matches!(&result, Err(DaemonizeError::PermissionDenied(m)) if m.contains("initgroups")),
+            matches!(result.as_ref().map_err(DaemonizeError::kind), Err(ErrorKind::PermissionDenied(m)) if m.contains("initgroups")),
             "{result:?}"
         );
         assert!(!ran, "init ran before the supplementary groups were set");
+    }
+
+    // Covers: R164
+    /// An init that sheds root leaves the rollback unable to put the caller's
+    /// supplementary groups back, and the error says so.
+    #[test]
+    #[ignore = "needs root: the privileged tier runs it"]
+    fn supplementary_groups_the_rollback_cannot_restore_are_reported() {
+        use crate::ChangedState;
+        if !isolated() {
+            return;
+        }
+        std::env::set_current_dir("/").unwrap();
+        let mut config = DaemonConfig::new();
+        config.foreground(true).close_fds(false).user("nobody");
+
+        let result: Result<(DaemonContext, ()), _> =
+            run_inner_with(&config, &mut NullForker::new(vec![], Ok(())), || {
+                crate::test_support::shed_root();
+                Err(DaemonizeError::application(75, "init failed"))
+            });
+
+        let err = result.expect_err("init failed the start");
+        let report: Vec<_> = err
+            .rollback_failures()
+            .iter()
+            .map(|f| (f.state(), f.error().raw_os_error()))
+            .collect();
+        assert_eq!(
+            report,
+            [(ChangedState::SupplementaryGroups, Some(libc::EPERM))]
+        );
     }
 
     // Covers: R162
@@ -1036,7 +1107,7 @@ mod tests {
         let result = run_inner(&config, &mut NullForker::new(vec![], Ok(())));
 
         assert!(
-            matches!(&result, Err(DaemonizeError::PermissionDenied(m)) if m.contains("setuid")),
+            matches!(result.as_ref().map_err(DaemonizeError::kind), Err(ErrorKind::PermissionDenied(m)) if m.contains("setuid")),
             "{result:?}"
         );
         assert_eq!(
@@ -1101,6 +1172,153 @@ mod tests {
         assert!(
             !dir.path().join("app.pid").exists(),
             "pidfile was left behind"
+        );
+    }
+
+    // Covers: R154, R164
+    /// A change the rollback cannot put back goes in the error beside init's
+    /// own, which keeps its message. Here init swaps the file under the
+    /// descriptor the working-directory token holds for `/dev/null`, so its
+    /// `fchdir` fails.
+    #[test]
+    fn a_failed_restore_is_reported_beside_inits_error() {
+        use crate::ChangedState;
+        if !isolated() {
+            return;
+        }
+        let start = tempfile::tempdir().unwrap();
+        let work = tempfile::tempdir().unwrap();
+        std::env::set_current_dir(start.path()).unwrap();
+        let mut config = DaemonConfig::new();
+        config.foreground(true).close_fds(false).chdir(work.path());
+
+        let result: Result<(DaemonContext, ()), _> =
+            run_inner_with(&config, &mut NullForker::new(vec![], Ok(())), || {
+                crate::test_support::swap_out_fds_open_on(start.path());
+                Err(DaemonizeError::application(75, "init failed"))
+            });
+
+        let err = result.expect_err("init failed the start");
+        let report: Vec<_> = err
+            .rollback_failures()
+            .iter()
+            .map(|f| (f.state(), f.error().raw_os_error()))
+            .collect();
+        assert_eq!(
+            (err.to_string().as_str(), report),
+            (
+                "application error: init failed",
+                vec![(ChangedState::WorkingDirectory, Some(libc::ENOTDIR))]
+            )
+        );
+    }
+
+    // Covers: R164
+    /// A working directory the caller may enter but not read cannot be saved,
+    /// so the rollback cannot go back to it, and says so with the reason.
+    #[test]
+    fn a_working_directory_that_could_not_be_saved_is_reported() {
+        use crate::ChangedState;
+        use std::os::unix::fs::PermissionsExt;
+        if !isolated() {
+            return;
+        }
+        let start = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(start.path(), std::fs::Permissions::from_mode(0o311)).unwrap();
+        crate::test_support::shed_root();
+        std::env::set_current_dir(start.path()).unwrap();
+        let mut config = DaemonConfig::new();
+        config.foreground(true).close_fds(false);
+
+        let result: Result<(DaemonContext, ()), _> =
+            run_inner_with(&config, &mut NullForker::new(vec![], Ok(())), || {
+                Err(DaemonizeError::application(75, "init failed"))
+            });
+
+        let err = result.expect_err("init failed the start");
+        let report: Vec<_> = err
+            .rollback_failures()
+            .iter()
+            .map(|f| (f.state(), f.error().raw_os_error()))
+            .collect();
+        assert_eq!(
+            report,
+            [(ChangedState::WorkingDirectory, Some(libc::EACCES))]
+        );
+    }
+
+    // Covers: R164
+    #[test]
+    fn a_pidfile_the_rollback_cannot_remove_is_reported() {
+        use crate::ChangedState;
+        if !isolated() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let pidfile = dir.path().join("app.pid");
+        let mut config = DaemonConfig::new();
+        config.foreground(true).close_fds(false).pidfile(&pidfile);
+
+        let result: Result<(DaemonContext, ()), _> =
+            run_inner_with(&config, &mut NullForker::new(vec![], Ok(())), || {
+                std::fs::remove_file(&pidfile).unwrap();
+                std::fs::create_dir(&pidfile).unwrap();
+                std::fs::write(pidfile.join("keep"), "").unwrap();
+                Err(DaemonizeError::application(75, "init failed"))
+            });
+
+        let err = result.expect_err("init failed the start");
+        let states: Vec<_> = err.rollback_failures().iter().map(|f| f.state()).collect();
+        assert_eq!(states, [ChangedState::Pidfile]);
+    }
+
+    // Covers: R164
+    /// A panic in a foreground init unwinds into the caller, past the error
+    /// path: the guard's drop still rolls back and removes the pidfile.
+    #[test]
+    fn a_panicking_foreground_init_still_rolls_back() {
+        if !isolated() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let pidfile = dir.path().join("app.pid");
+        let mut config = DaemonConfig::new();
+        config.foreground(true).close_fds(false).pidfile(&pidfile);
+
+        let unwound = catch_unwind(std::panic::AssertUnwindSafe(|| {
+            run_inner_with(
+                &config,
+                &mut NullForker::new(vec![], Ok(())),
+                || -> Result<(), _> { panic!("init panicked") },
+            )
+        }));
+
+        assert!(unwound.is_err(), "init's panic reached the caller");
+        assert!(!pidfile.exists(), "pidfile was left behind");
+    }
+
+    // Covers: R164
+    #[test]
+    fn a_pidfile_already_gone_is_not_a_rollback_failure() {
+        if !isolated() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let pidfile = dir.path().join("app.pid");
+        let mut config = DaemonConfig::new();
+        config.foreground(true).close_fds(false).pidfile(&pidfile);
+
+        let result: Result<(DaemonContext, ()), _> =
+            run_inner_with(&config, &mut NullForker::new(vec![], Ok(())), || {
+                std::fs::remove_file(&pidfile).unwrap();
+                Err(DaemonizeError::application(75, "init failed"))
+            });
+
+        let err = result.expect_err("init failed the start");
+        assert!(
+            err.rollback_failures().is_empty(),
+            "{:?}",
+            err.rollback_failures()
         );
     }
 
@@ -1273,7 +1491,10 @@ mod tests {
         let config = DaemonConfig::new();
         let mut forker = NullForker::first_fork_fails();
         let result = run_inner(&config, &mut forker);
-        assert!(matches!(result, Err(DaemonizeError::ForkFailed(_))));
+        assert!(matches!(
+            result.as_ref().map_err(DaemonizeError::kind),
+            Err(ErrorKind::ForkFailed(_))
+        ));
 
         let rd = forker
             .take_pipe_reader()
@@ -1306,7 +1527,7 @@ mod tests {
         let buf = crate::test_support::read_pipe(rd);
         assert_eq!(
             buf,
-            notify::error_bytes(&DaemonizeError::SetsidFailed("test".into()))
+            notify::error_bytes(&ErrorKind::SetsidFailed("test".into()))
         );
     }
 
@@ -1331,7 +1552,7 @@ mod tests {
         let buf = crate::test_support::read_pipe(rd);
         assert_eq!(
             buf,
-            notify::error_bytes(&DaemonizeError::ForkFailed("second fork".into()))
+            notify::error_bytes(&ErrorKind::ForkFailed("second fork".into()))
         );
     }
 
@@ -1420,9 +1641,7 @@ mod tests {
         // so a setsid surfaces as an error. Either would fail the run.
         let mut forker = NullForker::new(
             vec![],
-            Err(DaemonizeError::SetsidFailed(
-                "foreground must not setsid".into(),
-            )),
+            Err(ErrorKind::SetsidFailed("foreground must not setsid".into())),
         );
         let stdout_before = fstat(std::io::stdout()).unwrap();
 
@@ -1453,7 +1672,10 @@ mod tests {
 
         let result = result.expect("a pipe failure must return, not fork or exit");
         assert!(
-            matches!(result, Err(DaemonizeError::SystemError(_))),
+            matches!(
+                result.as_ref().map_err(DaemonizeError::kind),
+                Err(ErrorKind::SystemError(_))
+            ),
             "{result:?}"
         );
     }
@@ -1481,7 +1703,10 @@ mod tests {
         let result = run_inner(&config, &mut forker);
 
         assert!(
-            matches!(result, Err(DaemonizeError::OutputFileError(_))),
+            matches!(
+                result.as_ref().map_err(DaemonizeError::kind),
+                Err(ErrorKind::OutputFileError(_))
+            ),
             "{result:?}"
         );
         let after = fstat(std::io::stdout()).unwrap();
@@ -1559,8 +1784,11 @@ mod tests {
         let mut config = DaemonConfig::new();
         config.foreground(true).close_fds(false);
         let mut forker = NullForker::new(vec![], Ok(()));
-        match run_inner(&config, &mut forker) {
-            Err(DaemonizeError::SystemError(msg)) => {
+        match run_inner(&config, &mut forker)
+            .as_ref()
+            .map_err(DaemonizeError::kind)
+        {
+            Err(ErrorKind::SystemError(msg)) => {
                 assert!(
                     msg.contains("/dev/null"),
                     "message names the syscall: {msg}"
@@ -1583,8 +1811,11 @@ mod tests {
         let mut config = DaemonConfig::new();
         config.foreground(true).close_fds(false).pidfile(&pidfile);
         let mut forker = NullForker::new(vec![], Ok(()));
-        match run_inner(&config, &mut forker) {
-            Err(DaemonizeError::PidfileError(msg)) => {
+        match run_inner(&config, &mut forker)
+            .as_ref()
+            .map_err(DaemonizeError::kind)
+        {
+            Err(ErrorKind::PidfileError(msg)) => {
                 assert!(msg.contains("write"), "message names the operation: {msg}");
             }
             other => panic!("expected PidfileError to propagate, got {other:?}"),
@@ -1620,7 +1851,7 @@ mod tests {
         let _ = std::fs::remove_file(&pidfile);
 
         assert!(
-            matches!(&result, Err(DaemonizeError::PidfileError(m)) if m.contains("open")),
+            matches!(result.as_ref().map_err(DaemonizeError::kind), Err(ErrorKind::PidfileError(m)) if m.contains("open")),
             "expected the open failure to propagate, got {result:?}"
         );
         assert_eq!(
@@ -1643,8 +1874,11 @@ mod tests {
         let mut config = DaemonConfig::new();
         config.foreground(true).close_fds(false).pidfile(&pidfile);
         let mut forker = NullForker::new(vec![], Ok(()));
-        match run_inner(&config, &mut forker) {
-            Err(DaemonizeError::SystemError(msg)) => {
+        match run_inner(&config, &mut forker)
+            .as_ref()
+            .map_err(DaemonizeError::kind)
+        {
+            Err(ErrorKind::SystemError(msg)) => {
                 assert!(
                     msg.contains("sigaction"),
                     "message names the syscall: {msg}"
@@ -1672,8 +1906,11 @@ mod tests {
         let mut config = DaemonConfig::new();
         config.foreground(true).close_fds(false).pidfile(&pidfile);
         let mut forker = NullForker::new(vec![], Ok(()));
-        match run_inner(&config, &mut forker) {
-            Err(DaemonizeError::SystemError(msg)) => {
+        match run_inner(&config, &mut forker)
+            .as_ref()
+            .map_err(DaemonizeError::kind)
+        {
+            Err(ErrorKind::SystemError(msg)) => {
                 assert!(
                     msg.contains("sigprocmask"),
                     "message names the syscall: {msg}"
@@ -1705,8 +1942,11 @@ mod tests {
         let mut config = DaemonConfig::new();
         config.foreground(true).close_fds(true).pidfile(&pidfile);
         let mut forker = NullForker::new(vec![], Ok(()));
-        match run_inner(&config, &mut forker) {
-            Err(DaemonizeError::SystemError(msg)) => {
+        match run_inner(&config, &mut forker)
+            .as_ref()
+            .map_err(DaemonizeError::kind)
+        {
+            Err(ErrorKind::SystemError(msg)) => {
                 assert!(
                     msg.contains("getrlimit"),
                     "message names the syscall: {msg}"
@@ -1746,7 +1986,7 @@ mod tests {
         );
         // A second acquisition of the same path must conflict.
         let second = steps::open_and_lock(&pidfile);
-        assert!(matches!(second, Err(DaemonizeError::LockConflict { .. })));
+        assert!(matches!(second, Err(ErrorKind::LockConflict { .. })));
     }
 
     // Covers: R134, R145
@@ -1766,7 +2006,10 @@ mod tests {
 
         let result = run_inner(&config, &mut forker);
         assert!(
-            matches!(result, Err(DaemonizeError::LockConflict { .. })),
+            matches!(
+                result.as_ref().map_err(DaemonizeError::kind),
+                Err(ErrorKind::LockConflict { .. })
+            ),
             "foreground mode should surface setup errors as Err, not exit"
         );
         // The abort guard removes the pidfile a failed sequence wrote. This

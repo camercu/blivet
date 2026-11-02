@@ -125,8 +125,13 @@ The `sysexits.h` status a failure maps to, or the caller's chosen code for an
 application error. _Avoid_: exit status (for the mapped value), return code
 
 **Application error**:
-A failure the caller reports with its own exit code (`DaemonizeError::Application`).
+A failure the caller reports with its own exit code (`ErrorKind::Application`).
 _Avoid_: custom error, user error
+
+**Rollback failure**:
+A change a failed foreground start could not put back, reported beside the
+error (`RestoreFailure`, `DaemonizeError::rollback_failures`). _Avoid_: restore
+error, cleanup error
 
 **Program handoff**:
 Replacing the daemon with another program by `execvp`, keeping the lock
@@ -218,9 +223,11 @@ Automations:
 - termination signal delivered, handlers installed → pidfile removed, default
   disposition restored, signal re-raised.
 
-Unmapped: none of the 4 public types (`DaemonConfig` → Daemon config,
+Unmapped: none of the 7 public types (`DaemonConfig` → Daemon config,
 `DaemonContext` → the daemon's handle after the sequence, `DaemonizeError` →
-failure kinds, `WithExitCode` → Application error).
+a failure and its rollback failures, `ErrorKind` → failure kinds,
+`RestoreFailure` and `ChangedState` → Rollback failure, `WithExitCode` →
+Application error).
 
 ## Relationships
 
@@ -279,7 +286,7 @@ failure kinds, `WithExitCode` → Application error).
   everywhere in prose.
 - "user switch", "identity switch", "switch user", "drop privileges"
   (pre-ADR-0004 API) name one step. Resolved: **Identity switch**.
-- `DaemonizeError` variant names mix forms: `ForkFailed` (event),
+- `ErrorKind` variant names mix forms: `ForkFailed` (event),
   `LockfileError`/`PidfileError`/`ChownError`/`SystemError` (noun + Error),
   `ValidationError` (repeats "Error" inside the error enum), `LockConflict`
   (state). Open: public API. Recommend `*Failed` for the noun forms at next

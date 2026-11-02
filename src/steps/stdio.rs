@@ -10,7 +10,7 @@ use nix::sys::stat::Mode;
 use nix::unistd::{self};
 
 use super::{Rollback, Saved, Undo};
-use crate::error::DaemonizeError;
+use crate::error::{ChangedState, DaemonizeError, ErrorKind, RestoreFailure};
 use crate::file_identity::FileId;
 use std::os::fd::AsRawFd;
 
@@ -48,7 +48,7 @@ pub(crate) fn open_above_stdio<P: ?Sized + nix::NixPath>(
 /// stdout and stderr. In foreground mode, stdout/stderr are left
 /// inherited so output reaches the parent terminal or supervisor.
 ///
-/// Returns [`SystemError`](DaemonizeError::SystemError) if `/dev/null` cannot
+/// Returns [`SystemError`](ErrorKind::SystemError) if `/dev/null` cannot
 /// be opened or a `dup2` fails (e.g. a minimal container with no `/dev/null`),
 /// so the caller can report the failure to the parent rather than crashing.
 #[allow(clippy::disallowed_methods)] // a stdio mover; asserts isolation under test
@@ -60,12 +60,10 @@ pub(crate) fn redirect_to_devnull(
     crate::test_support::assert_isolated("redirect_to_devnull");
     #[cfg(test)]
     if crate::steps::failpoints::DEVNULL_OPEN_FAILS.injected() {
-        return Err(DaemonizeError::SystemError(
-            "open /dev/null: injected failure".into(),
-        ));
+        return Err(ErrorKind::SystemError("open /dev/null: injected failure".into()).into());
     }
     let devnull = open_above_stdio(c"/dev/null", OFlag::O_RDWR, Mode::empty())
-        .map_err(|e| DaemonizeError::SystemError(format!("open /dev/null: {e}")))?;
+        .map_err(|e| ErrorKind::SystemError(format!("open /dev/null: {e}")))?;
     let slots: &[StdioSlot] = if stdout_stderr {
         &[StdioSlot::Stdin, StdioSlot::Stdout, StdioSlot::Stderr]
     } else {
@@ -73,7 +71,12 @@ pub(crate) fn redirect_to_devnull(
     };
     let mut moved = Vec::new();
     for &slot in slots {
-        move_slot(&devnull, slot, rollback, &mut moved).map_err(|e| e.into_devnull_error(slot))?;
+        if let Err(e) = move_slot(&devnull, slot, rollback, &mut moved) {
+            let failures = super::restore_all(moved);
+            return Err(
+                DaemonizeError::from(e.into_devnull_error(slot)).with_rollback_failures(failures)
+            );
+        }
     }
     Ok(moved)
 }
@@ -110,16 +113,15 @@ struct OpenStream<'a> {
 
 /// Opens `path` for a stream without truncating it: nothing on disk may
 /// change until [`plan_output_redirect`] has seen what the file is.
-fn open_stream(path: &Path, append: bool) -> Result<OpenStream<'_>, DaemonizeError> {
+fn open_stream(path: &Path, append: bool) -> Result<OpenStream<'_>, ErrorKind> {
     let mut flags = OFlag::O_WRONLY | OFlag::O_CREAT;
     if append {
         flags |= OFlag::O_APPEND;
     }
-    let fd = open_above_stdio(path, flags, Mode::from_bits_truncate(0o644)).map_err(|e| {
-        DaemonizeError::OutputFileError(format!("cannot open {}: {e}", path.display()))
-    })?;
+    let fd = open_above_stdio(path, flags, Mode::from_bits_truncate(0o644))
+        .map_err(|e| ErrorKind::OutputFileError(format!("cannot open {}: {e}", path.display())))?;
     let st = nix::sys::stat::fstat(&fd)
-        .map_err(|e| DaemonizeError::OutputFileError(format!("fstat {}: {e}", path.display())))?;
+        .map_err(|e| ErrorKind::OutputFileError(format!("fstat {}: {e}", path.display())))?;
     Ok(OpenStream {
         path,
         id: FileId::of(&st),
@@ -131,19 +133,18 @@ fn open_stream(path: &Path, append: bool) -> Result<OpenStream<'_>, DaemonizeErr
 }
 
 /// Empties a stream's file, as `O_TRUNC` would have when it was opened.
-fn truncate(stream: &OpenStream) -> Result<(), DaemonizeError> {
+fn truncate(stream: &OpenStream) -> Result<(), ErrorKind> {
     if !stream.regular {
         return Ok(());
     }
     #[cfg(test)]
     if crate::steps::failpoints::STREAM_TRUNCATE_FAILS.injected() {
-        return Err(DaemonizeError::OutputFileError(
+        return Err(ErrorKind::OutputFileError(
             "truncate: injected failure".into(),
         ));
     }
-    nix::unistd::ftruncate(&stream.fd, 0).map_err(|e| {
-        DaemonizeError::OutputFileError(format!("truncate {}: {e}", stream.path.display()))
-    })
+    nix::unistd::ftruncate(&stream.fd, 0)
+        .map_err(|e| ErrorKind::OutputFileError(format!("truncate {}: {e}", stream.path.display())))
 }
 
 /// Step 12: Redirect stdout/stderr to configured files.
@@ -176,12 +177,32 @@ pub(crate) fn redirect_output<'a>(
     #[cfg(test)]
     crate::test_support::assert_isolated("redirect_output");
     let mut moved = Vec::new();
+    match redirect_output_into(stdout, stderr, append, owned, rollback, &mut moved) {
+        Ok(files) => Ok(Redirected {
+            slots: moved,
+            files,
+        }),
+        Err(e) => {
+            let failures = super::restore_all(moved);
+            Err(DaemonizeError::from(e).with_rollback_failures(failures))
+        }
+    }
+}
 
+/// The work of [`redirect_output`], leaving each slot's token in `moved`.
+fn redirect_output_into<'a>(
+    stdout: Option<&'a Path>,
+    stderr: Option<&'a Path>,
+    append: bool,
+    owned: &[(&'static str, FileId)],
+    rollback: Rollback,
+    moved: &mut Vec<Undo>,
+) -> Result<Vec<(&'a Path, OwnedFd, FileId)>, ErrorKind> {
     let out = match stdout {
         Some(path) => {
             let out = open_stream(path, append)?;
             plan_output_redirect(Some(out.id), None, owned).map_err(|c| refusal(&c, &out))?;
-            move_slot(&out.fd, StdioSlot::Stdout, rollback, &mut moved)
+            move_slot(&out.fd, StdioSlot::Stdout, rollback, moved)
                 .map_err(|e| e.into_output_error(StdioSlot::Stdout))?;
             Some(out)
         }
@@ -195,7 +216,7 @@ pub(crate) fn redirect_output<'a>(
                 Stderr::Own(err) => &err.fd,
                 Stderr::SharesStdout(out) => &out.fd,
             };
-            move_slot(source, StdioSlot::Stderr, rollback, &mut moved)
+            move_slot(source, StdioSlot::Stderr, rollback, moved)
                 .map_err(|e| e.into_output_error(StdioSlot::Stderr))?;
             Some(err)
         }
@@ -218,10 +239,7 @@ pub(crate) fn redirect_output<'a>(
         .into_iter()
         .chain(out.map(|out| (out.path, out.fd, out.id)))
         .collect();
-    Ok(Redirected {
-        slots: moved,
-        files,
-    })
+    Ok(files)
 }
 
 /// What step 12 did: the stdio slots it moved, and the files it opened.
@@ -243,6 +261,15 @@ enum StdioSlot {
 }
 
 impl StdioSlot {
+    /// The state this slot is, as a rollback failure names it.
+    fn state(self) -> ChangedState {
+        match self {
+            Self::Stdin => ChangedState::Stdin,
+            Self::Stdout => ChangedState::Stdout,
+            Self::Stderr => ChangedState::Stderr,
+        }
+    }
+
     fn fd(self) -> i32 {
         match self {
             Self::Stdin => 0,
@@ -280,16 +307,16 @@ pub(crate) enum SlotError {
 
 impl SlotError {
     /// Step 6's error: moving `/dev/null` onto a slot is a system failure.
-    fn into_devnull_error(self, slot: StdioSlot) -> DaemonizeError {
-        DaemonizeError::SystemError(match self {
+    fn into_devnull_error(self, slot: StdioSlot) -> ErrorKind {
+        ErrorKind::SystemError(match self {
             Self::Save(e) => format!("/dev/null -> fd {}: cannot save it: {e}", slot.fd()),
             Self::Dup2(e) => format!("dup2 /dev/null -> fd {}: {e}", slot.fd()),
         })
     }
 
     /// Step 12's error: moving a stream onto a slot is an output-file failure.
-    fn into_output_error(self, slot: StdioSlot) -> DaemonizeError {
-        DaemonizeError::OutputFileError(match self {
+    fn into_output_error(self, slot: StdioSlot) -> ErrorKind {
+        ErrorKind::OutputFileError(match self {
             Self::Save(e) => format!("cannot save fd {}: {e}", slot.fd()),
             Self::Dup2(e) => format!("dup2 fd {}: {e}", slot.fd()),
         })
@@ -330,7 +357,7 @@ fn open_checked_stderr<'a, 'o>(
     append: bool,
     out: Option<&'o OpenStream<'a>>,
     owned: &[(&'static str, FileId)],
-) -> Result<Stderr<'a, 'o>, DaemonizeError> {
+) -> Result<Stderr<'a, 'o>, ErrorKind> {
     let err = open_stream(path, append)?;
     let plan = plan_output_redirect(out.map(|o| o.id), Some(err.id), owned)
         .map_err(|c| refusal(&c, &err))?;
@@ -360,12 +387,16 @@ impl SavedSlot {
         Ok(Self { target, was })
     }
 
-    pub(crate) fn restore(self) {
+    pub(crate) fn restore(self) -> Result<(), RestoreFailure> {
         match &self.was {
-            Some(fd) => {
-                let _ = self.target.dup2(fd);
+            Some(fd) => self
+                .target
+                .dup2(fd)
+                .map_err(|e| RestoreFailure::new(self.target.state(), e)),
+            None => {
+                crate::sys::raw_close(self.target.fd());
+                Ok(())
             }
-            None => crate::sys::raw_close(self.target.fd()),
         }
     }
 
@@ -376,8 +407,8 @@ impl SavedSlot {
 }
 
 /// The refusal for a stream that turned out to be an owned file.
-fn refusal(collision: &Collision, stream: &OpenStream) -> DaemonizeError {
-    DaemonizeError::ValidationError(format!(
+fn refusal(collision: &Collision, stream: &OpenStream) -> ErrorKind {
+    ErrorKind::ValidationError(format!(
         "{} and {} must not be the same file: {}",
         collision.owned,
         collision.stream,
@@ -407,8 +438,10 @@ mod tests {
     /// the sequence does at step 18.
     fn kept(
         result: Result<super::Redirected<'_>, crate::DaemonizeError>,
-    ) -> Result<(), crate::DaemonizeError> {
-        result.map(|done| done.slots.into_iter().for_each(super::Undo::keep))
+    ) -> Result<(), crate::ErrorKind> {
+        result
+            .map(|done| done.slots.into_iter().for_each(super::Undo::keep))
+            .map_err(crate::DaemonizeError::into_kind)
     }
 
     use crate::file_identity::file_id;
@@ -786,7 +819,7 @@ mod tests {
         ));
 
         assert!(
-            matches!(result, Err(DaemonizeError::OutputFileError(_))),
+            matches!(result, Err(ErrorKind::OutputFileError(_))),
             "{result:?}"
         );
         assert_eq!(std::fs::read_to_string(&log).unwrap(), "the previous run\n");
@@ -821,7 +854,7 @@ mod tests {
         ));
 
         assert!(
-            matches!(result, Err(DaemonizeError::OutputFileError(_))),
+            matches!(result, Err(ErrorKind::OutputFileError(_))),
             "{result:?}"
         );
         assert_eq!(
@@ -855,7 +888,7 @@ mod tests {
         ));
 
         assert!(
-            matches!(result, Err(DaemonizeError::OutputFileError(_))),
+            matches!(result, Err(ErrorKind::OutputFileError(_))),
             "{result:?}"
         );
         assert_eq!(
@@ -895,7 +928,7 @@ mod tests {
         drop(held);
 
         assert!(
-            matches!(&result, Err(DaemonizeError::OutputFileError(m)) if m.contains("fd 1")),
+            matches!(&result, Err(ErrorKind::OutputFileError(m)) if m.contains("fd 1")),
             "{result:?}"
         );
         let stdout_after = fstat(std::io::stdout()).unwrap();
@@ -942,7 +975,7 @@ mod tests {
             id(fstat(std::io::stderr()).unwrap()),
         );
         assert!(
-            matches!(result, Err(DaemonizeError::OutputFileError(_))),
+            matches!(result, Err(ErrorKind::OutputFileError(_))),
             "{result:?}"
         );
         assert_eq!(before, after, "a failed redirect left fd 1 or fd 2 moved");
@@ -1111,7 +1144,7 @@ mod tests {
 
         let named = pidfile.display().to_string();
         assert!(
-            matches!(&result, Err(DaemonizeError::ValidationError(m))
+            matches!(&result, Err(ErrorKind::ValidationError(m))
                 if m.contains("same file") && m.contains(&named)),
             "the refusal should name the stream's file: {result:?}"
         );

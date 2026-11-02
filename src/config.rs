@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use crate::error::DaemonizeError;
+use crate::error::{DaemonizeError, ErrorKind};
 use crate::file_identity::paths_same;
 
 /// How the lockfile is determined. Tri-state so "not set" (derive from the
@@ -99,7 +99,7 @@ impl DaemonConfig {
     ///
     /// Unless a separate [`lockfile`](DaemonConfig::lockfile) is set, the
     /// pidfile is also exclusively flock'd, so a second instance fails with
-    /// [`LockConflict`](crate::DaemonizeError::LockConflict) instead of
+    /// [`LockConflict`](crate::ErrorKind::LockConflict) instead of
     /// silently overwriting the pidfile. Opt out with
     /// [`no_lockfile`](DaemonConfig::no_lockfile).
     pub fn pidfile(&mut self, path: impl Into<PathBuf>) -> &mut Self {
@@ -124,7 +124,7 @@ impl DaemonConfig {
     /// matching `nix` version) just to set a umask. The value must fit in the
     /// 12 permission bits (`<= 0o7777`); larger values are rejected by
     /// [`validate`](DaemonConfig::validate) with a
-    /// [`ValidationError`](crate::DaemonizeError::ValidationError).
+    /// [`ValidationError`](crate::ErrorKind::ValidationError).
     ///
     /// ```
     /// use blivet::DaemonConfig;
@@ -303,7 +303,7 @@ impl DaemonConfig {
     ///
     /// # Errors
     ///
-    /// Returns `DaemonizeError::ValidationError` if:
+    /// Returns `ErrorKind::ValidationError` if:
     /// - Any configured path (pidfile, stdout, stderr, lockfile, chdir) contains
     ///   a NUL byte
     /// - Any configured path (pidfile, stdout, stderr, lockfile) is not absolute
@@ -317,20 +317,25 @@ impl DaemonConfig {
     /// - The umask does not fit in the 12 permission bits (`> 0o7777`)
     /// - An environment key is empty or contains `=`
     ///
-    /// Returns `DaemonizeError::PermissionDenied` if a user or group is
+    /// Returns `ErrorKind::PermissionDenied` if a user or group is
     /// configured but the effective UID is not 0.
     #[must_use = "validate() returns a Result that must be checked"]
     pub fn validate(&self) -> Result<(), DaemonizeError> {
+        Ok(self.check()?)
+    }
+
+    /// [`validate`](Self::validate), as the bare [`ErrorKind`].
+    fn check(&self) -> Result<(), ErrorKind> {
         // Check chdir is absolute, exists, and is a directory
         validate_path(&self.chdir, "chdir")?;
         if !self.chdir.exists() {
-            return Err(DaemonizeError::ValidationError(format!(
+            return Err(ErrorKind::ValidationError(format!(
                 "chdir path does not exist: {}",
                 self.chdir.display()
             )));
         }
         if !self.chdir.is_dir() {
-            return Err(DaemonizeError::ValidationError(format!(
+            return Err(ErrorKind::ValidationError(format!(
                 "chdir path is not a directory: {}",
                 self.chdir.display()
             )));
@@ -373,7 +378,7 @@ impl DaemonConfig {
         for (owned, owned_name) in rows(Role::Owned) {
             for (stream, stream_name) in rows(Role::Stream) {
                 if paths_same(owned, stream) {
-                    return Err(DaemonizeError::ValidationError(format!(
+                    return Err(ErrorKind::ValidationError(format!(
                         "{owned_name} and {stream_name} must not be the same path: {}",
                         owned.display()
                     )));
@@ -383,7 +388,7 @@ impl DaemonConfig {
 
         // Umask must fit in the 12 permission bits.
         if self.umask & !0o7777 != 0 {
-            return Err(DaemonizeError::ValidationError(format!(
+            return Err(ErrorKind::ValidationError(format!(
                 "umask must be <= 0o7777, got {:#o}",
                 self.umask
             )));
@@ -395,17 +400,17 @@ impl DaemonConfig {
         // surfaces here as a ValidationError instead of a post-fork panic.
         for (key, value) in &self.env {
             if key.is_empty() {
-                return Err(DaemonizeError::ValidationError(
+                return Err(ErrorKind::ValidationError(
                     "environment key must not be empty".into(),
                 ));
             }
             if key.contains('=') {
-                return Err(DaemonizeError::ValidationError(format!(
+                return Err(ErrorKind::ValidationError(format!(
                     "environment key must not contain '=': {key}"
                 )));
             }
             if key.contains('\0') || value.contains('\0') {
-                return Err(DaemonizeError::ValidationError(format!(
+                return Err(ErrorKind::ValidationError(format!(
                     "environment entry must not contain a NUL byte: key {key:?}"
                 )));
             }
@@ -413,7 +418,7 @@ impl DaemonConfig {
 
         // User/group validation: must be root to switch users or groups
         if (self.user.is_some() || self.group.is_some()) && nix::unistd::geteuid().as_raw() != 0 {
-            return Err(DaemonizeError::PermissionDenied(
+            return Err(ErrorKind::PermissionDenied(
                 "must be root to switch users or groups".into(),
             ));
         }
@@ -425,16 +430,16 @@ impl DaemonConfig {
 /// Rejects a configured path that is malformed (contains a NUL byte, which no
 /// syscall can accept) or not absolute, so both surface at `validate()` rather
 /// than as a late `EINVAL` when the path is first passed to the OS.
-fn validate_path(path: &std::path::Path, name: &str) -> Result<(), DaemonizeError> {
+fn validate_path(path: &std::path::Path, name: &str) -> Result<(), ErrorKind> {
     use std::os::unix::ffi::OsStrExt;
     if path.as_os_str().as_bytes().contains(&0) {
-        return Err(DaemonizeError::ValidationError(format!(
+        return Err(ErrorKind::ValidationError(format!(
             "{name} path must not contain a NUL byte: {}",
             path.display()
         )));
     }
     if !path.is_absolute() {
-        return Err(DaemonizeError::ValidationError(format!(
+        return Err(ErrorKind::ValidationError(format!(
             "{name} path must be absolute: {}",
             path.display()
         )));
@@ -476,9 +481,9 @@ enum Role {
 /// with `EISDIR` at step 12 — in the forked daemon, after step 8 had already
 /// written the pidfile. A user's mistake belongs pre-fork, where it is a
 /// `ValidationError` and nothing has happened yet.
-fn reject_directory(path: &std::path::Path, label: &str) -> Result<(), DaemonizeError> {
+fn reject_directory(path: &std::path::Path, label: &str) -> Result<(), ErrorKind> {
     if path.is_dir() {
-        return Err(DaemonizeError::ValidationError(format!(
+        return Err(ErrorKind::ValidationError(format!(
             "{label} path is a directory: {}",
             path.display()
         )));
@@ -486,17 +491,17 @@ fn reject_directory(path: &std::path::Path, label: &str) -> Result<(), Daemonize
     Ok(())
 }
 
-fn validate_parent_writable(path: &std::path::Path, name: &str) -> Result<(), DaemonizeError> {
+fn validate_parent_writable(path: &std::path::Path, name: &str) -> Result<(), ErrorKind> {
     use nix::unistd::AccessFlags;
 
     let parent = path.parent().ok_or_else(|| {
-        DaemonizeError::ValidationError(format!(
+        ErrorKind::ValidationError(format!(
             "{name} path has no parent directory: {}",
             path.display()
         ))
     })?;
     if !parent.exists() {
-        return Err(DaemonizeError::ValidationError(format!(
+        return Err(ErrorKind::ValidationError(format!(
             "{name} parent directory does not exist: {}",
             parent.display()
         )));
@@ -506,7 +511,7 @@ fn validate_parent_writable(path: &std::path::Path, name: &str) -> Result<(), Da
     // and then failed at daemonize time with ENOTDIR, reported as "could not
     // create" rather than as the bad path it is.
     if !parent.is_dir() {
-        return Err(DaemonizeError::ValidationError(format!(
+        return Err(ErrorKind::ValidationError(format!(
             "{name} parent is not a directory: {}",
             parent.display()
         )));
@@ -546,13 +551,9 @@ fn validate_parent_writable(path: &std::path::Path, name: &str) -> Result<(), Da
 /// `Path::exists` follows symlinks, so a loop answers "does not exist". They
 /// are still named rather than translated if they ever arrive, which costs
 /// nothing and is what the blanket claim above would have to say anyway.
-fn writability_error(
-    name: &str,
-    parent: &std::path::Path,
-    errno: nix::errno::Errno,
-) -> DaemonizeError {
+fn writability_error(name: &str, parent: &std::path::Path, errno: nix::errno::Errno) -> ErrorKind {
     let parent = parent.display();
-    DaemonizeError::ValidationError(match errno {
+    ErrorKind::ValidationError(match errno {
         nix::errno::Errno::EACCES => format!("{name} parent directory is not writable: {parent}"),
         nix::errno::Errno::EROFS => {
             format!("{name} parent directory is on a read-only filesystem (EROFS): {parent}")
@@ -688,8 +689,12 @@ mod tests {
     /// consumer with several configured paths knows which value to fix.
     #[test]
     fn validation_errors_include_offending_path() {
-        let msg = |config: &DaemonConfig| match config.validate() {
-            Err(DaemonizeError::ValidationError(msg)) => msg,
+        let msg = |config: &DaemonConfig| match config
+            .validate()
+            .as_ref()
+            .map_err(DaemonizeError::kind)
+        {
+            Err(ErrorKind::ValidationError(msg)) => msg.clone(),
             other => panic!("expected ValidationError, got {other:?}"),
         };
 
@@ -800,8 +805,8 @@ mod tests {
                 "stderr" => cfg.stderr(dir.path()),
                 _ => cfg.lockfile(dir.path()),
             };
-            match cfg.validate() {
-                Err(DaemonizeError::ValidationError(msg)) => assert!(
+            match cfg.validate().as_ref().map_err(DaemonizeError::kind) {
+                Err(ErrorKind::ValidationError(msg)) => assert!(
                     msg.contains("is a directory") && msg.contains(label),
                     "{label}: expected a directory complaint naming it, got {msg}"
                 ),
@@ -815,8 +820,8 @@ mod tests {
         let mut config = DaemonConfig::new();
         config.chdir("relative/path");
         assert!(matches!(
-            config.validate(),
-            Err(DaemonizeError::ValidationError(_))
+            config.validate().as_ref().map_err(DaemonizeError::kind),
+            Err(ErrorKind::ValidationError(_))
         ));
     }
 
@@ -825,8 +830,8 @@ mod tests {
         let mut config = DaemonConfig::new();
         config.chdir("/nonexistent_daemonize_test_dir");
         assert!(matches!(
-            config.validate(),
-            Err(DaemonizeError::ValidationError(_))
+            config.validate().as_ref().map_err(DaemonizeError::kind),
+            Err(ErrorKind::ValidationError(_))
         ));
     }
 
@@ -835,8 +840,8 @@ mod tests {
         let mut config = DaemonConfig::new();
         config.pidfile("relative.pid");
         assert!(matches!(
-            config.validate(),
-            Err(DaemonizeError::ValidationError(_))
+            config.validate().as_ref().map_err(DaemonizeError::kind),
+            Err(ErrorKind::ValidationError(_))
         ));
     }
 
@@ -850,8 +855,8 @@ mod tests {
         let mut config = DaemonConfig::new();
         config.pidfile(crate::test_support::tmp_dir().join("pid\0file"));
         assert!(matches!(
-            config.validate(),
-            Err(DaemonizeError::ValidationError(_))
+            config.validate().as_ref().map_err(DaemonizeError::kind),
+            Err(ErrorKind::ValidationError(_))
         ));
     }
 
@@ -865,8 +870,8 @@ mod tests {
         let mut config = DaemonConfig::new();
         config.pidfile(dir.path());
         assert!(matches!(
-            config.validate(),
-            Err(DaemonizeError::ValidationError(m)) if m.contains("is a directory")
+            config.validate().as_ref().map_err(DaemonizeError::kind),
+            Err(ErrorKind::ValidationError(m)) if m.contains("is a directory")
         ));
     }
 
@@ -875,8 +880,8 @@ mod tests {
         let mut config = DaemonConfig::new();
         config.stdout("relative.log");
         assert!(matches!(
-            config.validate(),
-            Err(DaemonizeError::ValidationError(_))
+            config.validate().as_ref().map_err(DaemonizeError::kind),
+            Err(ErrorKind::ValidationError(_))
         ));
     }
 
@@ -885,8 +890,8 @@ mod tests {
         let mut config = DaemonConfig::new();
         config.stderr("relative.log");
         assert!(matches!(
-            config.validate(),
-            Err(DaemonizeError::ValidationError(_))
+            config.validate().as_ref().map_err(DaemonizeError::kind),
+            Err(ErrorKind::ValidationError(_))
         ));
     }
 
@@ -895,8 +900,8 @@ mod tests {
         let mut config = DaemonConfig::new();
         config.lockfile("relative.lock");
         assert!(matches!(
-            config.validate(),
-            Err(DaemonizeError::ValidationError(_))
+            config.validate().as_ref().map_err(DaemonizeError::kind),
+            Err(ErrorKind::ValidationError(_))
         ));
     }
 
@@ -911,7 +916,7 @@ mod tests {
         // (may fail for other reasons like non-root user, but not overlap)
         let result = config.validate();
         assert!(
-            !matches!(&result, Err(DaemonizeError::ValidationError(msg)) if msg.contains("same path"))
+            !matches!(result.as_ref().map_err(DaemonizeError::kind), Err(ErrorKind::ValidationError(msg)) if msg.contains("same path"))
         );
     }
 
@@ -924,8 +929,8 @@ mod tests {
         let mut config = DaemonConfig::new();
         config.lockfile(path_str).stdout(path_str);
         assert!(matches!(
-            config.validate(),
-            Err(DaemonizeError::ValidationError(_))
+            config.validate().as_ref().map_err(DaemonizeError::kind),
+            Err(ErrorKind::ValidationError(_))
         ));
     }
 
@@ -941,8 +946,8 @@ mod tests {
         let mut config = DaemonConfig::new();
         config.pidfile(path_str).stdout(path_str).no_lockfile();
         assert!(matches!(
-            config.validate(),
-            Err(DaemonizeError::ValidationError(_))
+            config.validate().as_ref().map_err(DaemonizeError::kind),
+            Err(ErrorKind::ValidationError(_))
         ));
     }
 
@@ -954,8 +959,8 @@ mod tests {
         let mut config = DaemonConfig::new();
         config.pidfile(path_str).stderr(path_str);
         assert!(matches!(
-            config.validate(),
-            Err(DaemonizeError::ValidationError(_))
+            config.validate().as_ref().map_err(DaemonizeError::kind),
+            Err(ErrorKind::ValidationError(_))
         ));
     }
 
@@ -964,7 +969,7 @@ mod tests {
         let mut config = DaemonConfig::new();
         config.umask(0o7777);
         assert!(
-            !matches!(&config.validate(), Err(DaemonizeError::ValidationError(msg)) if msg.contains("umask"))
+            !matches!(config.validate().as_ref().map_err(DaemonizeError::kind), Err(ErrorKind::ValidationError(msg)) if msg.contains("umask"))
         );
     }
 
@@ -973,8 +978,8 @@ mod tests {
         let mut config = DaemonConfig::new();
         config.umask(0o10000);
         assert!(matches!(
-            config.validate(),
-            Err(DaemonizeError::ValidationError(msg)) if msg.contains("umask")
+            config.validate().as_ref().map_err(DaemonizeError::kind),
+            Err(ErrorKind::ValidationError(msg)) if msg.contains("umask")
         ));
     }
 
@@ -983,8 +988,8 @@ mod tests {
         let mut config = DaemonConfig::new();
         config.env("", "value");
         assert!(matches!(
-            config.validate(),
-            Err(DaemonizeError::ValidationError(_))
+            config.validate().as_ref().map_err(DaemonizeError::kind),
+            Err(ErrorKind::ValidationError(_))
         ));
     }
 
@@ -993,8 +998,8 @@ mod tests {
         let mut config = DaemonConfig::new();
         config.env("KEY=BAD", "value");
         assert!(matches!(
-            config.validate(),
-            Err(DaemonizeError::ValidationError(_))
+            config.validate().as_ref().map_err(DaemonizeError::kind),
+            Err(ErrorKind::ValidationError(_))
         ));
     }
 
@@ -1006,8 +1011,8 @@ mod tests {
         let mut config = DaemonConfig::new();
         config.env("KEY\0BAD", "value");
         assert!(matches!(
-            config.validate(),
-            Err(DaemonizeError::ValidationError(msg)) if msg.contains("NUL")
+            config.validate().as_ref().map_err(DaemonizeError::kind),
+            Err(ErrorKind::ValidationError(msg)) if msg.contains("NUL")
         ));
     }
 
@@ -1017,8 +1022,8 @@ mod tests {
         let mut config = DaemonConfig::new();
         config.env("KEY", "val\0ue");
         assert!(matches!(
-            config.validate(),
-            Err(DaemonizeError::ValidationError(msg)) if msg.contains("NUL")
+            config.validate().as_ref().map_err(DaemonizeError::kind),
+            Err(ErrorKind::ValidationError(msg)) if msg.contains("NUL")
         ));
     }
 
@@ -1036,8 +1041,8 @@ mod tests {
         let mut config = DaemonConfig::new();
         config.chdir(&file);
         assert!(matches!(
-            config.validate(),
-            Err(DaemonizeError::ValidationError(msg)) if msg.contains("not a directory")
+            config.validate().as_ref().map_err(DaemonizeError::kind),
+            Err(ErrorKind::ValidationError(msg)) if msg.contains("not a directory")
         ));
     }
 
@@ -1049,8 +1054,8 @@ mod tests {
         let mut config = DaemonConfig::new();
         config.lockfile(path_str).stderr(path_str);
         assert!(matches!(
-            config.validate(),
-            Err(DaemonizeError::ValidationError(_))
+            config.validate().as_ref().map_err(DaemonizeError::kind),
+            Err(ErrorKind::ValidationError(_))
         ));
     }
 
@@ -1062,8 +1067,8 @@ mod tests {
         let mut config = DaemonConfig::new();
         config.pidfile(path_str).stdout(path_str);
         assert!(matches!(
-            config.validate(),
-            Err(DaemonizeError::ValidationError(_))
+            config.validate().as_ref().map_err(DaemonizeError::kind),
+            Err(ErrorKind::ValidationError(_))
         ));
     }
 
@@ -1077,8 +1082,8 @@ mod tests {
         let mut config = DaemonConfig::new();
         config.pidfile(path_str).stdout(path_str);
         assert!(matches!(
-            config.validate(),
-            Err(DaemonizeError::ValidationError(msg)) if msg.starts_with("pidfile and stdout")
+            config.validate().as_ref().map_err(DaemonizeError::kind),
+            Err(ErrorKind::ValidationError(msg)) if msg.starts_with("pidfile and stdout")
         ));
     }
 
@@ -1087,8 +1092,8 @@ mod tests {
         let mut config = DaemonConfig::new();
         config.pidfile("/nonexistent_parent_dir_xyz/test.pid");
         assert!(matches!(
-            config.validate(),
-            Err(DaemonizeError::ValidationError(msg)) if msg.contains("parent")
+            config.validate().as_ref().map_err(DaemonizeError::kind),
+            Err(ErrorKind::ValidationError(msg)) if msg.contains("parent")
         ));
     }
 
@@ -1097,8 +1102,8 @@ mod tests {
         let mut config = DaemonConfig::new();
         config.stdout("/nonexistent_parent_dir_xyz/test.log");
         assert!(matches!(
-            config.validate(),
-            Err(DaemonizeError::ValidationError(msg)) if msg.contains("parent")
+            config.validate().as_ref().map_err(DaemonizeError::kind),
+            Err(ErrorKind::ValidationError(msg)) if msg.contains("parent")
         ));
     }
 
@@ -1107,8 +1112,8 @@ mod tests {
         let mut config = DaemonConfig::new();
         config.stderr("/nonexistent_parent_dir_xyz/test.log");
         assert!(matches!(
-            config.validate(),
-            Err(DaemonizeError::ValidationError(msg)) if msg.contains("parent")
+            config.validate().as_ref().map_err(DaemonizeError::kind),
+            Err(ErrorKind::ValidationError(msg)) if msg.contains("parent")
         ));
     }
 
@@ -1117,8 +1122,8 @@ mod tests {
         let mut config = DaemonConfig::new();
         config.stdout("/");
         assert!(matches!(
-            config.validate(),
-            Err(DaemonizeError::ValidationError(msg))
+            config.validate().as_ref().map_err(DaemonizeError::kind),
+            Err(ErrorKind::ValidationError(msg))
                 if msg.contains("no parent directory") && msg.contains('/')
         ));
     }
@@ -1145,8 +1150,8 @@ mod tests {
             );
         } else {
             assert!(matches!(
-                result,
-                Err(DaemonizeError::ValidationError(msg))
+                result.as_ref().map_err(DaemonizeError::kind),
+                Err(ErrorKind::ValidationError(msg))
                     if msg.contains("not writable") && msg.contains(&dir.path().display().to_string())
             ));
         }
@@ -1220,7 +1225,7 @@ mod tests {
 
         #[cfg(not(blivet_faccessat_lacks_eaccess))]
         assert!(
-            matches!(&result, Err(DaemonizeError::ValidationError(msg))
+            matches!(result.as_ref().map_err(DaemonizeError::kind), Err(ErrorKind::ValidationError(msg))
                 if msg.contains("not writable")),
             "the probe must answer for the effective UID, which cannot \
              write a root-owned directory: {result:?}"
@@ -1247,7 +1252,7 @@ mod tests {
     fn a_read_only_filesystem_is_reported_as_the_answer_it_is() {
         let path = std::path::Path::new("/ro");
         let msg = |errno| match writability_error("pidfile", path, errno) {
-            DaemonizeError::ValidationError(msg) => msg,
+            ErrorKind::ValidationError(msg) => msg,
             other => panic!("expected ValidationError, got {other:?}"),
         };
 
@@ -1285,8 +1290,12 @@ mod tests {
     #[test]
     fn a_path_error_is_answered_before_the_writability_probe() {
         let tmp = crate::test_support::tmp_dir();
-        let msg = |config: &DaemonConfig| match config.validate() {
-            Err(DaemonizeError::ValidationError(msg)) => msg,
+        let msg = |config: &DaemonConfig| match config
+            .validate()
+            .as_ref()
+            .map_err(DaemonizeError::kind)
+        {
+            Err(ErrorKind::ValidationError(msg)) => msg.clone(),
             other => panic!("expected ValidationError, got {other:?}"),
         };
 
@@ -1326,7 +1335,7 @@ mod tests {
     // Covers: R83
     #[test]
     fn display_includes_prefix() {
-        let err = DaemonizeError::ValidationError("test message".into());
+        let err = ErrorKind::ValidationError("test message".into());
         assert_eq!(err.to_string(), "validation error: test message");
     }
 
@@ -1371,7 +1380,10 @@ mod tests {
             assert!(result.is_ok(), "root may switch identity: {result:?}");
         } else {
             assert!(
-                matches!(result, Err(DaemonizeError::PermissionDenied(_))),
+                matches!(
+                    result.as_ref().map_err(DaemonizeError::kind),
+                    Err(ErrorKind::PermissionDenied(_))
+                ),
                 "only root may switch identity: {result:?}"
             );
         }

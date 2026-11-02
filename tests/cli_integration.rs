@@ -1692,3 +1692,42 @@ fn stdout_and_stderr_on_one_file_share_a_descriptor() {
         "the two streams overwrote each other"
     );
 }
+
+// Covers: R164
+/// In foreground mode the CLI prints, after the error, each change the
+/// rollback could not put back. A working directory the caller may enter but
+/// not read cannot be saved, and a lock conflict then fails the start.
+#[test]
+fn foreground_failure_prints_what_the_rollback_left_changed() {
+    if nix::unistd::geteuid().is_root() {
+        return; // root reads any directory, so the working directory is saved
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let lockfile = dir.path().join("test.lock");
+    #[allow(clippy::disallowed_methods)] // the test's own lock holder
+    let held = std::fs::File::create(&lockfile).unwrap();
+    let _held = nix::fcntl::Flock::lock(held, nix::fcntl::FlockArg::LockExclusiveNonblock)
+        .map_err(|(_, e)| e)
+        .unwrap();
+    let start = tempfile::tempdir().unwrap();
+    std::fs::set_permissions(start.path(), std::fs::Permissions::from_mode(0o311)).unwrap();
+
+    let output = daemonize_cmd()
+        .current_dir(start.path())
+        .args(["-f", "-l", lockfile.to_str().unwrap(), "--", "true"])
+        .output()
+        .unwrap();
+
+    std::fs::set_permissions(start.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        (
+            output.status.code(),
+            stderr
+                .lines()
+                .any(|l| l.starts_with("rollback left working directory changed: "))
+        ),
+        (Some(69), true),
+        "stderr: {stderr}"
+    );
+}

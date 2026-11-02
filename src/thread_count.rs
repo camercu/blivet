@@ -15,7 +15,7 @@
 #![allow(unsafe_code)]
 
 #[cfg(blivet_thread_count)]
-use crate::{DaemonConfig, DaemonizeError};
+use crate::{DaemonConfig, DaemonizeError, ErrorKind};
 
 /// This process's thread count, opened once and read as often as needed.
 ///
@@ -357,20 +357,20 @@ pub(crate) fn checked_init<T, F: FnOnce() -> Result<T, DaemonizeError>>(
         // Opened before init, which may change root to a jail without /proc.
         // An error, not a panic: this runs in the daemon, where a panic's
         // message reaches only its stderr, and the launcher prints an error.
-        let source = if switches_user {
-            Some(ThreadCount::open().map_err(|e| {
-                DaemonizeError::SystemError(format!("thread count before init: {e}"))
-            })?)
-        } else {
-            None
-        };
+        let source =
+            if switches_user {
+                Some(ThreadCount::open().map_err(|e| {
+                    ErrorKind::SystemError(format!("thread count before init: {e}"))
+                })?)
+            } else {
+                None
+            };
         let value = init()?;
         if let Some(source) = source {
-            let count = settled_count(&source, 1).map_err(|e| {
-                DaemonizeError::SystemError(format!("thread count after init: {e}"))
-            })?;
+            let count = settled_count(&source, 1)
+                .map_err(|e| ErrorKind::SystemError(format!("thread count after init: {e}")))?;
             if count != 1 {
-                return Err(DaemonizeError::InitLeftThreads(count));
+                return Err(ErrorKind::InitLeftThreads(count).into());
             }
         }
         Ok(value)
@@ -409,8 +409,8 @@ mod tests {
 
         // The test harness runs more than one thread, so the check fails, and
         // as an error the launcher can print, not a panic it never sees.
-        match init() {
-            Err(DaemonizeError::InitLeftThreads(n)) => assert!(n > 1, "{n}"),
+        match init().as_ref().map_err(DaemonizeError::kind) {
+            Err(ErrorKind::InitLeftThreads(n)) => assert!(*n > 1, "{n}"),
             other => panic!("expected InitLeftThreads, got {other:?}"),
         }
     }
@@ -474,8 +474,8 @@ mod tests {
             Ok(())
         });
 
-        match init() {
-            Err(DaemonizeError::InitLeftThreads(n)) => assert!(n > 1, "{n}"),
+        match init().as_ref().map_err(DaemonizeError::kind) {
+            Err(ErrorKind::InitLeftThreads(n)) => assert!(*n > 1, "{n}"),
             other => panic!("expected the count to be read, got {other:?}"),
         }
     }

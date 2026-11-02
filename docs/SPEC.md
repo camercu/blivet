@@ -248,7 +248,7 @@ to ensure `cleanup()` runs (either explicitly or by dropping
 
 `notify_parent(&mut self) -> Result<(), DaemonizeError>` writes the
 readiness message (`0x00 0x00`) to the notification pipe and closes it. A pipe
-write error is returned as `DaemonizeError::NotifyFailed` (exit code 71) so
+write error is returned as `ErrorKind::NotifyFailed` (exit code 71) so
 callers get one error type with a preserved exit code. The companion
 `notify_parent_or_report(&mut self)` does the same but reports the error to the
 parent and `_exit`s instead of returning it. The parent reads the readiness
@@ -283,11 +283,26 @@ to the pipe and closes it. The parent reads this and exits 1.
 
 ### DaemonizeError
 
-One enum covering validation and runtime errors. Derives `Debug` and
-`thiserror::Error` (providing `Display` and `std::error::Error`). Must
-be `Send + Sync` (compile-time assertion in tests). Do not derive
-`Clone` or `PartialEq`; use `matches!()` in tests. `Display` messages
-are lowercase with no trailing punctuation.
+A struct holding what failed, `kind() -> &ErrorKind`, and each change a
+foreground rollback could not put back, `rollback_failures() ->
+&[RestoreFailure]`, latest first (R164). `Display` and `source()` are the
+kind's, so an `init` error keeps its message (R154). Constructors:
+`application(code, message)` and `From<ErrorKind>`. Must be `Send + Sync`
+(compile-time assertion in tests).
+
+A `RestoreFailure` holds the `ChangedState` left changed, `state()`, and
+why, `error() -> &io::Error`: the restore's error, or the error that kept
+the step from saving the state. `Display` is `<state>: <error>`.
+`ChangedState` is `#[non_exhaustive]`: `Stdin`, `Stdout`, `Stderr`,
+`WorkingDirectory`, `SignalMask`, `SignalDispositions`,
+`SupplementaryGroups`, `PrimaryGroup`, `Pidfile`. The umask and the
+environment are not in it: restoring them cannot fail.
+
+`ErrorKind` is one enum covering validation and runtime errors. Derives
+`Debug` and `thiserror::Error` (providing `Display` and
+`std::error::Error`). Do not derive `Clone` or `PartialEq`; use
+`matches!()` on `kind()` in tests. `Display` messages are lowercase with
+no trailing punctuation.
 
 | Variant            | Condition                                               |
 | ------------------ | ------------------------------------------------------- |
@@ -313,8 +328,8 @@ are lowercase with no trailing punctuation.
 `ProgramNotFound` and `ExecFailed` come only from `DaemonContext::exec`
 and the CLI's pre-fork path check.
 
-`exit_code(&self) -> u8` returns the `sysexits.h` code for the variant
-(see CLI exit code table).
+`DaemonizeError::exit_code(&self) -> u8` returns the `sysexits.h` code
+for the kind's variant (see CLI exit code table).
 
 > Placing exit code mapping on the error type (rather than keeping it
 > as a CLI-only concern) is motivated by the notification pipe: the
@@ -630,7 +645,7 @@ Post-fork errors in steps 2–17 are written to the notification pipe
 per the error protocol and the process calls `_exit()` with the mapped
 exit code. In foreground mode there is no pipe and no `_exit()`;
 failures return `Err` (see Foreground mode). Every fallible step maps
-its failure to a named `DaemonizeError` variant: system-call failures
+its failure to a named `ErrorKind` variant: system-call failures
 without a more specific variant — opening `/dev/null`, `sigaction`,
 `sigprocmask`, `getrlimit` — map to `SystemError` (exit 71).
 Individual `close()` errors in step 13 are silently ignored. A panic in
@@ -1046,8 +1061,8 @@ daemonization. Without `-v`: no diagnostic output.
 This table is the single authoritative source. `DaemonizeError::
 exit_code()` returns these values.
 
-| `DaemonizeError` variant | Exit code | `sysexits.h` constant |
-| ------------------------ | --------- | --------------------- |
+| `ErrorKind` variant | Exit code | `sysexits.h` constant |
+| ------------------- | --------- | --------------------- |
 | `ValidationError`        | 64        | `EX_USAGE`            |
 | `ProgramNotFound`        | 66        | `EX_NOINPUT`          |
 | `UserNotFound`           | 67        | `EX_NOUSER`           |
@@ -1102,9 +1117,9 @@ The double-fork sequence and notification pipe are abstracted behind a
 ```rust
 pub(crate) trait Forker {
     fn create_notification_pipe(&mut self)
-        -> Result<(OwnedFd, OwnedFd), DaemonizeError>;
-    unsafe fn fork(&mut self) -> Result<ForkResult, DaemonizeError>;
-    fn setsid(&mut self) -> Result<(), DaemonizeError>;
+        -> Result<(OwnedFd, OwnedFd), ErrorKind>;
+    unsafe fn fork(&mut self) -> Result<ForkResult, ErrorKind>;
+    fn setsid(&mut self) -> Result<(), ErrorKind>;
     fn exit(&self, code: i32) -> !;
 }
 ```
@@ -1237,8 +1252,10 @@ continues; (2) `daemonize_with()` with privileged `init` →
 - `DaemonContext`: drop releases lock, writes failure to pipe if
   `notify_parent()` was not called, removes pidfile if
   `cleanup_on_drop` is true, `#[non_exhaustive]`.
-- `DaemonizeError`: each variant's condition, `exit_code()`.
-  Note which variants only `DaemonContext::exec` produces.
+- `DaemonizeError`: `kind()`, `rollback_failures()`, `exit_code()`.
+- `ErrorKind`: each variant's condition. Note which variants only
+  `DaemonContext::exec` produces.
+- `RestoreFailure`, `ChangedState`: what a rollback left changed, and why.
 
 ### Cargo.toml metadata
 
@@ -1333,7 +1350,7 @@ verification points.
 - R46. `DaemonConfig` is `Send + Sync`.
 - R47. `DaemonContext` is `Send + Sync`.
 - R48. `DaemonizeError` is `Send + Sync`.
-- R49. Each `DaemonizeError` variant maps to its exit code table entry.
+- R49. Each `ErrorKind` variant maps to its exit code table entry.
 - R50. CLI binary name is `daemonize`.
 - R51. CLI exits with mapped exit code for each error condition.
 - R52. With `-v`, diagnostic output to stderr before daemonization.
@@ -1644,7 +1661,7 @@ on any change to it, so the rows only copied the snapshot.
   chown (unless disabled) and the switch run after `init`, in that
   order.
 - R156. `WithExitCode::with_exit_code(code)` turns a `Result` whose
-  error is `Display` into one whose error is `DaemonizeError::Application`
+  error is `Display` into one whose error is `ErrorKind::Application`
   with that code and the error's text, so `?` works on `io::Error` and
   friends inside `init`.
 - R157. `DaemonContext::exec` runs the program even when the launcher
@@ -1685,7 +1702,11 @@ on any change to it, so the rows only copied the snapshot.
   a second instance cannot take the lock and lose its pidfile to the
   first. It cannot restore inherited descriptors it closed, or a saved
   gid that differed from the real one (the group restore sets the real
-  and effective gid, and the saved gid follows the real one).
+  and effective gid, and the saved gid follows the real one). The error
+  lists each change the rollback could not put back, with the reason,
+  in `rollback_failures()`: a failed restore, a working directory it
+  could not save, a pidfile it could not remove (one already gone is
+  not a failure). The CLI prints one line for each after the error.
 - R165. The notification pipe is a connected `AF_UNIX` stream socket
   pair, one-way: the launcher's end cannot send and the daemon's end
   cannot receive. The daemon writes to it only with `send` and

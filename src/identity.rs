@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 
 use nix::unistd::{Gid, Group, Uid, User};
 
-use crate::error::DaemonizeError;
+use crate::error::{ChangedState, DaemonizeError, ErrorKind, RestoreFailure};
 
 /// A user resolved from a name or numeric UID spec.
 pub(crate) struct ResolvedUser {
@@ -28,10 +28,10 @@ impl ResolvedUser {
     ///
     /// # Errors
     ///
-    /// Returns `DaemonizeError::UserNotFound` if the name contains a NUL byte.
-    pub(crate) fn cname(&self) -> Result<CString, DaemonizeError> {
+    /// Returns `ErrorKind::UserNotFound` if the name contains a NUL byte.
+    pub(crate) fn cname(&self) -> Result<CString, ErrorKind> {
         CString::new(self.name.as_str())
-            .map_err(|e| DaemonizeError::UserNotFound(format!("invalid username: {e}")))
+            .map_err(|e| ErrorKind::UserNotFound(format!("invalid username: {e}")))
     }
 }
 
@@ -47,9 +47,9 @@ impl ResolvedIdentity {
     ///
     /// # Errors
     ///
-    /// Returns `DaemonizeError::UserNotFound` / `GroupNotFound` if a configured
+    /// Returns `ErrorKind::UserNotFound` / `GroupNotFound` if a configured
     /// spec cannot be resolved.
-    pub(crate) fn resolve(user: Option<&str>, group: Option<&str>) -> Result<Self, DaemonizeError> {
+    pub(crate) fn resolve(user: Option<&str>, group: Option<&str>) -> Result<Self, ErrorKind> {
         let user = match user {
             Some(spec) => Some(resolve_user(spec)?),
             None => None,
@@ -94,15 +94,14 @@ impl ResolvedIdentity {
     ///
     /// # Errors
     ///
-    /// Returns `DaemonizeError::ChownError` naming the first file that fails.
+    /// Returns `ErrorKind::ChownError` naming the first file that fails.
     /// Files already chowned stay chowned; the operation is idempotent.
     pub(crate) fn chown_files<'p>(
         &self,
         files: impl IntoIterator<Item = (&'p Path, std::os::fd::BorrowedFd<'p>)>,
-    ) -> Result<(), DaemonizeError> {
+    ) -> Result<(), ErrorKind> {
         let (owner, group) = self.chown_ids();
-        let failed =
-            |path: &Path, e| DaemonizeError::ChownError(format!("{}: {e}", path.display()));
+        let failed = |path: &Path, e| ErrorKind::ChownError(format!("{}: {e}", path.display()));
         for (path, fd) in files {
             // Only a regular file is the daemon's own. A device, FIFO, or
             // socket (`-o /dev/null`, a tty) belongs to the system; the
@@ -129,12 +128,12 @@ impl ResolvedIdentity {
     ///
     /// # Errors
     ///
-    /// Returns `DaemonizeError::PermissionDenied` if `initgroups` fails, and
+    /// Returns `ErrorKind::PermissionDenied` if `initgroups` fails, and
     /// `UserNotFound` for a name with a NUL byte.
     pub(crate) fn join_groups(
         &self,
         rollback: crate::steps::Rollback,
-    ) -> Result<crate::steps::Undo, DaemonizeError> {
+    ) -> Result<crate::steps::Undo, ErrorKind> {
         use crate::steps::{Saved, Undo};
         #[cfg(test)]
         crate::test_support::assert_isolated("joining the user's groups");
@@ -142,10 +141,10 @@ impl ResolvedIdentity {
             return Ok(Undo::nothing());
         };
         let undo = Undo::saving(rollback, || {
-            Saved::Groups(Groups(crate::sys::raw_getgroups().ok()))
+            Saved::Groups(Groups(crate::sys::raw_getgroups()))
         });
         crate::sys::raw_initgroups(&info.cname()?, info.gid.as_raw())
-            .map_err(|e| DaemonizeError::PermissionDenied(format!("initgroups: {e}")))?;
+            .map_err(|e| ErrorKind::PermissionDenied(format!("initgroups: {e}")))?;
         Ok(undo)
     }
 
@@ -164,7 +163,7 @@ impl ResolvedIdentity {
     ///
     /// # Errors
     ///
-    /// Returns `DaemonizeError::PermissionDenied` if `setgid` or `setuid`
+    /// Returns `ErrorKind::PermissionDenied` if `setgid` or `setuid`
     /// fails.
     #[allow(unsafe_code)]
     pub(crate) unsafe fn switch_to(&self) -> Result<(), DaemonizeError> {
@@ -173,7 +172,7 @@ impl ResolvedIdentity {
         let before = (nix::unistd::getgid(), nix::unistd::getegid());
         if let Some(gid) = self.effective_gid() {
             nix::unistd::setgid(gid)
-                .map_err(|e| DaemonizeError::PermissionDenied(format!("setgid: {e}")))?;
+                .map_err(|e| ErrorKind::PermissionDenied(format!("setgid: {e}")))?;
         }
         if let Some(info) = self.user() {
             #[cfg(test)]
@@ -188,9 +187,14 @@ impl ResolvedIdentity {
                 // Still privileged, since setuid failed: put the group back
                 // rather than leave a half-switched identity (R164). The saved
                 // gid follows the real one; R164 lists that.
-                let _ = nix::unistd::setgid(before.0);
-                let _ = nix::unistd::setegid(before.1);
-                return Err(DaemonizeError::PermissionDenied(format!("setuid: {e}")));
+                let gid = nix::unistd::setgid(before.0);
+                let egid = nix::unistd::setegid(before.1);
+                let failure = gid
+                    .and(egid)
+                    .err()
+                    .map(|e| RestoreFailure::new(ChangedState::PrimaryGroup, e));
+                let failed = ErrorKind::PermissionDenied(format!("setuid: {e}"));
+                return Err(DaemonizeError::from(failed).with_rollback_failures(failure));
             }
             for (key, value) in [
                 ("USER", info.name.as_ref()),
@@ -211,16 +215,16 @@ impl ResolvedIdentity {
 }
 
 /// Resolve a user spec (name or numeric UID string).
-fn resolve_user(spec: &str) -> Result<ResolvedUser, DaemonizeError> {
+fn resolve_user(spec: &str) -> Result<ResolvedUser, ErrorKind> {
     let user = if let Ok(uid_num) = spec.parse::<u32>() {
         let uid = Uid::from_raw(uid_num);
         User::from_uid(uid)
-            .map_err(|e| DaemonizeError::UserNotFound(format!("getpwuid({uid_num}): {e}")))?
-            .ok_or_else(|| DaemonizeError::UserNotFound(format!("uid {uid_num}")))?
+            .map_err(|e| ErrorKind::UserNotFound(format!("getpwuid({uid_num}): {e}")))?
+            .ok_or_else(|| ErrorKind::UserNotFound(format!("uid {uid_num}")))?
     } else {
         User::from_name(spec)
-            .map_err(|e| DaemonizeError::UserNotFound(format!("getpwnam({spec}): {e}")))?
-            .ok_or_else(|| DaemonizeError::UserNotFound(spec.to_string()))?
+            .map_err(|e| ErrorKind::UserNotFound(format!("getpwnam({spec}): {e}")))?
+            .ok_or_else(|| ErrorKind::UserNotFound(spec.to_string()))?
     };
     Ok(ResolvedUser {
         name: user.name,
@@ -231,26 +235,27 @@ fn resolve_user(spec: &str) -> Result<ResolvedUser, DaemonizeError> {
 }
 
 /// Resolve a group spec (name or numeric GID string) to a GID.
-fn resolve_group_gid(spec: &str) -> Result<Gid, DaemonizeError> {
+fn resolve_group_gid(spec: &str) -> Result<Gid, ErrorKind> {
     if let Ok(gid_num) = spec.parse::<u32>() {
         Ok(Gid::from_raw(gid_num))
     } else {
         let group = Group::from_name(spec)
-            .map_err(|e| DaemonizeError::GroupNotFound(format!("getgrnam({spec}): {e}")))?
-            .ok_or_else(|| DaemonizeError::GroupNotFound(spec.to_string()))?;
+            .map_err(|e| ErrorKind::GroupNotFound(format!("getgrnam({spec}): {e}")))?
+            .ok_or_else(|| ErrorKind::GroupNotFound(spec.to_string()))?;
         Ok(group.gid)
     }
 }
 
 /// The supplementary groups step 14 replaced. Best-effort, as the working
-/// directory is: a `getgroups` failure must not fail the start (R164).
-pub(crate) struct Groups(Option<Vec<libc::gid_t>>);
+/// directory is: a `getgroups` failure must not fail the start (R164). The
+/// restore then reports why it could not put them back.
+pub(crate) struct Groups(Result<Vec<libc::gid_t>, nix::errno::Errno>);
 
 impl Groups {
-    pub(crate) fn restore(self) {
-        if let Some(groups) = self.0 {
-            let _ = crate::sys::raw_setgroups(&groups);
-        }
+    pub(crate) fn restore(self) -> Result<(), RestoreFailure> {
+        self.0
+            .and_then(|groups| crate::sys::raw_setgroups(&groups))
+            .map_err(|e| RestoreFailure::new(ChangedState::SupplementaryGroups, e))
     }
 }
 
@@ -293,7 +298,7 @@ mod tests {
                 UID,
                 "resolved the wrong uid for an id the database knows"
             ),
-            (false, Err(DaemonizeError::UserNotFound(_))) => {}
+            (false, Err(ErrorKind::UserNotFound(_))) => {}
             (false, Ok(user)) => panic!(
                 "the database has no entry for {UID}, but it resolved to {:?}",
                 user.name
@@ -351,7 +356,7 @@ mod tests {
     #[ignore = "getgrnam for a missing group can block on a networked NSS source"]
     fn resolve_group_gid_nonexistent_name() {
         let result = resolve_group_gid("nonexistent_daemonize_test_group_xyz");
-        assert!(matches!(result, Err(DaemonizeError::GroupNotFound(_))));
+        assert!(matches!(result, Err(ErrorKind::GroupNotFound(_))));
     }
 
     #[test]

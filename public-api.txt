@@ -1,42 +1,71 @@
 pub mod blivet
-#[non_exhaustive] pub enum blivet::DaemonizeError
-pub blivet::DaemonizeError::Application
-pub blivet::DaemonizeError::Application::code: u8
-pub blivet::DaemonizeError::Application::message: alloc::string::String
-pub blivet::DaemonizeError::ChdirFailed(alloc::string::String)
-pub blivet::DaemonizeError::ChownError(alloc::string::String)
-pub blivet::DaemonizeError::ExecFailed(alloc::string::String)
-pub blivet::DaemonizeError::ForkFailed(alloc::string::String)
-pub blivet::DaemonizeError::GroupNotFound(alloc::string::String)
-pub blivet::DaemonizeError::InitLeftThreads(usize)
-pub blivet::DaemonizeError::LockConflict
-pub blivet::DaemonizeError::LockConflict::path: std::path::PathBuf
-pub blivet::DaemonizeError::LockfileError(alloc::string::String)
-pub blivet::DaemonizeError::NotifyFailed(core::io::error::Error)
-pub blivet::DaemonizeError::OutputFileError(alloc::string::String)
-pub blivet::DaemonizeError::PermissionDenied(alloc::string::String)
-pub blivet::DaemonizeError::PidfileError(alloc::string::String)
-pub blivet::DaemonizeError::ProgramNotFound(alloc::string::String)
-pub blivet::DaemonizeError::SetsidFailed(alloc::string::String)
-pub blivet::DaemonizeError::SystemError(alloc::string::String)
-pub blivet::DaemonizeError::UserNotFound(alloc::string::String)
-pub blivet::DaemonizeError::ValidationError(alloc::string::String)
-impl blivet::DaemonizeError
-pub fn blivet::DaemonizeError::application(code: u8, message: impl core::convert::Into<alloc::string::String>) -> Self
-pub fn blivet::DaemonizeError::exit_code(&self) -> u8
-impl core::error::Error for blivet::DaemonizeError
-pub fn blivet::DaemonizeError::source(&self) -> core::option::Option<&(dyn core::error::Error + 'static)>
-impl core::fmt::Debug for blivet::DaemonizeError
-pub fn blivet::DaemonizeError::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::fmt::Display for blivet::DaemonizeError
-pub fn blivet::DaemonizeError::fmt(&self, __formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::Freeze for blivet::DaemonizeError
-impl core::marker::Send for blivet::DaemonizeError
-impl core::marker::Sync for blivet::DaemonizeError
-impl core::marker::Unpin for blivet::DaemonizeError
-impl core::marker::UnsafeUnpin for blivet::DaemonizeError
-impl !core::panic::unwind_safe::RefUnwindSafe for blivet::DaemonizeError
-impl !core::panic::unwind_safe::UnwindSafe for blivet::DaemonizeError
+#[non_exhaustive] pub enum blivet::ChangedState
+pub blivet::ChangedState::Pidfile
+pub blivet::ChangedState::PrimaryGroup
+pub blivet::ChangedState::SignalDispositions
+pub blivet::ChangedState::SignalMask
+pub blivet::ChangedState::Stderr
+pub blivet::ChangedState::Stdin
+pub blivet::ChangedState::Stdout
+pub blivet::ChangedState::SupplementaryGroups
+pub blivet::ChangedState::WorkingDirectory
+impl core::clone::Clone for blivet::ChangedState
+pub fn blivet::ChangedState::clone(&self) -> blivet::ChangedState
+impl core::cmp::Eq for blivet::ChangedState
+impl core::cmp::PartialEq for blivet::ChangedState
+pub fn blivet::ChangedState::eq(&self, other: &blivet::ChangedState) -> bool
+impl core::fmt::Debug for blivet::ChangedState
+pub fn blivet::ChangedState::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for blivet::ChangedState
+pub fn blivet::ChangedState::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for blivet::ChangedState
+pub fn blivet::ChangedState::hash<__H: core::hash::Hasher>(&self, state: &mut __H)
+impl core::marker::Copy for blivet::ChangedState
+impl core::marker::StructuralPartialEq for blivet::ChangedState
+impl core::marker::Freeze for blivet::ChangedState
+impl core::marker::Send for blivet::ChangedState
+impl core::marker::Sync for blivet::ChangedState
+impl core::marker::Unpin for blivet::ChangedState
+impl core::marker::UnsafeUnpin for blivet::ChangedState
+impl core::panic::unwind_safe::RefUnwindSafe for blivet::ChangedState
+impl core::panic::unwind_safe::UnwindSafe for blivet::ChangedState
+#[non_exhaustive] pub enum blivet::ErrorKind
+pub blivet::ErrorKind::Application
+pub blivet::ErrorKind::Application::code: u8
+pub blivet::ErrorKind::Application::message: alloc::string::String
+pub blivet::ErrorKind::ChdirFailed(alloc::string::String)
+pub blivet::ErrorKind::ChownError(alloc::string::String)
+pub blivet::ErrorKind::ExecFailed(alloc::string::String)
+pub blivet::ErrorKind::ForkFailed(alloc::string::String)
+pub blivet::ErrorKind::GroupNotFound(alloc::string::String)
+pub blivet::ErrorKind::InitLeftThreads(usize)
+pub blivet::ErrorKind::LockConflict
+pub blivet::ErrorKind::LockConflict::path: std::path::PathBuf
+pub blivet::ErrorKind::LockfileError(alloc::string::String)
+pub blivet::ErrorKind::NotifyFailed(core::io::error::Error)
+pub blivet::ErrorKind::OutputFileError(alloc::string::String)
+pub blivet::ErrorKind::PermissionDenied(alloc::string::String)
+pub blivet::ErrorKind::PidfileError(alloc::string::String)
+pub blivet::ErrorKind::ProgramNotFound(alloc::string::String)
+pub blivet::ErrorKind::SetsidFailed(alloc::string::String)
+pub blivet::ErrorKind::SystemError(alloc::string::String)
+pub blivet::ErrorKind::UserNotFound(alloc::string::String)
+pub blivet::ErrorKind::ValidationError(alloc::string::String)
+impl core::convert::From<blivet::ErrorKind> for blivet::DaemonizeError
+pub fn blivet::DaemonizeError::from(kind: blivet::ErrorKind) -> Self
+impl core::error::Error for blivet::ErrorKind
+pub fn blivet::ErrorKind::source(&self) -> core::option::Option<&(dyn core::error::Error + 'static)>
+impl core::fmt::Debug for blivet::ErrorKind
+pub fn blivet::ErrorKind::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for blivet::ErrorKind
+pub fn blivet::ErrorKind::fmt(&self, __formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for blivet::ErrorKind
+impl core::marker::Send for blivet::ErrorKind
+impl core::marker::Sync for blivet::ErrorKind
+impl core::marker::Unpin for blivet::ErrorKind
+impl core::marker::UnsafeUnpin for blivet::ErrorKind
+impl !core::panic::unwind_safe::RefUnwindSafe for blivet::ErrorKind
+impl !core::panic::unwind_safe::UnwindSafe for blivet::ErrorKind
 pub struct blivet::DaemonConfig
 impl blivet::DaemonConfig
 pub fn blivet::DaemonConfig::append(&mut self, append: bool) -> &mut Self
@@ -98,6 +127,44 @@ impl core::marker::Unpin for blivet::DaemonContext
 impl core::marker::UnsafeUnpin for blivet::DaemonContext
 impl core::panic::unwind_safe::RefUnwindSafe for blivet::DaemonContext
 impl core::panic::unwind_safe::UnwindSafe for blivet::DaemonContext
+pub struct blivet::DaemonizeError
+impl blivet::DaemonizeError
+pub fn blivet::DaemonizeError::application(code: u8, message: impl core::convert::Into<alloc::string::String>) -> Self
+pub fn blivet::DaemonizeError::exit_code(&self) -> u8
+pub fn blivet::DaemonizeError::kind(&self) -> &blivet::ErrorKind
+pub fn blivet::DaemonizeError::rollback_failures(&self) -> &[blivet::RestoreFailure]
+impl core::convert::From<blivet::ErrorKind> for blivet::DaemonizeError
+pub fn blivet::DaemonizeError::from(kind: blivet::ErrorKind) -> Self
+impl core::error::Error for blivet::DaemonizeError
+pub fn blivet::DaemonizeError::source(&self) -> core::option::Option<&(dyn core::error::Error + 'static)>
+impl core::fmt::Debug for blivet::DaemonizeError
+pub fn blivet::DaemonizeError::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for blivet::DaemonizeError
+pub fn blivet::DaemonizeError::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for blivet::DaemonizeError
+impl core::marker::Send for blivet::DaemonizeError
+impl core::marker::Sync for blivet::DaemonizeError
+impl core::marker::Unpin for blivet::DaemonizeError
+impl core::marker::UnsafeUnpin for blivet::DaemonizeError
+impl !core::panic::unwind_safe::RefUnwindSafe for blivet::DaemonizeError
+impl !core::panic::unwind_safe::UnwindSafe for blivet::DaemonizeError
+pub struct blivet::RestoreFailure
+impl blivet::RestoreFailure
+pub fn blivet::RestoreFailure::error(&self) -> &core::io::error::Error
+pub fn blivet::RestoreFailure::state(&self) -> blivet::ChangedState
+impl core::error::Error for blivet::RestoreFailure
+pub fn blivet::RestoreFailure::source(&self) -> core::option::Option<&(dyn core::error::Error + 'static)>
+impl core::fmt::Debug for blivet::RestoreFailure
+pub fn blivet::RestoreFailure::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for blivet::RestoreFailure
+pub fn blivet::RestoreFailure::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for blivet::RestoreFailure
+impl core::marker::Send for blivet::RestoreFailure
+impl core::marker::Sync for blivet::RestoreFailure
+impl core::marker::Unpin for blivet::RestoreFailure
+impl core::marker::UnsafeUnpin for blivet::RestoreFailure
+impl !core::panic::unwind_safe::RefUnwindSafe for blivet::RestoreFailure
+impl !core::panic::unwind_safe::UnwindSafe for blivet::RestoreFailure
 pub trait blivet::WithExitCode<T>
 pub fn blivet::WithExitCode::with_exit_code(self, code: u8) -> core::result::Result<T, blivet::DaemonizeError>
 impl<T, E: core::fmt::Display> blivet::WithExitCode<T> for core::result::Result<T, E>

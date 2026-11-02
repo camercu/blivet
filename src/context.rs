@@ -9,7 +9,7 @@ use std::os::unix::ffi::OsStrExt;
 use nix::fcntl::Flock;
 
 use crate::config::DaemonConfig;
-use crate::error::DaemonizeError;
+use crate::error::{DaemonizeError, ErrorKind};
 use crate::notify::NotifyChannel;
 
 /// Context returned by a successful daemonization.
@@ -239,7 +239,7 @@ impl DaemonContext {
     ///
     /// # Errors
     ///
-    /// Returns [`DaemonizeError::ValidationError`] if the pidfile path contains
+    /// Returns [`ErrorKind::ValidationError`] if the pidfile path contains
     /// a NUL byte, if one of `signals` is not on the list above (which also
     /// refuses signals that cannot be caught, like `SIGKILL`, and invalid
     /// numbers), or if one already has a handler other than this method's or
@@ -252,11 +252,11 @@ impl DaemonContext {
         if signals.is_empty() {
             return Ok(());
         }
-        let c_path = CString::new(pidfile.as_os_str().as_bytes()).map_err(|_| {
-            DaemonizeError::ValidationError("pidfile path contains NUL byte".into())
-        })?;
+        let c_path = CString::new(pidfile.as_os_str().as_bytes())
+            .map_err(|_| ErrorKind::ValidationError("pidfile path contains NUL byte".into()))?;
         crate::signals::install_pidfile_cleanup_signals(&c_path, signals)
-            .map_err(|e| DaemonizeError::ValidationError(format!("cleanup_on_signals: {e}")))
+            .map_err(|e| ErrorKind::ValidationError(format!("cleanup_on_signals: {e}")))?;
+        Ok(())
     }
 
     /// Signals the parent that the daemon is ready.
@@ -268,7 +268,7 @@ impl DaemonContext {
     ///
     /// # Errors
     ///
-    /// Returns [`DaemonizeError::NotifyFailed`] (exit code 71, `EX_OSERR`) if
+    /// Returns [`ErrorKind::NotifyFailed`] (exit code 71, `EX_OSERR`) if
     /// writing to the channel fails — e.g. the parent was killed before the
     /// daemon signalled. The write cannot raise SIGPIPE, whatever disposition
     /// the process has, so this is an error and not a death by signal.
@@ -284,7 +284,7 @@ impl DaemonContext {
                 // Told, or the failure goes to a caller that may keep
                 // running: either way this daemon reports nothing more.
                 self.launcher = Launcher::Released;
-                sent.map_err(DaemonizeError::NotifyFailed)
+                Ok(sent.map_err(ErrorKind::NotifyFailed)?)
             }
             Launcher::Released | Launcher::Foreground => Ok(()),
         }
@@ -308,7 +308,7 @@ impl DaemonContext {
                 Ok(()) => self.launcher = Launcher::Released,
                 // Still waiting, with the channel spent: the report sees a start
                 // that never succeeded (R154) and prints its error (R161).
-                Err(e) => self.report_error(&DaemonizeError::NotifyFailed(e)),
+                Err(e) => self.report(&ErrorKind::NotifyFailed(e)),
             },
             Launcher::Released | Launcher::Foreground => {}
         }
@@ -327,20 +327,20 @@ impl DaemonContext {
     ///
     /// Never returns. If the exec fails, this reports the error like
     /// [`report_error`](Self::report_error): `ENOENT` and `EACCES` as
-    /// [`ProgramNotFound`](DaemonizeError::ProgramNotFound) (exit 66), any
-    /// other errno as [`ExecFailed`](DaemonizeError::ExecFailed) (exit 71).
+    /// [`ProgramNotFound`](ErrorKind::ProgramNotFound) (exit 66), any
+    /// other errno as [`ExecFailed`](ErrorKind::ExecFailed) (exit 71).
     /// An empty `args` is refused before anything changes, as `ExecFailed`:
     /// a program run with no `argv[0]` can misread its arguments.
     pub fn exec<S: AsRef<CStr>>(mut self, program: &CStr, args: &[S]) -> ! {
         let err = self.try_exec(program, args);
-        self.report_error(&err)
+        self.report(&err)
     }
 
     /// Everything [`exec`](Self::exec) does short of reporting: returns only
     /// if the exec did not happen, with the error to report.
-    fn try_exec<S: AsRef<CStr>>(&mut self, program: &CStr, args: &[S]) -> DaemonizeError {
+    fn try_exec<S: AsRef<CStr>>(&mut self, program: &CStr, args: &[S]) -> ErrorKind {
         if args.is_empty() {
-            return DaemonizeError::ExecFailed(format!(
+            return ErrorKind::ExecFailed(format!(
                 "exec {}: args is empty; it must hold args[0] (R167)",
                 program.to_string_lossy()
             ));
@@ -348,9 +348,7 @@ impl DaemonContext {
         if let Some(lockfile) = self.lockfile_fd() {
             use nix::fcntl::{FcntlArg, FdFlag, fcntl};
             if let Err(e) = fcntl(lockfile, FcntlArg::F_SETFD(FdFlag::empty())) {
-                return DaemonizeError::ExecFailed(format!(
-                    "clear close-on-exec on the lockfile: {e}"
-                ));
+                return ErrorKind::ExecFailed(format!("clear close-on-exec on the lockfile: {e}"));
             }
         }
         // A broken pipe here means only that the launcher is gone: run the
@@ -358,7 +356,7 @@ impl DaemonContext {
         match &mut self.launcher {
             Launcher::Waiting(pipe) => match pipe.signal_exec_pending() {
                 Err(e) if e.kind() != std::io::ErrorKind::BrokenPipe => {
-                    return DaemonizeError::NotifyFailed(e);
+                    return ErrorKind::NotifyFailed(e);
                 }
                 _ => {}
             },
@@ -390,6 +388,11 @@ impl DaemonContext {
     /// pidfile behind, so while the launcher waits the pidfile goes whatever
     /// [`cleanup_on_drop`](crate::DaemonConfig::cleanup_on_drop) says.
     pub fn report_error(&mut self, err: &DaemonizeError) -> ! {
+        self.report(err.kind())
+    }
+
+    /// [`report_error`](Self::report_error), for the bare [`ErrorKind`].
+    fn report(&mut self, err: &ErrorKind) -> ! {
         let code = self.cleanup_and_signal_error(err);
         crate::sys::raw_exit(code as i32)
     }
@@ -406,7 +409,7 @@ impl DaemonContext {
     /// exit), so any side effect that must be visible by then has to happen
     /// first. Signaling before cleanup let an observer see the parent exit
     /// while the pidfile was still being removed — a race.
-    fn cleanup_and_signal_error(&mut self, err: &DaemonizeError) -> u8 {
+    fn cleanup_and_signal_error(&mut self, err: &ErrorKind) -> u8 {
         match self.launcher {
             // `signal_error` writes it, or prints it when the launcher is
             // gone or the channel already spent.
@@ -471,7 +474,7 @@ impl DaemonContext {
     /// # }
     /// ```
     pub fn report_error_msg(&mut self, code: u8, message: impl Into<String>) -> ! {
-        self.report_error(&DaemonizeError::application(code, message))
+        self.report(&ErrorKind::application(code, message))
     }
 }
 
@@ -483,15 +486,15 @@ impl Drop for DaemonContext {
 
 /// Maps an `execvp` errno to the reported error. `ENOENT` (program or script
 /// interpreter missing) and `EACCES` (program not executable) both become
-/// [`DaemonizeError::ProgramNotFound`], matching the CLI's pre-fork path check,
+/// [`ErrorKind::ProgramNotFound`], matching the CLI's pre-fork path check,
 /// so a missing or unusable program is exit 66 either way. Every other errno is
-/// a genuine OS-level exec failure ([`DaemonizeError::ExecFailed`], exit 71)
+/// a genuine OS-level exec failure ([`ErrorKind::ExecFailed`], exit 71)
 /// (R130).
-fn exec_error(errno: nix::errno::Errno, message: String) -> DaemonizeError {
+fn exec_error(errno: nix::errno::Errno, message: String) -> ErrorKind {
     use nix::errno::Errno;
     match errno {
-        Errno::ENOENT | Errno::EACCES => DaemonizeError::ProgramNotFound(message),
-        _ => DaemonizeError::ExecFailed(message),
+        Errno::ENOENT | Errno::EACCES => ErrorKind::ProgramNotFound(message),
+        _ => ErrorKind::ExecFailed(message),
     }
 }
 
@@ -504,7 +507,7 @@ mod tests {
     fn exec_enoent_maps_to_program_not_found() {
         assert!(matches!(
             exec_error(nix::errno::Errno::ENOENT, "m".into()),
-            DaemonizeError::ProgramNotFound(_)
+            ErrorKind::ProgramNotFound(_)
         ));
     }
 
@@ -516,7 +519,7 @@ mod tests {
         // check.
         assert!(matches!(
             exec_error(nix::errno::Errno::EACCES, "m".into()),
-            DaemonizeError::ProgramNotFound(_)
+            ErrorKind::ProgramNotFound(_)
         ));
     }
 
@@ -528,7 +531,7 @@ mod tests {
         // reachable, hence the unit test.
         assert!(matches!(
             exec_error(nix::errno::Errno::E2BIG, "m".into()),
-            DaemonizeError::ExecFailed(_)
+            ErrorKind::ExecFailed(_)
         ));
     }
 
@@ -601,7 +604,7 @@ mod tests {
         let err = ctx.try_exec(c"/nonexistent_blivet_program", &[c"x"]);
 
         let now = crate::signals::disposition(libc::SIGPIPE).unwrap();
-        assert!(matches!(err, DaemonizeError::ProgramNotFound(_)), "{err:?}");
+        assert!(matches!(err, ErrorKind::ProgramNotFound(_)), "{err:?}");
         assert_eq!(
             now.sa_sigaction,
             libc::SIG_IGN,
@@ -623,8 +626,8 @@ mod tests {
         let wr = writer_with_no_reader();
         let mut ctx = ctx(&DaemonConfig::new(), None, Some(NotifyChannel::new(wr)));
         assert!(matches!(
-            ctx.notify_parent(),
-            Err(DaemonizeError::NotifyFailed(_))
+            ctx.notify_parent().as_ref().map_err(DaemonizeError::kind),
+            Err(ErrorKind::NotifyFailed(_))
         ));
     }
 
@@ -904,7 +907,7 @@ mod tests {
         // sigaction: a refusal, not a failed install.
         let result = ctx(&cfg, None, None).cleanup_on_signals(&[libc::SIGKILL]);
         assert!(
-            matches!(&result, Err(DaemonizeError::ValidationError(m))
+            matches!(result.as_ref().map_err(DaemonizeError::kind), Err(ErrorKind::ValidationError(m))
                 if m.starts_with("cleanup_on_signals: signal 9 ")),
             "{result:?}"
         );
@@ -942,7 +945,7 @@ mod tests {
         // SAFETY: as above.
         let usr2 = unsafe { sigaction(Signal::SIGUSR2, &handler) }.unwrap();
         assert!(
-            matches!(&result, Err(DaemonizeError::ValidationError(m)) if m.contains(&libc::SIGUSR2.to_string())),
+            matches!(result.as_ref().map_err(DaemonizeError::kind), Err(ErrorKind::ValidationError(m)) if m.contains(&libc::SIGUSR2.to_string())),
             "{result:?}"
         );
         assert!(
@@ -976,7 +979,7 @@ mod tests {
         let result = ctx(&cfg, None, None).cleanup_on_signals(&[libc::SIGHUP]);
 
         assert!(
-            matches!(&result, Err(DaemonizeError::ValidationError(m)) if m.contains(&libc::SIGHUP.to_string())),
+            matches!(result.as_ref().map_err(DaemonizeError::kind), Err(ErrorKind::ValidationError(m)) if m.contains(&libc::SIGHUP.to_string())),
             "{result:?}"
         );
     }
@@ -997,7 +1000,7 @@ mod tests {
         let result = ctx(&cfg, None, None).cleanup_on_signals(&[libc::SIGCHLD]);
 
         assert!(
-            matches!(&result, Err(DaemonizeError::ValidationError(m)) if m.contains(&libc::SIGCHLD.to_string())),
+            matches!(result.as_ref().map_err(DaemonizeError::kind), Err(ErrorKind::ValidationError(m)) if m.contains(&libc::SIGCHLD.to_string())),
             "{result:?}"
         );
     }
@@ -1172,7 +1175,7 @@ mod tests {
         cfg.pidfile(&pidfile);
         let mut ctx = ctx(&cfg, None, Some(NotifyChannel::new(wr)));
 
-        let code = ctx.cleanup_and_signal_error(&DaemonizeError::ExecFailed("boom".into()));
+        let code = ctx.cleanup_and_signal_error(&ErrorKind::ExecFailed("boom".into()));
 
         assert_eq!(code, 71, "ExecFailed maps to exit 71");
         assert!(
@@ -1206,7 +1209,7 @@ mod tests {
             Some(NotifyChannel::new(wr)),
         );
 
-        ctx.cleanup_and_signal_error(&DaemonizeError::ExecFailed("boom".into()));
+        ctx.cleanup_and_signal_error(&ErrorKind::ExecFailed("boom".into()));
 
         assert!(!pidfile.exists(), "a failed start left its pidfile");
     }
@@ -1219,7 +1222,7 @@ mod tests {
         std::fs::write(&pidfile, "123").unwrap();
         let mut ctx = ctx(&pidfile_config(&pidfile), None, None);
 
-        ctx.cleanup_and_signal_error(&DaemonizeError::ExecFailed("boom".into()));
+        ctx.cleanup_and_signal_error(&ErrorKind::ExecFailed("boom".into()));
 
         assert!(pidfile.exists(), "cleanup_on_drop=false keeps the pidfile");
     }
@@ -1349,13 +1352,13 @@ mod tests {
 
     #[test]
     fn error_display_group_not_found() {
-        let err = crate::DaemonizeError::GroupNotFound("nobody".into());
+        let err = crate::ErrorKind::GroupNotFound("nobody".into());
         assert_eq!(err.to_string(), "group not found: nobody");
     }
 
     #[test]
     fn error_display_chown_error() {
-        let err = crate::DaemonizeError::ChownError("/a/foo: permission denied".into());
+        let err = crate::ErrorKind::ChownError("/a/foo: permission denied".into());
         assert_eq!(err.to_string(), "chown error: /a/foo: permission denied");
     }
 

@@ -8,7 +8,7 @@ use std::os::fd::OwnedFd;
 
 use nix::unistd::ForkResult;
 
-use crate::error::DaemonizeError;
+use crate::error::ErrorKind;
 use crate::sys;
 
 /// Abstraction over fork, setsid and channel creation for testability.
@@ -19,13 +19,13 @@ use crate::sys;
 pub(crate) trait Forker {
     /// Makes the channel the daemon reports its start through: `(read, write)`.
     /// Runs in the caller's process, so a failure is an error for the caller.
-    fn create_notification_pipe(&mut self) -> Result<(OwnedFd, OwnedFd), DaemonizeError>;
+    fn create_notification_pipe(&mut self) -> Result<(OwnedFd, OwnedFd), ErrorKind>;
     /// # Safety
     ///
     /// Calling `fork()` in a multithreaded process is undefined behavior.
     /// The caller must ensure no other threads exist.
-    unsafe fn fork(&mut self) -> Result<ForkResult, DaemonizeError>;
-    fn setsid(&mut self) -> Result<(), DaemonizeError>;
+    unsafe fn fork(&mut self) -> Result<ForkResult, ErrorKind>;
+    fn setsid(&mut self) -> Result<(), ErrorKind>;
     fn exit(&self, code: i32) -> !;
 }
 
@@ -34,9 +34,9 @@ pub(crate) struct RealForker;
 
 #[allow(unsafe_code)]
 impl Forker for RealForker {
-    fn create_notification_pipe(&mut self) -> Result<(OwnedFd, OwnedFd), DaemonizeError> {
-        fn failed(e: impl std::fmt::Display) -> DaemonizeError {
-            DaemonizeError::SystemError(format!("notification pipe: {e}"))
+    fn create_notification_pipe(&mut self) -> Result<(OwnedFd, OwnedFd), ErrorKind> {
+        fn failed(e: impl std::fmt::Display) -> ErrorKind {
+            ErrorKind::SystemError(format!("notification pipe: {e}"))
         }
         let (rd, wr) = crate::notify::channel().map_err(failed)?;
         // Keep each end above descriptor 2 (R152), so step 6's redirect to
@@ -45,19 +45,19 @@ impl Forker for RealForker {
         Ok((prepare(rd)?, prepare(wr)?))
     }
 
-    unsafe fn fork(&mut self) -> Result<ForkResult, DaemonizeError> {
+    unsafe fn fork(&mut self) -> Result<ForkResult, ErrorKind> {
         // SAFETY: the caller upholds this method's contract, which is
         // `fork`'s: no other threads exist.
         match unsafe { nix::unistd::fork() } {
             Ok(result) => Ok(result),
-            Err(e) => Err(DaemonizeError::ForkFailed(e.to_string())),
+            Err(e) => Err(ErrorKind::ForkFailed(e.to_string())),
         }
     }
 
-    fn setsid(&mut self) -> Result<(), DaemonizeError> {
+    fn setsid(&mut self) -> Result<(), ErrorKind> {
         nix::unistd::setsid()
             .map(|_| ())
-            .map_err(|e| DaemonizeError::SetsidFailed(e.to_string()))
+            .map_err(|e| ErrorKind::SetsidFailed(e.to_string()))
     }
 
     fn exit(&self, code: i32) -> ! {
@@ -73,8 +73,8 @@ pub(crate) mod null_forker {
 
     /// Test double for `Forker`. `exit()` panics so tests can use `catch_unwind`.
     pub(crate) struct NullForker {
-        fork_results: VecDeque<Result<ForkResult, DaemonizeError>>,
-        setsid_result: Option<Result<(), DaemonizeError>>,
+        fork_results: VecDeque<Result<ForkResult, ErrorKind>>,
+        setsid_result: Option<Result<(), ErrorKind>>,
         pipe: Pipe,
         pipe_reader: Option<OwnedFd>,
     }
@@ -91,8 +91,8 @@ pub(crate) mod null_forker {
 
     impl NullForker {
         pub(crate) fn new(
-            fork_results: Vec<Result<ForkResult, DaemonizeError>>,
-            setsid_result: Result<(), DaemonizeError>,
+            fork_results: Vec<Result<ForkResult, ErrorKind>>,
+            setsid_result: Result<(), ErrorKind>,
         ) -> Self {
             Self {
                 fork_results: fork_results.into(),
@@ -113,8 +113,8 @@ pub(crate) mod null_forker {
         /// keep a copy of the channel's read end: step 13 would close that copy
         /// behind its back. Only the fork-sequence constructors use this.
         fn stopping_before_step_13(
-            fork_results: Vec<Result<ForkResult, DaemonizeError>>,
-            setsid_result: Result<(), DaemonizeError>,
+            fork_results: Vec<Result<ForkResult, ErrorKind>>,
+            setsid_result: Result<(), ErrorKind>,
         ) -> Self {
             Self {
                 pipe: Pipe::Real { keep_reader: true },
@@ -173,7 +173,7 @@ pub(crate) mod null_forker {
         /// First fork fails.
         pub(crate) fn first_fork_fails() -> Self {
             Self::stopping_before_step_13(
-                vec![Err(DaemonizeError::ForkFailed("first fork".into()))],
+                vec![Err(ErrorKind::ForkFailed("first fork".into()))],
                 Ok(()),
             )
         }
@@ -182,7 +182,7 @@ pub(crate) mod null_forker {
         pub(crate) fn setsid_fails() -> Self {
             Self::stopping_before_step_13(
                 vec![Ok(ForkResult::Child)],
-                Err(DaemonizeError::SetsidFailed("test".into())),
+                Err(ErrorKind::SetsidFailed("test".into())),
             )
         }
 
@@ -191,7 +191,7 @@ pub(crate) mod null_forker {
             Self::stopping_before_step_13(
                 vec![
                     Ok(ForkResult::Child),
-                    Err(DaemonizeError::ForkFailed("second fork".into())),
+                    Err(ErrorKind::ForkFailed("second fork".into())),
                 ],
                 Ok(()),
             )
@@ -200,9 +200,9 @@ pub(crate) mod null_forker {
 
     #[allow(unsafe_code)]
     impl Forker for NullForker {
-        fn create_notification_pipe(&mut self) -> Result<(OwnedFd, OwnedFd), DaemonizeError> {
+        fn create_notification_pipe(&mut self) -> Result<(OwnedFd, OwnedFd), ErrorKind> {
             match self.pipe {
-                Pipe::Fails => Err(DaemonizeError::SystemError(
+                Pipe::Fails => Err(ErrorKind::SystemError(
                     "notification pipe: injected failure".into(),
                 )),
                 Pipe::Real { keep_reader } => {
@@ -216,13 +216,13 @@ pub(crate) mod null_forker {
             }
         }
 
-        unsafe fn fork(&mut self) -> Result<ForkResult, DaemonizeError> {
+        unsafe fn fork(&mut self) -> Result<ForkResult, ErrorKind> {
             self.fork_results
                 .pop_front()
                 .expect("NullForker: no more fork results")
         }
 
-        fn setsid(&mut self) -> Result<(), DaemonizeError> {
+        fn setsid(&mut self) -> Result<(), ErrorKind> {
             self.setsid_result
                 .take()
                 .expect("NullForker: setsid already consumed")
@@ -266,7 +266,7 @@ mod tests {
         drop(held);
 
         assert!(
-            matches!(result, Err(DaemonizeError::SystemError(_))),
+            matches!(result, Err(ErrorKind::SystemError(_))),
             "{result:?}"
         );
     }

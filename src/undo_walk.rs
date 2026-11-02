@@ -10,7 +10,7 @@
 use crate::forker::null_forker::NullForker;
 use crate::steps::failpoints;
 use crate::test_support::{ProcessSnapshot, isolated};
-use crate::{DaemonConfig, DaemonizeError};
+use crate::{DaemonConfig, ErrorKind};
 
 extern "C" fn caller_handler(_: libc::c_int) {}
 
@@ -91,9 +91,9 @@ fn walk(config: &DaemonConfig, pidfile: &std::path::Path) {
         let Err(e) = result else {
             panic!("the start succeeded with failpoints set")
         };
-        let last = match &e {
-            DaemonizeError::SystemError(m) if m == failpoints::CHECKPOINT_FAILURE => false,
-            DaemonizeError::SystemError(m) if m == failpoints::SWITCH_FAILURE => true,
+        let last = match e.kind() {
+            ErrorKind::SystemError(m) if m == failpoints::CHECKPOINT_FAILURE => false,
+            ErrorKind::SystemError(m) if m == failpoints::SWITCH_FAILURE => true,
             other => panic!("failure {n} is not a failpoint's: {other:?}"),
         };
         let after = ProcessSnapshot::take(pidfile);
