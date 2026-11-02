@@ -170,11 +170,9 @@ impl std::fmt::Display for RestoreFailure {
     }
 }
 
-impl std::error::Error for RestoreFailure {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        Some(&self.error)
-    }
-}
+/// No [`source`](std::error::Error::source): the message already names the
+/// error, and an error chain would print it twice.
+impl std::error::Error for RestoreFailure {}
 
 /// Process state the sequence changed and a rollback puts back (R164).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -327,7 +325,7 @@ pub enum ErrorKind {
     /// [`exec`](crate::DaemonContext::exec) when writing the exec marker fails
     /// for a reason other than a launcher that is gone.
     #[error("failed to notify parent: {0}")]
-    NotifyFailed(#[source] std::io::Error),
+    NotifyFailed(std::io::Error),
 
     /// The [`daemonize_with`](crate::daemonize_with) init left threads
     /// running before an identity switch to a user, whose `setenv` is not
@@ -645,13 +643,15 @@ mod tests {
         assert_eq!(states, [ChangedState::Stdout, ChangedState::Pidfile]);
     }
 
+    // The message already names the io::Error; a source would print it
+    // twice in an error chain.
     #[test]
-    fn the_source_is_the_kinds() {
+    fn a_failed_notify_names_its_cause_once() {
         use std::error::Error;
         let err = DaemonizeError::from(ErrorKind::NotifyFailed(
             std::io::ErrorKind::BrokenPipe.into(),
         ));
-        assert_eq!(err.source().unwrap().to_string(), "broken pipe");
+        assert!(err.source().is_none());
     }
 
     #[test]
@@ -686,10 +686,10 @@ mod tests {
     }
 
     #[test]
-    fn a_restore_failures_source_is_its_error() {
+    fn a_restore_failure_names_its_cause_once() {
         use std::error::Error;
         let failure = RestoreFailure::new(ChangedState::Stdin, std::io::ErrorKind::BrokenPipe);
-        assert_eq!(failure.source().unwrap().to_string(), "broken pipe");
+        assert!(failure.source().is_none());
     }
 
     // Covers: R83
