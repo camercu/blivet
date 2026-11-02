@@ -90,6 +90,7 @@ pub(crate) unsafe fn daemonize_inner_with<T>(
 
         // Step 2: setsid
         if let Err(e) = forker.setsid() {
+            let e = DaemonizeError::from(e);
             pipe_wr.signal_error(&e);
             forker.exit(e.exit_code() as i32);
         }
@@ -108,6 +109,7 @@ pub(crate) unsafe fn daemonize_inner_with<T>(
                 // Grandchild continues
             }
             Err(e) => {
+                let e = DaemonizeError::from(e);
                 pipe_wr.signal_error(&e);
                 forker.exit(e.exit_code() as i32);
             }
@@ -138,7 +140,7 @@ pub(crate) unsafe fn daemonize_inner_with<T>(
         Err(e) if foreground => Err(e),
         Err(e) => {
             if let Some(pipe) = pipe_wr.take() {
-                pipe.signal_error(e.kind());
+                pipe.signal_error(&e);
             }
             forker.exit(e.exit_code() as i32);
         }
@@ -1597,6 +1599,54 @@ mod tests {
         );
     }
 
+    // Covers: R160, R164
+    /// A daemon's process exits on failure, so what its rollback left on disk
+    /// reaches the launcher on the pipe, after the error, a line each.
+    #[test]
+    fn a_daemon_tells_the_launcher_what_its_rollback_left() {
+        use std::os::unix::fs::PermissionsExt;
+        if !isolated() {
+            return;
+        }
+        crate::test_support::shed_root();
+        let dir = tempfile::tempdir().unwrap();
+        let pidfile = dir.path().join("app.pid");
+        let mut config = DaemonConfig::new();
+        config.close_fds(false).pidfile(&pidfile);
+        let mut forker = NullForker::both_child_with_reader();
+        let read_only = |mode| {
+            std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(mode)).unwrap();
+        };
+
+        let exited = catch_unwind(std::panic::AssertUnwindSafe(|| {
+            run_inner_with(&config, &mut forker, || -> Result<(), _> {
+                read_only(0o555);
+                Err(DaemonizeError::application(75, "database unreachable"))
+            })
+        }));
+        read_only(0o755);
+
+        assert!(exited.is_err(), "a daemon-mode failure exits");
+        let rd = forker
+            .take_pipe_reader()
+            .expect("NullForker stores a reader");
+        match notify::decode(&crate::test_support::read_pipe(rd)) {
+            notify::Outcome::Failure { code: 75, message } => {
+                let mut lines = message.lines();
+                assert_eq!(
+                    lines.next(),
+                    Some("application error: database unreachable")
+                );
+                let line = lines.next().unwrap_or_default();
+                assert!(
+                    line.starts_with(&format!("rollback left pidfile {}: ", pidfile.display())),
+                    "{message}"
+                );
+            }
+            _ => panic!("the launcher did not read a failure with code 75"),
+        }
+    }
+
     // Covers: R154
     #[test]
     fn daemon_init_error_reaches_the_launcher() {
@@ -1747,7 +1797,7 @@ mod tests {
         let buf = crate::test_support::read_pipe(rd);
         assert_eq!(
             buf,
-            notify::error_bytes(&ErrorKind::SetsidFailed("test".into()))
+            notify::error_bytes(&ErrorKind::SetsidFailed("test".into()).into())
         );
     }
 
@@ -1772,7 +1822,7 @@ mod tests {
         let buf = crate::test_support::read_pipe(rd);
         assert_eq!(
             buf,
-            notify::error_bytes(&ErrorKind::ForkFailed("second fork".into()))
+            notify::error_bytes(&ErrorKind::ForkFailed("second fork".into()).into())
         );
     }
 

@@ -308,7 +308,7 @@ impl DaemonContext {
                 Ok(()) => self.launcher = Launcher::Released,
                 // Still waiting, with the channel spent: the report sees a start
                 // that never succeeded (R154) and prints its error (R161).
-                Err(e) => self.report(&ErrorKind::NotifyFailed(e)),
+                Err(e) => self.report(&ErrorKind::NotifyFailed(e).into()),
             },
             Launcher::Released | Launcher::Foreground => {}
         }
@@ -333,7 +333,7 @@ impl DaemonContext {
     /// a program run with no `argv[0]` can misread its arguments.
     pub fn exec<S: AsRef<CStr>>(mut self, program: &CStr, args: &[S]) -> ! {
         let err = self.try_exec(program, args);
-        self.report(&err)
+        self.report(&err.into())
     }
 
     /// Everything [`exec`](Self::exec) does short of reporting: returns only
@@ -388,11 +388,11 @@ impl DaemonContext {
     /// pidfile behind, so while the launcher waits the pidfile goes whatever
     /// [`cleanup_on_drop`](crate::DaemonConfig::cleanup_on_drop) says.
     pub fn report_error(&mut self, err: &DaemonizeError) -> ! {
-        self.report(err.kind())
+        self.report(err)
     }
 
-    /// [`report_error`](Self::report_error), for the bare [`ErrorKind`].
-    fn report(&mut self, err: &ErrorKind) -> ! {
+    /// [`report_error`](Self::report_error), for any error.
+    fn report(&mut self, err: &DaemonizeError) -> ! {
         let code = self.cleanup_and_signal_error(err);
         crate::sys::raw_exit(code as i32)
     }
@@ -409,14 +409,16 @@ impl DaemonContext {
     /// exit), so any side effect that must be visible by then has to happen
     /// first. Signaling before cleanup let an observer see the parent exit
     /// while the pidfile was still being removed — a race.
-    fn cleanup_and_signal_error(&mut self, err: &ErrorKind) -> u8 {
+    fn cleanup_and_signal_error(&mut self, err: &DaemonizeError) -> u8 {
         match self.launcher {
             // `signal_error` writes it, or prints it when the launcher is
             // gone or the channel already spent.
             Launcher::Waiting(_) => {}
             // No launcher to tell: say it on stderr instead of exiting with
             // only a code (R161).
-            Launcher::Released | Launcher::Foreground => crate::notify::print_on_stderr(err),
+            Launcher::Released | Launcher::Foreground => {
+                crate::notify::print_on_stderr(err.report())
+            }
         }
         self.cleanup_then_signal(|pipe| pipe.signal_error(err));
         err.exit_code()
@@ -474,7 +476,7 @@ impl DaemonContext {
     /// # }
     /// ```
     pub fn report_error_msg(&mut self, code: u8, message: impl Into<String>) -> ! {
-        self.report(&ErrorKind::application(code, message))
+        self.report(&ErrorKind::application(code, message).into())
     }
 }
 
@@ -1175,7 +1177,7 @@ mod tests {
         cfg.pidfile(&pidfile);
         let mut ctx = ctx(&cfg, None, Some(NotifyChannel::new(wr)));
 
-        let code = ctx.cleanup_and_signal_error(&ErrorKind::ExecFailed("boom".into()));
+        let code = ctx.cleanup_and_signal_error(&ErrorKind::ExecFailed("boom".into()).into());
 
         assert_eq!(code, 71, "ExecFailed maps to exit 71");
         assert!(
@@ -1209,7 +1211,7 @@ mod tests {
             Some(NotifyChannel::new(wr)),
         );
 
-        ctx.cleanup_and_signal_error(&ErrorKind::ExecFailed("boom".into()));
+        ctx.cleanup_and_signal_error(&ErrorKind::ExecFailed("boom".into()).into());
 
         assert!(!pidfile.exists(), "a failed start left its pidfile");
     }
@@ -1222,7 +1224,7 @@ mod tests {
         std::fs::write(&pidfile, "123").unwrap();
         let mut ctx = ctx(&pidfile_config(&pidfile), None, None);
 
-        ctx.cleanup_and_signal_error(&ErrorKind::ExecFailed("boom".into()));
+        ctx.cleanup_and_signal_error(&ErrorKind::ExecFailed("boom".into()).into());
 
         assert!(pidfile.exists(), "cleanup_on_drop=false keeps the pidfile");
     }

@@ -1725,7 +1725,7 @@ fn foreground_failure_prints_what_the_rollback_left_changed() {
             output.status.code(),
             stderr
                 .lines()
-                .any(|l| l.starts_with("rollback left working directory changed: "))
+                .any(|l| l.starts_with("rollback left working directory: "))
         ),
         (Some(69), true),
         "stderr: {stderr}"

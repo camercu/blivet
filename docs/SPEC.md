@@ -284,11 +284,12 @@ to the pipe and closes it. The parent reads this and exits 1.
 ### DaemonizeError
 
 A struct holding what failed, `kind() -> &ErrorKind`, and each change a
-foreground rollback could not put back, `rollback_failures() ->
-&[RestoreFailure]`, latest first (R164). `Display` and `source()` are the
-kind's, so an `init` error keeps its message (R154). Constructors:
-`application(code, message)` and `From<ErrorKind>`. Must be `Send + Sync`
-(compile-time assertion in tests).
+rollback could not put back, `rollback_failures() -> &[RestoreFailure]`,
+latest first (R164). A daemon exits instead of returning it, so its
+message to the launcher carries them (R160). `Display` and `source()`
+are the kind's, so an `init` error keeps its message (R154).
+Constructors: `application(code, message)` and `From<ErrorKind>`. Must
+be `Send + Sync` (compile-time assertion in tests).
 
 A `RestoreFailure` holds the `ChangedState` left changed, `state()`; for
 a file, its path, `path() -> Option<&Path>`; and why, `error() ->
@@ -693,7 +694,8 @@ returns, so the reader never waits for their second byte:
   message means the exec failed (R150).
 - **Error byte (nonzero):** value is the `exit_code()` of the error.
   The next two bytes are the message's length (big-endian), then the
-  `Display` message as UTF-8 (R160). The parent reads exactly that
+  message as UTF-8: the error's `Display`, then one `rollback left`
+  line per rollback failure (R160, R164). The parent reads exactly that
   much, prints the message to stderr, and calls `_exit()` with the
   code.
 - **EOF with no marker:** the daemon ended before notifying without
@@ -1716,7 +1718,9 @@ on any change to it, so the rows only copied the snapshot.
   in `rollback_failures()`: a failed restore, a working directory it
   could not save, a file it could not remove, with its path (one
   already gone is not a failure), and a log step 15 emptied of content,
-  which no rollback can put back. The CLI prints one line for each after the error.
+  which no rollback can put back. Each prints as one `rollback left
+  <state>[ <path>]: <reason>` line after the error: the CLI prints them
+  in foreground mode, and a daemon sends them to the launcher (R160).
 - R165. The notification pipe is a connected `AF_UNIX` stream socket
   pair, one-way: the launcher's end cannot send and the daemon's end
   cannot receive. The daemon writes to it only with `send` and

@@ -227,7 +227,9 @@ A foreground start that fails puts back what it changed in your process. Each
 change it could not put back is in `rollback_failures()`: the `ChangedState`
 left changed, the path for a file, and the `io::Error` that stopped it. The
 error's message stays the kind's. The CLI prints one `rollback left <state>
-[<path>] changed: <error>` line for each, after the error.
+[<path>]: <error>` line for each, after the error. A daemon that fails exits
+instead of returning, and sends the same lines to the launcher after its
+error message.
 
 ## Recipes
 

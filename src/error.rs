@@ -1,7 +1,7 @@
 //! Error types for the daemonization sequence, with `sysexits.h` exit codes.
 
 /// An error from configuration validation or the daemonization sequence:
-/// what failed, and what a foreground rollback could not put back.
+/// what failed, and what a rollback could not put back.
 ///
 /// [`Display`](std::fmt::Display) and [`source`](std::error::Error::source)
 /// are the [`kind`](Self::kind)'s, so an error from a
@@ -41,9 +41,9 @@ impl DaemonizeError {
         &self.kind
     }
 
-    /// Each change a foreground failure could not put back, latest first
-    /// (R164). Empty in daemon mode, whose process exits on failure and so
-    /// puts nothing back.
+    /// Each change a failed start could not put back, latest first (R164).
+    /// A daemon exits instead of returning this error, and sends these to
+    /// its launcher after the message (R160).
     pub fn rollback_failures(&self) -> &[RestoreFailure] {
         &self.rollback_failures
     }
@@ -62,6 +62,13 @@ impl DaemonizeError {
     #[cfg(test)]
     pub(crate) fn into_kind(self) -> ErrorKind {
         self.kind
+    }
+
+    /// The message a launcher prints for this error: the
+    /// [`kind`](Self::kind)'s, then one `rollback left` line per
+    /// [rollback failure](Self::rollback_failures) (R160, R164).
+    pub(crate) fn report(&self) -> impl std::fmt::Display + '_ {
+        Report(self)
     }
 
     /// This error, with `failures` after the ones it holds.
@@ -89,13 +96,26 @@ impl std::fmt::Display for DaemonizeError {
     }
 }
 
+/// See [`DaemonizeError::report`].
+struct Report<'a>(&'a DaemonizeError);
+
+impl std::fmt::Display for Report<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.kind.fmt(f)?;
+        for failure in &self.0.rollback_failures {
+            write!(f, "\nrollback left {failure}")?;
+        }
+        Ok(())
+    }
+}
+
 impl std::error::Error for DaemonizeError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         self.kind.source()
     }
 }
 
-/// A change a foreground rollback could not put back (R164).
+/// A change a rollback could not put back (R164).
 #[derive(Debug)]
 pub struct RestoreFailure {
     state: ChangedState,

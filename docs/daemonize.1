@@ -62,11 +62,11 @@ The parent exits 0 only after the daemon has successfully exec\(cqd
 If any step fails, the parent exits with a non\-zero status and prints a
 diagnostic to stderr.
 .PP
-In foreground mode a failed start puts back what the steps changed in
-the process.
+A failed start puts back what the steps changed: in foreground mode the
+process state, in both modes the files it created or chowned.
 For each change it could not put back, it prints one more line after the
-diagnostic: \f[B]rollback left\f[R] \f[I]state\f[R] \f[B]changed:\f[R]
-\f[I]reason\f[R].
+diagnostic: \f[B]rollback left\f[R] \f[I]state\f[R]
+[\f[I]path\f[R]]\f[B]:\f[R] \f[I]reason\f[R].
 .PP
 When \f[B]\-u\f[R] or \f[B]\-g\f[R] is specified, ownership of the PID
 file, lock file, and output files is transferred to the target

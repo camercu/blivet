@@ -23,7 +23,7 @@
 use std::io::{self, Read, Write};
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd};
 
-use crate::error::ErrorKind;
+use crate::error::DaemonizeError;
 
 /// The write end of the notification channel.
 ///
@@ -93,14 +93,14 @@ impl NotifyChannel {
     }
 
     /// Signal a daemonization failure: write the error's exit-code byte and
-    /// message, then close the channel. If the write fails, most likely because
+    /// [report](DaemonizeError::report), then close the channel. If the write fails, most likely because
     /// the launcher is gone, or a failed send already spent the channel, the
     /// message goes to stderr instead, so it is not lost with the channel
     /// (R161).
     /// The process is aborting either way.
-    pub(crate) fn signal_error(mut self, err: &ErrorKind) {
+    pub(crate) fn signal_error(mut self, err: &DaemonizeError) {
         if self.write_all(&error_bytes(err)).is_err() {
-            print_on_stderr(err);
+            print_on_stderr(err.report());
         }
     }
 
@@ -240,12 +240,13 @@ pub(crate) const SUCCESS: [u8; 2] = [0x00, 0x00];
 /// The daemon is about to `exec`; EOF after this is success.
 pub(crate) const EXEC_PENDING: [u8; 2] = [0x00, 0x01];
 
-/// Encode a failure message: exit-code byte followed by the error's `Display`.
+/// Encode a failure message: exit-code byte followed by the error's
+/// [report](DaemonizeError::report).
 ///
 /// [`exit_code`](crate::DaemonizeError::exit_code) is always non-zero, so the message
 /// can never collide with the [`SUCCESS`] byte.
-pub(crate) fn error_bytes(err: &ErrorKind) -> Vec<u8> {
-    encode(err.exit_code(), err.to_string().as_bytes())
+pub(crate) fn error_bytes(err: &DaemonizeError) -> Vec<u8> {
+    encode(err.exit_code(), err.report().to_string().as_bytes())
 }
 
 /// Encode the "dropped without notifying the parent" failure message.
@@ -352,6 +353,7 @@ pub(crate) fn decode(buf: &[u8]) -> Outcome {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::ErrorKind;
     use crate::test_support::{make_pipe, read_pipe, writer_with_no_reader};
 
     #[test]
@@ -364,7 +366,7 @@ mod tests {
     #[test]
     fn signal_error_writes_protocol() {
         let (rd, wr) = make_pipe();
-        let err = ErrorKind::ForkFailed("boom".into());
+        let err: DaemonizeError = ErrorKind::ForkFailed("boom".into()).into();
         NotifyChannel::new(wr).signal_error(&err);
         assert_eq!(decode(&read_pipe(rd)), decode(&error_bytes(&err)));
     }
@@ -487,7 +489,7 @@ mod tests {
         let mut ready = Interrupted(SUCCESS.into_iter().collect(), false);
         assert_eq!(read_outcome(&mut ready), Outcome::Success);
 
-        let err = ErrorKind::ForkFailed("boom".into());
+        let err: DaemonizeError = ErrorKind::ForkFailed("boom".into()).into();
         let mut failed = Interrupted(error_bytes(&err).into_iter().collect(), false);
         assert_eq!(read_outcome(&mut failed), decode(&error_bytes(&err)));
     }
@@ -516,7 +518,7 @@ mod tests {
     // Covers: R160
     #[test]
     fn read_outcome_stops_at_the_end_of_an_error_message() {
-        let err = ErrorKind::ForkFailed("boom".into());
+        let err: DaemonizeError = ErrorKind::ForkFailed("boom".into()).into();
         let mut pipe = StillOpen(error_bytes(&err).into_iter().collect());
         assert_eq!(
             read_outcome(&mut pipe),
@@ -530,7 +532,7 @@ mod tests {
     // Covers: R160
     #[test]
     fn decode_takes_the_message_its_length_names() {
-        let err = ErrorKind::ForkFailed("boom".into());
+        let err: DaemonizeError = ErrorKind::ForkFailed("boom".into()).into();
         let mut bytes = error_bytes(&err);
         bytes.extend_from_slice(b" and more");
         assert_eq!(decode(&bytes), decode(&error_bytes(&err)));
@@ -539,7 +541,7 @@ mod tests {
     // Covers: R160
     #[test]
     fn read_outcome_stops_at_the_end_of_an_exec_error() {
-        let err = ErrorKind::ExecFailed("exec /x: E2BIG".into());
+        let err: DaemonizeError = ErrorKind::ExecFailed("exec /x: E2BIG".into()).into();
         let mut bytes = EXEC_PENDING.to_vec();
         bytes.extend(error_bytes(&err));
         let mut pipe = StillOpen(bytes.into_iter().collect());
@@ -586,7 +588,7 @@ mod tests {
     // Covers: R150
     #[test]
     fn an_error_after_the_exec_marker_is_that_error() {
-        let err = ErrorKind::ExecFailed("exec /x: E2BIG".into());
+        let err: DaemonizeError = ErrorKind::ExecFailed("exec /x: E2BIG".into()).into();
         let mut bytes = EXEC_PENDING.to_vec();
         bytes.extend(error_bytes(&err));
         assert_eq!(read_outcome(&mut &bytes[..]), decode(&error_bytes(&err)));
@@ -596,7 +598,7 @@ mod tests {
     #[test]
     fn signal_exec_pending_leaves_the_pipe_open_for_an_exec_error() {
         let (rd, wr) = make_pipe();
-        let err = ErrorKind::ProgramNotFound("exec /x: ENOENT".into());
+        let err: DaemonizeError = ErrorKind::ProgramNotFound("exec /x: ENOENT".into()).into();
         let mut pipe = NotifyChannel::new(wr);
         pipe.signal_exec_pending().unwrap();
         pipe.signal_error(&err);
@@ -638,7 +640,7 @@ mod tests {
         nix::unistd::dup2_stderr(err_wr).unwrap();
 
         let reported = std::panic::catch_unwind(|| {
-            NotifyChannel::new(wr).signal_error(&ErrorKind::ForkFailed("boom".into()));
+            NotifyChannel::new(wr).signal_error(&ErrorKind::ForkFailed("boom".into()).into());
         });
 
         assert!(reported.is_ok());
@@ -714,7 +716,7 @@ mod tests {
 
     #[test]
     fn error_bytes_round_trip() {
-        let err = ErrorKind::ForkFailed("boom".into());
+        let err: DaemonizeError = ErrorKind::ForkFailed("boom".into()).into();
         let code = err.exit_code();
         assert_eq!(
             decode(&error_bytes(&err)),
@@ -730,7 +732,7 @@ mod tests {
         // A caller-chosen code of 0 would collide with the readiness header and be
         // decoded as readiness. exit_code() remaps it, so the encoded message
         // is still a real failure.
-        let err = ErrorKind::application(0, "boom");
+        let err: DaemonizeError = ErrorKind::application(0, "boom").into();
         match decode(&error_bytes(&err)) {
             Outcome::Failure { code, message } => {
                 assert_ne!(code, 0);

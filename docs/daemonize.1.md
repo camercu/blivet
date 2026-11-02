@@ -49,9 +49,10 @@ The parent exits 0 only after the daemon has successfully exec'd *program*.
 If any step fails, the parent exits with a non-zero status and prints a
 diagnostic to stderr.
 
-In foreground mode a failed start puts back what the steps changed in the
-process. For each change it could not put back, it prints one more line
-after the diagnostic: **rollback left** *state* **changed:** *reason*.
+A failed start puts back what the steps changed: in foreground mode the
+process state, in both modes the files it created or chowned. For each
+change it could not put back, it prints one more line after the
+diagnostic: **rollback left** *state* \[*path*\]**:** *reason*.
 
 When **-u** or **-g** is specified, ownership of the PID file, lock file, and
 output files is transferred to the target user/group before privileges are
