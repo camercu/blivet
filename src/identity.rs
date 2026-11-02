@@ -92,27 +92,56 @@ impl ResolvedIdentity {
     /// itself, so these paths belong in directories untrusted users cannot
     /// write.
     ///
+    /// Returns a token per file chowned, in both modes: the owner is on
+    /// disk, so it outlives a daemon that exits (R164). A failure gives back
+    /// the owners of the files chowned before it.
+    ///
     /// # Errors
     ///
     /// Returns `ErrorKind::ChownError` naming the first file that fails.
-    /// Files already chowned stay chowned; the operation is idempotent.
     pub(crate) fn chown_files<'p>(
         &self,
         files: impl IntoIterator<Item = (&'p Path, std::os::fd::BorrowedFd<'p>)>,
+    ) -> Result<Vec<crate::steps::Undo>, DaemonizeError> {
+        let mut chowned = Vec::new();
+        match self.chown_files_into(files, &mut chowned) {
+            Ok(()) => Ok(chowned),
+            Err(e) => {
+                let failures = crate::steps::restore_all(chowned);
+                Err(DaemonizeError::from(e).with_rollback_failures(failures))
+            }
+        }
+    }
+
+    /// The work of [`chown_files`](Self::chown_files), leaving each file's
+    /// token in `chowned`.
+    fn chown_files_into<'p>(
+        &self,
+        files: impl IntoIterator<Item = (&'p Path, std::os::fd::BorrowedFd<'p>)>,
+        chowned: &mut Vec<crate::steps::Undo>,
     ) -> Result<(), ErrorKind> {
+        use crate::steps::{Saved, Undo};
         let (owner, group) = self.chown_ids();
         let failed = |path: &Path, e| ErrorKind::ChownError(format!("{}: {e}", path.display()));
         for (path, fd) in files {
+            let st = nix::sys::stat::fstat(fd).map_err(|e| failed(path, e))?;
             // Only a regular file is the daemon's own. A device, FIFO, or
             // socket (`-o /dev/null`, a tty) belongs to the system; the
             // daemon writes through the descriptor it holds either way.
-            let kind = nix::sys::stat::fstat(fd)
-                .map_err(|e| failed(path, e))?
-                .st_mode
-                & libc::S_IFMT;
-            if kind == libc::S_IFREG {
-                nix::unistd::fchown(fd, owner, group).map_err(|e| failed(path, e))?;
+            if st.st_mode & libc::S_IFMT != libc::S_IFREG {
+                continue;
             }
+            // Its own descriptor, above stdio and close-on-exec, as the
+            // sequence's copy closes when the sequence ends.
+            let held = fd
+                .try_clone_to_owned()
+                .map_err(|e| ErrorKind::ChownError(format!("{}: {e}", path.display())))?;
+            nix::unistd::fchown(fd, owner, group).map_err(|e| failed(path, e))?;
+            chowned.push(Undo::new(Saved::Owner(Owner {
+                path: path.to_path_buf(),
+                fd: held,
+                was: (Uid::from_raw(st.st_uid), Gid::from_raw(st.st_gid)),
+            })));
         }
         Ok(())
     }
@@ -243,6 +272,20 @@ fn resolve_group_gid(spec: &str) -> Result<Gid, ErrorKind> {
             .map_err(|e| ErrorKind::GroupNotFound(format!("getgrnam({spec}): {e}")))?
             .ok_or_else(|| ErrorKind::GroupNotFound(spec.to_string()))?;
         Ok(group.gid)
+    }
+}
+
+/// A file step 16 chowned, and the owner and group it had before.
+pub(crate) struct Owner {
+    path: std::path::PathBuf,
+    fd: std::os::fd::OwnedFd,
+    was: (Uid, Gid),
+}
+
+impl Owner {
+    pub(crate) fn restore(self) -> Result<(), RestoreFailure> {
+        nix::unistd::fchown(&self.fd, Some(self.was.0), Some(self.was.1))
+            .map_err(|e| RestoreFailure::at(ChangedState::FileOwner, &self.path, e))
     }
 }
 

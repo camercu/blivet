@@ -298,7 +298,7 @@ saving the state. `Display` is `<state>: <error>`, or `<state> <path>:
 `ChangedState` is `#[non_exhaustive]`: `Stdin`, `Stdout`, `Stderr`,
 `WorkingDirectory`, `SignalMask`, `SignalDispositions`,
 `SupplementaryGroups`, `PrimaryGroup`, `Pidfile`, `Lockfile`,
-`OutputFile`. The umask and the
+`OutputFile`, `FileOwner`. The umask and the
 environment are not in it: restoring them cannot fail.
 
 `ErrorKind` is one enum covering validation and runtime errors. Derives
@@ -1701,9 +1701,10 @@ on any change to it, so the rows only copied the snapshot.
   set, the supplementary groups, the primary group when `setuid` failed
   after `setgid`, and the working directory when it could open it (a
   directory the caller may search but not read cannot be opened, and
-  the start goes on without saving it). In both modes it removes the
-  files it left on disk: the pidfile it wrote, and the lockfile and
-  stdout and stderr files it created. It removes each only while its
+  the start goes on without saving it). In both modes it puts back the
+  owner and group of each file step 16 chowned, and removes the files
+  it left on disk: the pidfile it wrote, and the lockfile and stdout
+  and stderr files it created. It removes each only while its
   path still names the file the start wrote, compared by device and
   inode, so a file another process put there since stays. The files
   go before the lock is released, so a second instance cannot take the

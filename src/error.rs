@@ -183,6 +183,9 @@ pub enum ChangedState {
     Lockfile,
     /// A stdout or stderr file the sequence created, still on disk.
     OutputFile,
+    /// The owner and group of a file the sequence handed to the target
+    /// identity.
+    FileOwner,
 }
 
 impl std::fmt::Display for ChangedState {
@@ -199,6 +202,7 @@ impl std::fmt::Display for ChangedState {
             Self::Pidfile => "pidfile",
             Self::Lockfile => "lockfile",
             Self::OutputFile => "output file",
+            Self::FileOwner => "file owner",
         })
     }
 }
@@ -684,6 +688,7 @@ mod tests {
             S::Pidfile,
             S::Lockfile,
             S::OutputFile,
+            S::FileOwner,
         ] {
             let name = state.to_string();
             assert_eq!(name, name.to_lowercase());

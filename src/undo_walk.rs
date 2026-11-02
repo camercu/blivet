@@ -152,6 +152,9 @@ fn root_failing_anywhere_before_the_switch_leaves_the_process_as_it_was() {
     caller_state();
     crate::sys::raw_setgroups(&[0, 4242, 4343]).unwrap();
     let dir = tempfile::tempdir().unwrap();
+    // Found, not created, so it stays: step 16 chowns it, and a failure
+    // after must give it back its owner.
+    std::fs::write(dir.path().join("app.lock"), "").unwrap();
     let mut config = full_config(dir.path());
     config.user("nobody");
     walk(&config, dir.path());

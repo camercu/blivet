@@ -436,7 +436,9 @@ unsafe fn run_steps<'a, T>(
     if let Some(identity) = &identity {
         // The files as opened, by descriptor (R163); for stdout and stderr,
         // step 12's, as init may have moved fds 1 and 2.
-        identity.chown_files(steps::chown_targets(&abort.files, config.chown_paths))?;
+        let chowned =
+            identity.chown_files(steps::chown_targets(&abort.files, config.chown_paths))?;
+        abort.record_all(chowned)?;
     }
     #[cfg(test)]
     if steps::failpoints::BEFORE_SWITCH_FAILS.injected() {
