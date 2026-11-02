@@ -336,6 +336,8 @@ pub fn daemonize(config: &DaemonConfig) -> Result<DaemonContext, DaemonizeError>
 /// the pidfile lock is taken, so a second instance fails with
 /// [`LockConflict`](ErrorKind::LockConflict) before its `init` runs. It
 /// runs after inherited descriptors are closed, so what it opens stays open.
+/// It must not close descriptors it did not open: the sequence holds some to
+/// finish the start, or to undo it if the start fails.
 /// Whatever it returns comes back beside the [`DaemonContext`].
 ///
 /// A `chroot` in `init` is not supported (ADR 0005). The chown and the
