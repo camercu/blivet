@@ -50,14 +50,12 @@ pub(crate) fn open_creating(
     flags: OFlag,
     mode: Mode,
 ) -> std::io::Result<(OwnedFd, bool)> {
+    // `EEXIST` falls back, a symlink's included, dangling or not: the file
+    // it names is not this start's to remove. Any other error the second
+    // open meets too, so it reports that one.
     match open_above_stdio(path, flags | OFlag::O_CREAT | OFlag::O_EXCL, mode) {
         Ok(fd) => Ok((fd, true)),
-        // A symlink, dangling or not, is `EEXIST` too: opened through it, the
-        // file it names is not this start's to remove.
-        Err(e) if e.raw_os_error() == Some(libc::EEXIST) => {
-            open_above_stdio(path, flags | OFlag::O_CREAT, mode).map(|fd| (fd, false))
-        }
-        Err(e) => Err(e),
+        Err(_) => open_above_stdio(path, flags | OFlag::O_CREAT, mode).map(|fd| (fd, false)),
     }
 }
 
