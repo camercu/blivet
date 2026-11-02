@@ -179,6 +179,10 @@ pub enum ChangedState {
     PrimaryGroup,
     /// The pidfile the sequence wrote, still on disk.
     Pidfile,
+    /// The lockfile the sequence created, still on disk.
+    Lockfile,
+    /// A stdout or stderr file the sequence created, still on disk.
+    OutputFile,
 }
 
 impl std::fmt::Display for ChangedState {
@@ -193,6 +197,8 @@ impl std::fmt::Display for ChangedState {
             Self::SupplementaryGroups => "supplementary groups",
             Self::PrimaryGroup => "primary group",
             Self::Pidfile => "pidfile",
+            Self::Lockfile => "lockfile",
+            Self::OutputFile => "output file",
         })
     }
 }
@@ -676,6 +682,8 @@ mod tests {
             S::SupplementaryGroups,
             S::PrimaryGroup,
             S::Pidfile,
+            S::Lockfile,
+            S::OutputFile,
         ] {
             let name = state.to_string();
             assert_eq!(name, name.to_lowercase());

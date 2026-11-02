@@ -69,10 +69,10 @@ fn realtime_caller_state() {
     );
 }
 
-/// Walks `config`'s foreground start; `pidfile` is the one it writes.
-fn walk(config: &DaemonConfig, pidfile: &std::path::Path) {
+/// Walks `config`'s foreground start; `dir` holds the files it writes.
+fn walk(config: &DaemonConfig, dir: &std::path::Path) {
     failpoints::BEFORE_SWITCH_FAILS.set();
-    let before = ProcessSnapshot::take(pidfile);
+    let before = ProcessSnapshot::take(dir);
     for n in 1.. {
         failpoints::fail_at_checkpoint(n);
         let mut init_ran = false;
@@ -96,7 +96,7 @@ fn walk(config: &DaemonConfig, pidfile: &std::path::Path) {
             ErrorKind::SystemError(m) if m == failpoints::SWITCH_FAILURE => true,
             other => panic!("failure {n} is not a failpoint's: {other:?}"),
         };
-        let after = ProcessSnapshot::take(pidfile);
+        let after = ProcessSnapshot::take(dir);
         // From init on, the env stays as step 11 set it (R164).
         let (expected, after) = if init_ran {
             (before.clone().without_env(), after.without_env())
@@ -122,6 +122,7 @@ fn full_config(dir: &std::path::Path) -> DaemonConfig {
         .umask(0o077)
         .chdir(dir)
         .pidfile(dir.join("app.pid"))
+        .lockfile(dir.join("app.lock"))
         .stdout(dir.join("out.log"))
         .stderr(dir.join("err.log"))
         .env("BLIVET_WALK_SET", "daemon")
@@ -138,7 +139,7 @@ fn a_foreground_start_failing_anywhere_leaves_the_process_as_it_was() {
     caller_state();
     let dir = tempfile::tempdir().unwrap();
     let config = full_config(dir.path());
-    walk(&config, &dir.path().join("app.pid"));
+    walk(&config, dir.path());
 }
 
 // Covers: R164
@@ -153,5 +154,5 @@ fn root_failing_anywhere_before_the_switch_leaves_the_process_as_it_was() {
     let dir = tempfile::tempdir().unwrap();
     let mut config = full_config(dir.path());
     config.user("nobody");
-    walk(&config, &dir.path().join("app.pid"));
+    walk(&config, dir.path());
 }

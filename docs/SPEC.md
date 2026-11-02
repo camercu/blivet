@@ -297,7 +297,8 @@ saving the state. `Display` is `<state>: <error>`, or `<state> <path>:
 <error>` for a file.
 `ChangedState` is `#[non_exhaustive]`: `Stdin`, `Stdout`, `Stderr`,
 `WorkingDirectory`, `SignalMask`, `SignalDispositions`,
-`SupplementaryGroups`, `PrimaryGroup`, `Pidfile`. The umask and the
+`SupplementaryGroups`, `PrimaryGroup`, `Pidfile`, `Lockfile`,
+`OutputFile`. The umask and the
 environment are not in it: restoring them cannot fail.
 
 `ErrorKind` is one enum covering validation and runtime errors. Derives
@@ -726,10 +727,11 @@ fails: to what it held, or closed again if it was closed. In both modes
 the truncations, which cannot be undone, come last, once both streams
 are open, compared and in place. So a failed step 12 leaves the previous
 run's logs, and a foreground caller's stdout and stderr, as they were.
-Two things stay: a stream file it created, empty, and — after an I/O
-error truncating stderr once stdout's truncation succeeded — an emptied
-stdout log. A later step that fails puts the slots back too, through
-the abort guard (R164).
+A stream file it created is removed again, in both modes. One thing
+stays: after an I/O error truncating stderr once stdout's truncation
+succeeded, an emptied stdout log. A later step that fails puts the
+slots back and removes the created files too, through the abort guard
+(R164).
 
 Daemon mode moves the slots without saving them: the child exits on any
 failure, so no one sees them. Saving needs a free descriptor, and a
@@ -1608,9 +1610,9 @@ on any change to it, so the rows only copied the snapshot.
   open, compared and in place. In foreground mode it also puts every
   stdio slot it moved back as it was, closed if it was closed; daemon
   mode does not save the slots, so it gets past step 12 with no
-  descriptor free. A stream file it created stays, empty. The one
-  truncation it cannot undo is stdout's, when truncating stderr then
-  fails with an I/O error.
+  descriptor free. In both modes it removes a stream file it created.
+  The one truncation it cannot undo is stdout's, when truncating stderr
+  then fails with an I/O error.
 - R148. Failure to create the notification pipe — no descriptor free,
   say — returns `SystemError` to the caller before any fork; it does
   not panic.
@@ -1699,16 +1701,20 @@ on any change to it, so the rows only copied the snapshot.
   set, the supplementary groups, the primary group when `setuid` failed
   after `setgid`, and the working directory when it could open it (a
   directory the caller may search but not read cannot be opened, and
-  the start goes on without saving it), and removes the pidfile it
-  wrote. In both modes the pidfile goes before the lock is released, so
-  a second instance cannot take the lock and lose its pidfile to the
-  first. It cannot restore inherited descriptors it closed, or a saved
-  gid that differed from the real one (the group restore sets the real
-  and effective gid, and the saved gid follows the real one). The error
+  the start goes on without saving it). In both modes it removes the
+  files it left on disk: the pidfile it wrote, and the lockfile and
+  stdout and stderr files it created. It removes each only while its
+  path still names the file the start wrote, compared by device and
+  inode, so a file another process put there since stays. The files
+  go before the lock is released, so a second instance cannot take the
+  lock and lose its pidfile to the first. It cannot restore inherited
+  descriptors it closed, or a saved gid that differed from the real one
+  (the group restore sets the real and effective gid, and the saved gid
+  follows the real one). The error
   lists each change the rollback could not put back, with the reason,
   in `rollback_failures()`: a failed restore, a working directory it
-  could not save, a pidfile it could not remove (one already gone is
-  not a failure). The CLI prints one line for each after the error.
+  could not save, a file it could not remove, with its path (one
+  already gone is not a failure). The CLI prints one line for each after the error.
 - R165. The notification pipe is a connected `AF_UNIX` stream socket
   pair, one-way: the launcher's end cannot send and the daemon's end
   cannot receive. The daemon writes to it only with `send` and

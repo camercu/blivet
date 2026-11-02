@@ -405,12 +405,14 @@ pub(crate) struct ProcessSnapshot {
     groups: Vec<libc::gid_t>,
     gid: u32,
     egid: u32,
-    pidfile_exists: bool,
+    /// What the start's directory holds: each entry's name, owner, group
+    /// and length, sorted.
+    files: Vec<(std::ffi::OsString, u32, u32, u64)>,
 }
 
 impl ProcessSnapshot {
-    /// Reads the state now. `pidfile` is the file the start writes.
-    pub(crate) fn take(pidfile: &std::path::Path) -> Self {
+    /// Reads the state now. `dir` holds the files the start writes.
+    pub(crate) fn take(dir: &std::path::Path) -> Self {
         assert_isolated("ProcessSnapshot::take");
         let mask = current_umask();
         let stdio = [0, 1, 2].map(slot_file_id);
@@ -427,7 +429,7 @@ impl ProcessSnapshot {
             groups,
             gid: nix::unistd::getgid().as_raw(),
             egid: nix::unistd::getegid().as_raw(),
-            pidfile_exists: pidfile.exists(),
+            files: dir_files(dir),
         }
     }
 
@@ -437,6 +439,21 @@ impl ProcessSnapshot {
         self.env = None;
         self
     }
+}
+
+/// Each entry in `dir`, with its owner, group and length, sorted by name.
+fn dir_files(dir: &std::path::Path) -> Vec<(std::ffi::OsString, u32, u32, u64)> {
+    use std::os::unix::fs::MetadataExt;
+    let mut files: Vec<_> = std::fs::read_dir(dir)
+        .unwrap()
+        .map(|entry| {
+            let entry = entry.unwrap();
+            let meta = entry.metadata().unwrap();
+            (entry.file_name(), meta.uid(), meta.gid(), meta.len())
+        })
+        .collect();
+    files.sort();
+    files
 }
 
 /// This process's supplementary group IDs.

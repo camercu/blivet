@@ -12,20 +12,21 @@ use super::*;
 use crate::error::ErrorKind;
 use crate::file_identity::{FileId, file_id, paths_same};
 
-/// Step 7: Open and exclusively lock a lockfile.
+/// Step 7: Open and exclusively lock a lockfile, saying whether this start
+/// created it.
 ///
 /// A rollback, or a daemon's cleanup, unlinks the file it locked, so the file
 /// this opened may be gone from the path by the time the lock is taken. That
 /// lock would guard nothing: the next instance creates the path anew and locks
 /// that. So the lock counts only once the path still names the locked file;
 /// else the step opens the path again, up to [`LOCK_ATTEMPTS`] times.
-pub(crate) fn open_and_lock(path: &Path) -> Result<Flock<OwnedFd>, ErrorKind> {
+pub(crate) fn lock_path(path: &Path) -> Result<(Flock<OwnedFd>, bool), ErrorKind> {
     for _ in 0..LOCK_ATTEMPTS {
-        let flock = lock_once(path)?;
+        let (flock, created) = lock_once(path)?;
         let locked = file_id(&*flock)
             .map_err(|e| ErrorKind::LockfileError(format!("fstat {}: {e}", path.display())))?;
         match nix::sys::stat::stat(path) {
-            Ok(st) if FileId::of(&st) == locked => return Ok(flock),
+            Ok(st) if FileId::of(&st) == locked => return Ok((flock, created)),
             Ok(_) | Err(nix::errno::Errno::ENOENT) => {}
             Err(e) => {
                 return Err(ErrorKind::LockfileError(format!(
@@ -41,24 +42,26 @@ pub(crate) fn open_and_lock(path: &Path) -> Result<Flock<OwnedFd>, ErrorKind> {
     )))
 }
 
+/// [`lock_path`], for the tests that want only the lock.
+#[cfg(test)]
+pub(crate) fn open_and_lock(path: &Path) -> Result<Flock<OwnedFd>, ErrorKind> {
+    lock_path(path).map(|(flock, _)| flock)
+}
+
 /// How often step 7 opens the lockfile again when the path stopped naming the
 /// file it locked. Each retry means another instance removed the file in the
 /// moment between this one's `open` and `flock`, so a few suffice.
 const LOCK_ATTEMPTS: usize = 8;
 
 /// Opens the lockfile and takes its lock, without checking the path.
-fn lock_once(path: &Path) -> Result<Flock<OwnedFd>, ErrorKind> {
-    let fd = open_above_stdio(
-        path,
-        OFlag::O_WRONLY | OFlag::O_CREAT,
-        Mode::from_bits_truncate(0o644),
-    )
-    .map_err(|e| ErrorKind::LockfileError(format!("cannot open {}: {e}", path.display())))?;
+fn lock_once(path: &Path) -> Result<(Flock<OwnedFd>, bool), ErrorKind> {
+    let (fd, created) = open_creating(path, OFlag::O_WRONLY, Mode::from_bits_truncate(0o644))
+        .map_err(|e| ErrorKind::LockfileError(format!("cannot open {}: {e}", path.display())))?;
 
     #[cfg(test)]
     crate::steps::failpoints::unlink_if_injected(path);
 
-    Flock::lock(fd, FlockArg::LockExclusiveNonblock).map_err(|(_fd, e)| {
+    let flock = Flock::lock(fd, FlockArg::LockExclusiveNonblock).map_err(|(_fd, e)| {
         if e == nix::errno::Errno::EWOULDBLOCK {
             ErrorKind::LockConflict {
                 path: path.to_path_buf(),
@@ -66,7 +69,8 @@ fn lock_once(path: &Path) -> Result<Flock<OwnedFd>, ErrorKind> {
         } else {
             ErrorKind::LockfileError(format!("flock {}: {e}", path.display()))
         }
-    })
+    })?;
+    Ok((flock, created))
 }
 
 /// Step 8, first half: take hold of the pidfile, without writing it yet.

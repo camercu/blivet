@@ -1,5 +1,7 @@
 pub mod blivet
 #[non_exhaustive] pub enum blivet::ChangedState
+pub blivet::ChangedState::Lockfile
+pub blivet::ChangedState::OutputFile
 pub blivet::ChangedState::Pidfile
 pub blivet::ChangedState::PrimaryGroup
 pub blivet::ChangedState::SignalDispositions

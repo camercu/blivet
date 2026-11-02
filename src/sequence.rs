@@ -330,10 +330,19 @@ unsafe fn run_steps<'a, T>(
     // unless derivation was opted out)
     let lockfile_path = config.effective_lockfile().map(std::path::PathBuf::as_path);
     if let Some(path) = lockfile_path {
-        let lock = steps::open_and_lock(path)?;
+        let (lock, created) = steps::lock_path(path)?;
         let id = crate::file_identity::file_id(&*lock)
             .map_err(|e| ErrorKind::LockfileError(format!("fstat: {e}")))?;
         abort.files.push(path, steps::Role::Lockfile(lock), id);
+        // A lockfile that is the pidfile goes with step 8's token.
+        let is_pidfile = config
+            .pidfile
+            .as_deref()
+            .is_some_and(|pidfile| crate::file_identity::paths_same(pidfile, path));
+        if created && !is_pidfile {
+            let removal = steps::Removal::new(path, id, ChangedState::Lockfile);
+            abort.record(steps::Undo::new(steps::Saved::Removal(removal)))?;
+        }
     }
 
     // Step 8: Write pidfile. The debt is owed from the moment this process
@@ -382,7 +391,7 @@ unsafe fn run_steps<'a, T>(
             &abort.files.owned(pidfile_id),
             abort.rollback(),
         )?;
-        abort.record_all(redirected.slots)?;
+        abort.record_all(redirected.undo)?;
         for (path, fd, id) in redirected.files {
             abort.files.push(path, steps::Role::Stream(fd), id);
         }
@@ -1415,6 +1424,83 @@ mod tests {
         std::fs::set_permissions(search_only.path(), std::fs::Permissions::from_mode(0o700))
             .unwrap();
         result.unwrap();
+    }
+
+    // Covers: R164
+    /// A daemon's process exits on failure, but the files it created would
+    /// outlive it: they go in daemon mode too.
+    #[test]
+    fn a_failed_daemon_leaves_no_file_it_created() {
+        if !isolated() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = DaemonConfig::new();
+        config
+            .close_fds(false)
+            .pidfile(dir.path().join("app.pid"))
+            .lockfile(dir.path().join("app.lock"))
+            .stdout(dir.path().join("out.log"))
+            .stderr(dir.path().join("err.log"));
+        let mut forker = NullForker::both_child();
+
+        let exited = catch_unwind(std::panic::AssertUnwindSafe(|| {
+            run_inner_with(&config, &mut forker, || -> Result<(), _> {
+                Err(DaemonizeError::application(75, "database unreachable"))
+            })
+        }));
+
+        assert!(exited.is_err(), "a daemon-mode failure exits");
+        let left: Vec<_> = std::fs::read_dir(dir.path()).unwrap().collect();
+        assert!(left.is_empty(), "left behind: {left:?}");
+    }
+
+    // Covers: R164
+    /// A lockfile that was there before the start is not the start's to
+    /// remove.
+    #[test]
+    fn a_failed_start_keeps_a_lockfile_it_found() {
+        if !isolated() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let lockfile = dir.path().join("app.lock");
+        std::fs::write(&lockfile, "").unwrap();
+        let mut config = DaemonConfig::new();
+        config.foreground(true).close_fds(false).lockfile(&lockfile);
+
+        let result: Result<(DaemonContext, ()), _> =
+            run_inner_with(&config, &mut NullForker::new(vec![], Ok(())), || {
+                Err(DaemonizeError::application(75, "init failed"))
+            });
+
+        assert!(result.is_err());
+        assert!(lockfile.exists(), "the found lockfile was removed");
+    }
+
+    // Covers: R164
+    /// A pidfile another process wrote over the start's, under the same name,
+    /// is that process's: the rollback leaves it and reports nothing.
+    #[test]
+    fn a_failed_start_keeps_a_pidfile_put_in_its_place() {
+        if !isolated() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let pidfile = dir.path().join("app.pid");
+        let mut config = DaemonConfig::new();
+        config.foreground(true).close_fds(false).pidfile(&pidfile);
+
+        let result: Result<(DaemonContext, ()), _> =
+            run_inner_with(&config, &mut NullForker::new(vec![], Ok(())), || {
+                std::fs::remove_file(&pidfile).unwrap();
+                std::fs::write(&pidfile, "4242\n").unwrap();
+                Err(DaemonizeError::application(75, "init failed"))
+            });
+
+        let err = result.expect_err("init failed the start");
+        assert!(err.rollback_failures().is_empty());
+        assert_eq!(std::fs::read_to_string(&pidfile).unwrap(), "4242\n");
     }
 
     // Covers: R154

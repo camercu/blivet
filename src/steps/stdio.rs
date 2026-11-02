@@ -42,6 +42,25 @@ pub(crate) fn open_above_stdio<P: ?Sized + nix::NixPath>(
     above_stdio(open(path, flags | OFlag::O_CLOEXEC, mode)?)
 }
 
+/// [`open_above_stdio`] with `O_CREAT`, saying whether this open created the
+/// file, which a failed start then removes (R164). A file that appears
+/// between the two opens counts as found, and stays.
+pub(crate) fn open_creating(
+    path: &Path,
+    flags: OFlag,
+    mode: Mode,
+) -> std::io::Result<(OwnedFd, bool)> {
+    match open_above_stdio(path, flags | OFlag::O_CREAT | OFlag::O_EXCL, mode) {
+        Ok(fd) => Ok((fd, true)),
+        // A symlink, dangling or not, is `EEXIST` too: opened through it, the
+        // file it names is not this start's to remove.
+        Err(e) if e.raw_os_error() == Some(libc::EEXIST) => {
+            open_above_stdio(path, flags | OFlag::O_CREAT, mode).map(|fd| (fd, false))
+        }
+        Err(e) => Err(e),
+    }
+}
+
 /// Step 6: Redirect standard streams to /dev/null.
 ///
 /// Always redirects stdin. When `stdout_stderr` is true, also redirects
@@ -112,19 +131,29 @@ struct OpenStream<'a> {
 }
 
 /// Opens `path` for a stream without truncating it: nothing on disk may
-/// change until [`plan_output_redirect`] has seen what the file is.
-fn open_stream(path: &Path, append: bool) -> Result<OpenStream<'_>, ErrorKind> {
-    let mut flags = OFlag::O_WRONLY | OFlag::O_CREAT;
+/// change until [`plan_output_redirect`] has seen what the file is. A file it
+/// creates gets a token in `moved` that removes it again.
+fn open_stream<'a>(
+    path: &'a Path,
+    append: bool,
+    moved: &mut Vec<Undo>,
+) -> Result<OpenStream<'a>, ErrorKind> {
+    let mut flags = OFlag::O_WRONLY;
     if append {
         flags |= OFlag::O_APPEND;
     }
-    let fd = open_above_stdio(path, flags, Mode::from_bits_truncate(0o644))
+    let (fd, created) = open_creating(path, flags, Mode::from_bits_truncate(0o644))
         .map_err(|e| ErrorKind::OutputFileError(format!("cannot open {}: {e}", path.display())))?;
     let st = nix::sys::stat::fstat(&fd)
         .map_err(|e| ErrorKind::OutputFileError(format!("fstat {}: {e}", path.display())))?;
+    let id = FileId::of(&st);
+    if created {
+        let removal = super::Removal::new(path, id, ChangedState::OutputFile);
+        moved.push(Undo::new(super::Saved::Removal(removal)));
+    }
     Ok(OpenStream {
         path,
-        id: FileId::of(&st),
+        id,
         // A FIFO or a device (`-o /dev/null`) has no length to truncate:
         // `ftruncate` refuses one, where `O_TRUNC` used to ignore it.
         regular: st.st_mode & libc::S_IFMT == libc::S_IFREG,
@@ -164,8 +193,9 @@ fn truncate(stream: &OpenStream) -> Result<(), ErrorKind> {
 /// chowns them by these descriptors, not by whatever `init` left on fds 1
 /// and 2 (R163). Each stdio slot is saved before it moves; the
 /// truncations, which cannot be undone, come last. A stream file it created
-/// stays, empty, and an I/O error truncating stderr after stdout's truncation
-/// succeeded leaves stdout emptied.
+/// has a token in either mode, which removes it on failure; an I/O error
+/// truncating stderr after stdout's truncation succeeded leaves stdout
+/// emptied.
 #[must_use = "the slot tokens put stdio back when dropped; keep() them to leave it redirected"]
 pub(crate) fn redirect_output<'a>(
     stdout: Option<&'a Path>,
@@ -178,10 +208,7 @@ pub(crate) fn redirect_output<'a>(
     crate::test_support::assert_isolated("redirect_output");
     let mut moved = Vec::new();
     match redirect_output_into(stdout, stderr, append, owned, rollback, &mut moved) {
-        Ok(files) => Ok(Redirected {
-            slots: moved,
-            files,
-        }),
+        Ok(files) => Ok(Redirected { undo: moved, files }),
         Err(e) => {
             let failures = super::restore_all(moved);
             Err(DaemonizeError::from(e).with_rollback_failures(failures))
@@ -200,7 +227,7 @@ fn redirect_output_into<'a>(
 ) -> Result<Vec<(&'a Path, OwnedFd, FileId)>, ErrorKind> {
     let out = match stdout {
         Some(path) => {
-            let out = open_stream(path, append)?;
+            let out = open_stream(path, append, moved)?;
             plan_output_redirect(Some(out.id), None, owned).map_err(|c| refusal(&c, &out))?;
             move_slot(&out.fd, StdioSlot::Stdout, rollback, moved)
                 .map_err(|e| e.into_output_error(StdioSlot::Stdout))?;
@@ -211,7 +238,7 @@ fn redirect_output_into<'a>(
 
     let err = match stderr {
         Some(path) => {
-            let err = open_checked_stderr(path, append, out.as_ref(), owned)?;
+            let err = open_checked_stderr(path, append, out.as_ref(), owned, moved)?;
             let source = match &err {
                 Stderr::Own(err) => &err.fd,
                 Stderr::SharesStdout(out) => &out.fd,
@@ -245,7 +272,9 @@ fn redirect_output_into<'a>(
 /// What step 12 did: the stdio slots it moved, and the files it opened.
 #[must_use = "the slot tokens put stdio back when dropped; keep() them to leave it redirected"]
 pub(crate) struct Redirected<'a> {
-    pub(crate) slots: Vec<Undo>,
+    /// For each stream, a token for its file if this created it, then one
+    /// for the slot it moved.
+    pub(crate) undo: Vec<Undo>,
     /// Each stream's file by the path that names it, once: stderr sharing
     /// stdout's file is not repeated, with its identity. Close-on-exec, above
     /// fd 2.
@@ -357,8 +386,9 @@ fn open_checked_stderr<'a, 'o>(
     append: bool,
     out: Option<&'o OpenStream<'a>>,
     owned: &[(&'static str, FileId)],
+    moved: &mut Vec<Undo>,
 ) -> Result<Stderr<'a, 'o>, ErrorKind> {
-    let err = open_stream(path, append)?;
+    let err = open_stream(path, append, moved)?;
     let plan = plan_output_redirect(out.map(|o| o.id), Some(err.id), owned)
         .map_err(|c| refusal(&c, &err))?;
     Ok(match out.filter(|_| plan.stderr_shares_stdout) {
@@ -440,7 +470,7 @@ mod tests {
         result: Result<super::Redirected<'_>, crate::DaemonizeError>,
     ) -> Result<(), crate::ErrorKind> {
         result
-            .map(|done| done.slots.into_iter().for_each(super::Undo::keep))
+            .map(|done| done.undo.into_iter().for_each(super::Undo::keep))
             .map_err(crate::DaemonizeError::into_kind)
     }
 
