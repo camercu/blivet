@@ -58,9 +58,9 @@ impl DaemonizeError {
         self.kind.exit_code()
     }
 
-    /// What failed, for a test that matches on an owned kind.
-    #[cfg(test)]
-    pub(crate) fn into_kind(self) -> ErrorKind {
+    /// What failed, by value, without the
+    /// [`rollback_failures`](Self::rollback_failures).
+    pub fn into_kind(self) -> ErrorKind {
         self.kind
     }
 

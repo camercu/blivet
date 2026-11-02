@@ -283,13 +283,14 @@ to the pipe and closes it. The parent reads this and exits 1.
 
 ### DaemonizeError
 
-A struct holding what failed, `kind() -> &ErrorKind`, and each change a
-rollback could not put back, `rollback_failures() -> &[RestoreFailure]`,
-latest first (R164). A daemon exits instead of returning it, so its
-message to the launcher carries them (R160). `Display` and `source()`
-are the kind's, so an `init` error keeps its message (R154).
-Constructors: `application(code, message)` and `From<ErrorKind>`. Must
-be `Send + Sync` (compile-time assertion in tests).
+A struct holding what failed, `kind() -> &ErrorKind` (or `into_kind()`
+by value), and each change a rollback could not put back,
+`rollback_failures() -> &[RestoreFailure]`, latest first (R164). A
+daemon exits instead of returning it, so its message to the launcher
+carries them (R160). `Display` and `source()` are the kind's, so an
+`init` error keeps its message (R154). Constructors:
+`application(code, message)` and `From<ErrorKind>`. Must be
+`Send + Sync` (compile-time assertion in tests).
 
 A `RestoreFailure` holds the `ChangedState` left changed, `state()`; for
 a file, its path, `path() -> Option<&Path>`; and why, `error() ->
@@ -1260,7 +1261,8 @@ continues; (2) `daemonize_with()` with privileged `init` →
 - `DaemonContext`: drop releases lock, writes failure to pipe if
   `notify_parent()` was not called, removes pidfile if
   `cleanup_on_drop` is true, `#[non_exhaustive]`.
-- `DaemonizeError`: `kind()`, `rollback_failures()`, `exit_code()`.
+- `DaemonizeError`: `kind()`, `into_kind()`, `rollback_failures()`,
+  `exit_code()`.
 - `ErrorKind`: each variant's condition. Note which variants only
   `DaemonContext::exec` produces.
 - `RestoreFailure`, `ChangedState`: what a rollback left changed, and why.
