@@ -1712,9 +1712,10 @@ on any change to it, so the rows only copied the snapshot.
   umask, the signal dispositions and mask, the environment variables it
   set, the supplementary groups, the primary group when `setuid` failed
   after `setgid`, and the working directory when it could open it. It
-  opens the directory for search only where the platform can (`O_PATH`
-  on Linux and Android, `O_SEARCH` on macOS, FreeBSD, NetBSD, and
-  illumos), so one the caller may search but not read is saved too.
+  opens the directory for search only where the platform can (the
+  `search_only_open` capability: `O_PATH` on Linux and Android,
+  `O_SEARCH` on macOS, FreeBSD, and NetBSD), so one the caller may
+  search but not read is saved too.
   Elsewhere such a directory, and anywhere one the caller can no longer
   search, cannot be opened, and the start goes on without saving it.
   In both modes it puts back the

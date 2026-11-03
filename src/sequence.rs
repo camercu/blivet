@@ -1293,15 +1293,7 @@ mod tests {
     /// A working directory the caller may enter but not read is still put
     /// back: saving it needs search permission only.
     #[test]
-    #[cfg(any(
-        target_os = "linux",
-        target_os = "android",
-        target_vendor = "apple",
-        target_os = "freebsd",
-        target_os = "netbsd",
-        target_os = "illumos",
-        target_os = "solaris"
-    ))]
+    #[cfg(blivet_search_only_open)]
     fn an_unreadable_working_directory_is_put_back() {
         use std::os::unix::fs::PermissionsExt;
         if !isolated() {

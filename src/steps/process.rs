@@ -69,28 +69,14 @@ impl Cwd {
     }
 }
 
-/// Flags that open a directory for `fchdir` with search permission alone.
-#[cfg(any(target_os = "linux", target_os = "android"))]
-const SEARCH_ONLY: OFlag = OFlag::O_PATH.union(OFlag::O_DIRECTORY);
-#[cfg(any(
-    target_vendor = "apple",
-    target_os = "freebsd",
-    target_os = "netbsd",
-    target_os = "illumos",
-    target_os = "solaris"
-))]
-const SEARCH_ONLY: OFlag = OFlag::O_SEARCH.union(OFlag::O_DIRECTORY);
-/// No search-only open here: reading the directory is needed.
-#[cfg(not(any(
-    target_os = "linux",
-    target_os = "android",
-    target_vendor = "apple",
-    target_os = "freebsd",
-    target_os = "netbsd",
-    target_os = "illumos",
-    target_os = "solaris"
-)))]
-const SEARCH_ONLY: OFlag = OFlag::O_RDONLY.union(OFlag::O_DIRECTORY);
+/// Flags that open a directory for `fchdir` with search permission alone,
+/// where the platform can (`build.rs`); elsewhere a read open.
+#[cfg(blivet_search_only_open_path)]
+pub(crate) const SEARCH_ONLY: OFlag = OFlag::O_PATH.union(OFlag::O_DIRECTORY);
+#[cfg(all(blivet_search_only_open, not(blivet_search_only_open_path)))]
+pub(crate) const SEARCH_ONLY: OFlag = OFlag::O_SEARCH.union(OFlag::O_DIRECTORY);
+#[cfg(not(blivet_search_only_open))]
+pub(crate) const SEARCH_ONLY: OFlag = OFlag::O_RDONLY.union(OFlag::O_DIRECTORY);
 
 /// Step 10: Clear the signal mask.
 ///

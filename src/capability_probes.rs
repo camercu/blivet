@@ -39,6 +39,9 @@
 //! - `blivet_sock_cloexec`: macOS, the one listed platform answering "no",
 //!   has no `SOCK_CLOEXEC` in `libc` either, so the absent case cannot name
 //!   the flag it would pass.
+//! - `blivet_search_only_open`: OpenBSD, the one listed platform answering
+//!   "no", has neither `O_PATH` nor `O_SEARCH` in `libc`, so the absent case
+//!   cannot name the flag it would pass either.
 
 /// The highest descriptor number a directory of *static* device nodes is
 /// likely to cover. NetBSD's `MAKEDEV` creates `/dev/fd/0` through
@@ -246,4 +249,26 @@ fn socketpair_takes_sock_cloexec() {
         let flags = fcntl(&end, FcntlArg::F_GETFD).unwrap();
         assert!(FdFlag::from_bits_truncate(flags).contains(FdFlag::FD_CLOEXEC));
     }
+}
+
+/// `blivet_search_only_open` claims a directory the process may enter but
+/// not read still opens, for the working-directory save. Open one.
+#[cfg(blivet_search_only_open)]
+// Covers: R164
+#[test]
+fn a_search_only_directory_opens() {
+    use std::os::unix::fs::PermissionsExt;
+    if !crate::test_support::isolated() {
+        return;
+    }
+    crate::test_support::shed_root();
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o111)).unwrap();
+    let opened = crate::steps::open_above_stdio(
+        dir.path(),
+        crate::steps::SEARCH_ONLY,
+        nix::sys::stat::Mode::empty(),
+    );
+    std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
+    opened.expect("a search-only directory opens where the table says it does");
 }

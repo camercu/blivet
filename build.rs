@@ -3,8 +3,9 @@
 //!
 //! The crate does not need to know which OS it is on. It needs to know whether
 //! a thread count is queryable, whether a file-descriptor directory is
-//! trustworthy, whether a reserved real-time signal range must be skipped, and
-//! whether `faccessat` accepts `AT_EACCESS`. Those questions have different
+//! trustworthy, whether a reserved real-time signal range must be skipped,
+//! whether `faccessat` accepts `AT_EACCESS`, and how a directory opens with
+//! search permission alone. Those questions have different
 //! answers under one OS name over time, and asking them by OS name is what let
 //! Android — a kernel with `/proc` and reserved real-time signals — take the
 //! unknown-Unix branch of every decision at once. See
@@ -42,6 +43,15 @@ impl ThreadCount {
             Self::KernelQuery(call) => call,
         }
     }
+}
+
+/// How a directory opens with search permission alone, for `fchdir`.
+#[derive(PartialEq)]
+enum SearchOnlyOpen {
+    /// `O_PATH`: Linux and Android.
+    Path,
+    /// `O_SEARCH`: macOS and the BSDs that have it.
+    Search,
 }
 
 /// What one target OS can do.
@@ -105,6 +115,10 @@ struct Platform {
     /// follows, and a subprocess another thread spawns in between inherits
     /// the ends. macOS is the only listed platform without it.
     sock_cloexec: bool,
+    /// How a directory the process may enter but not read opens, for the
+    /// working-directory save a rollback returns to; `None` where only a
+    /// read open exists, so such a directory cannot be saved.
+    search_only_open: Option<SearchOnlyOpen>,
 }
 
 /// Every platform the crate claims to support, and what each one can do.
@@ -121,6 +135,7 @@ const PLATFORMS: &[Platform] = &[
         rt_signals_reserved: true,
         faccessat_lacks_eaccess: false,
         sock_cloexec: true,
+        search_only_open: Some(SearchOnlyOpen::Path),
     },
     Platform {
         // Android is Linux-like in libc but a distinct `target_os`, and it
@@ -135,6 +150,7 @@ const PLATFORMS: &[Platform] = &[
         rt_signals_reserved: true,
         faccessat_lacks_eaccess: true,
         sock_cloexec: true,
+        search_only_open: Some(SearchOnlyOpen::Path),
     },
     Platform {
         target_os: "macos",
@@ -144,6 +160,7 @@ const PLATFORMS: &[Platform] = &[
         rt_signals_reserved: false,
         faccessat_lacks_eaccess: false,
         sock_cloexec: false,
+        search_only_open: Some(SearchOnlyOpen::Search),
     },
     Platform {
         target_os: "freebsd",
@@ -153,6 +170,7 @@ const PLATFORMS: &[Platform] = &[
         rt_signals_reserved: false,
         faccessat_lacks_eaccess: false,
         sock_cloexec: true,
+        search_only_open: Some(SearchOnlyOpen::Search),
     },
     Platform {
         target_os: "netbsd",
@@ -162,6 +180,7 @@ const PLATFORMS: &[Platform] = &[
         rt_signals_reserved: false,
         faccessat_lacks_eaccess: false,
         sock_cloexec: true,
+        search_only_open: Some(SearchOnlyOpen::Search),
     },
     Platform {
         target_os: "openbsd",
@@ -171,6 +190,7 @@ const PLATFORMS: &[Platform] = &[
         rt_signals_reserved: false,
         faccessat_lacks_eaccess: false,
         sock_cloexec: true,
+        search_only_open: None,
     },
 ];
 
@@ -222,6 +242,14 @@ fn main() {
         (
             "blivet_sock_cloexec",
             platform.is_some_and(|p| p.sock_cloexec),
+        ),
+        (
+            "blivet_search_only_open",
+            platform.is_some_and(|p| p.search_only_open.is_some()),
+        ),
+        (
+            "blivet_search_only_open_path",
+            platform.is_some_and(|p| p.search_only_open == Some(SearchOnlyOpen::Path)),
         ),
     ];
 
