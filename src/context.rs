@@ -308,7 +308,7 @@ impl DaemonContext {
                 Ok(()) => self.launcher = Launcher::Released,
                 // Still waiting, with the channel spent: the report sees a start
                 // that never succeeded (R154) and prints its error (R161).
-                Err(e) => self.report(&ErrorKind::NotifyFailed(e).into()),
+                Err(e) => self.report_error(&ErrorKind::NotifyFailed(e).into()),
             },
             Launcher::Released | Launcher::Foreground => {}
         }
@@ -333,7 +333,7 @@ impl DaemonContext {
     /// a program run with no `argv[0]` can misread its arguments.
     pub fn exec<S: AsRef<CStr>>(mut self, program: &CStr, args: &[S]) -> ! {
         let err = self.try_exec(program, args);
-        self.report(&err.into())
+        self.report_error(&err.into())
     }
 
     /// Everything [`exec`](Self::exec) does short of reporting: returns only
@@ -388,11 +388,6 @@ impl DaemonContext {
     /// pidfile behind, so while the launcher waits the pidfile goes whatever
     /// [`cleanup_on_drop`](crate::DaemonConfig::cleanup_on_drop) says.
     pub fn report_error(&mut self, err: &DaemonizeError) -> ! {
-        self.report(err)
-    }
-
-    /// [`report_error`](Self::report_error), for any error.
-    fn report(&mut self, err: &DaemonizeError) -> ! {
         let code = self.cleanup_and_signal_error(err);
         crate::sys::raw_exit(code as i32)
     }
@@ -476,7 +471,7 @@ impl DaemonContext {
     /// # }
     /// ```
     pub fn report_error_msg(&mut self, code: u8, message: impl Into<String>) -> ! {
-        self.report(&ErrorKind::application(code, message).into())
+        self.report_error(&ErrorKind::application(code, message).into())
     }
 }
 
