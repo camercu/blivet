@@ -370,8 +370,9 @@ impl ErrorKind {
         }
     }
 
-    /// See [`DaemonizeError::exit_code`].
-    pub(crate) fn exit_code(&self) -> u8 {
+    /// Returns the `sysexits.h` exit code for this kind; see
+    /// [`DaemonizeError::exit_code`].
+    pub fn exit_code(&self) -> u8 {
         match self {
             ErrorKind::ValidationError(_) => 64,  // EX_USAGE
             ErrorKind::ProgramNotFound(_) => 66,  // EX_NOINPUT

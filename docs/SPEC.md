@@ -1263,8 +1263,8 @@ continues; (2) `daemonize_with()` with privileged `init` →
   `cleanup_on_drop` is true, `#[non_exhaustive]`.
 - `DaemonizeError`: `kind()`, `into_kind()`, `rollback_failures()`,
   `exit_code()`.
-- `ErrorKind`: each variant's condition. Note which variants only
-  `DaemonContext::exec` produces.
+- `ErrorKind`: each variant's condition, `exit_code()`. Note which
+  variants only `DaemonContext::exec` produces.
 - `RestoreFailure`, `ChangedState`: what a rollback left changed, and why.
 
 ### Cargo.toml metadata
