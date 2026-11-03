@@ -1224,11 +1224,19 @@ mod tests {
     }
 
     // Covers: R164
-    /// A working directory the caller may enter but not read cannot be saved,
-    /// so the rollback cannot go back to it, and says so with the reason.
+    /// A working directory the caller may enter but not read is still put
+    /// back: saving it needs search permission only.
     #[test]
-    fn a_working_directory_that_could_not_be_saved_is_reported() {
-        use crate::ChangedState;
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "android",
+        target_vendor = "apple",
+        target_os = "freebsd",
+        target_os = "netbsd",
+        target_os = "illumos",
+        target_os = "solaris"
+    ))]
+    fn an_unreadable_working_directory_is_put_back() {
         use std::os::unix::fs::PermissionsExt;
         if !isolated() {
             return;
@@ -1237,6 +1245,40 @@ mod tests {
         std::fs::set_permissions(start.path(), std::fs::Permissions::from_mode(0o311)).unwrap();
         crate::test_support::shed_root();
         std::env::set_current_dir(start.path()).unwrap();
+        let work = tempfile::tempdir().unwrap();
+        let mut config = DaemonConfig::new();
+        config.foreground(true).close_fds(false).chdir(work.path());
+
+        let result: Result<(DaemonContext, ()), _> =
+            run_inner_with(&config, &mut NullForker::new(vec![], Ok(())), || {
+                Err(DaemonizeError::application(75, "init failed"))
+            });
+
+        let err = result.expect_err("init failed the start");
+        assert_eq!(
+            (
+                err.rollback_failures().len(),
+                std::env::current_dir().unwrap()
+            ),
+            (0, start.path().canonicalize().unwrap())
+        );
+    }
+
+    // Covers: R164
+    /// A working directory that lost its search permission after the caller
+    /// entered it cannot be saved, so the rollback cannot go back to it, and
+    /// says so with the reason.
+    #[test]
+    fn a_working_directory_that_could_not_be_saved_is_reported() {
+        use crate::ChangedState;
+        use std::os::unix::fs::PermissionsExt;
+        if !isolated() {
+            return;
+        }
+        crate::test_support::shed_root();
+        let start = tempfile::tempdir().unwrap();
+        std::env::set_current_dir(start.path()).unwrap();
+        std::fs::set_permissions(start.path(), std::fs::Permissions::from_mode(0o000)).unwrap();
         let mut config = DaemonConfig::new();
         config.foreground(true).close_fds(false);
 
@@ -1305,10 +1347,10 @@ mod tests {
         if !isolated() {
             return;
         }
-        let start = tempfile::tempdir().unwrap();
-        std::fs::set_permissions(start.path(), std::fs::Permissions::from_mode(0o311)).unwrap();
         crate::test_support::shed_root();
+        let start = tempfile::tempdir().unwrap();
         std::env::set_current_dir(start.path()).unwrap();
+        std::fs::set_permissions(start.path(), std::fs::Permissions::from_mode(0o000)).unwrap();
         let dir = tempfile::tempdir().unwrap();
         let pidfile = dir.path().join("app.pid");
         let mut config = DaemonConfig::new();

@@ -1700,7 +1700,7 @@ fn stdout_and_stderr_on_one_file_share_a_descriptor() {
 #[test]
 fn verbose_foreground_failure_prints_what_the_rollback_left_changed() {
     if nix::unistd::geteuid().is_root() {
-        return; // root reads any directory, so the working directory is saved
+        return; // root searches any directory, so the working directory is saved
     }
     let dir = tempfile::tempdir().unwrap();
     let lockfile = dir.path().join("test.lock");
@@ -1710,10 +1710,13 @@ fn verbose_foreground_failure_prints_what_the_rollback_left_changed() {
         .map_err(|(_, e)| e)
         .unwrap();
     let start = tempfile::tempdir().unwrap();
-    std::fs::set_permissions(start.path(), std::fs::Permissions::from_mode(0o311)).unwrap();
 
-    let output = daemonize_cmd()
+    // The shell enters the directory, then takes away its search permission,
+    // so the CLI cannot save it.
+    let output = Command::new("sh")
         .current_dir(start.path())
+        .args(["-c", "chmod 0 . && exec \"$0\" \"$@\""])
+        .arg(daemonize_bin())
         .args(["-v", "-f", "-l", lockfile.to_str().unwrap(), "--", "true"])
         .output()
         .unwrap();
@@ -1737,7 +1740,7 @@ fn verbose_foreground_failure_prints_what_the_rollback_left_changed() {
 #[test]
 fn foreground_failure_keeps_quiet_about_process_state_it_exits_with() {
     if nix::unistd::geteuid().is_root() {
-        return; // root reads any directory, so the working directory is saved
+        return; // root searches any directory, so the working directory is saved
     }
     let dir = tempfile::tempdir().unwrap();
     let lockfile = dir.path().join("test.lock");
@@ -1747,10 +1750,13 @@ fn foreground_failure_keeps_quiet_about_process_state_it_exits_with() {
         .map_err(|(_, e)| e)
         .unwrap();
     let start = tempfile::tempdir().unwrap();
-    std::fs::set_permissions(start.path(), std::fs::Permissions::from_mode(0o311)).unwrap();
 
-    let output = daemonize_cmd()
+    // The shell enters the directory, then takes away its search permission,
+    // so the CLI cannot save it.
+    let output = Command::new("sh")
         .current_dir(start.path())
+        .args(["-c", "chmod 0 . && exec \"$0\" \"$@\""])
+        .arg(daemonize_bin())
         .args(["-f", "-l", lockfile.to_str().unwrap(), "--", "true"])
         .output()
         .unwrap();

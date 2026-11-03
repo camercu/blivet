@@ -47,14 +47,15 @@ pub(crate) fn change_dir(path: &Path, rollback: Rollback) -> Result<Undo, ErrorK
 
 /// A descriptor of the working directory step 5 left, to `fchdir` back to.
 ///
-/// Best-effort: a directory the caller may enter but not read cannot be
-/// opened, and an undo aid must not fail the start (R164). The restore then
-/// reports why it could not go back.
+/// Opened for search only where the platform can, so a directory the caller
+/// may enter but not read is saved too. Best-effort all the same: an undo aid
+/// must not fail the start (R164), so when the open fails the restore reports
+/// why it could not go back.
 pub(crate) struct Cwd(std::io::Result<OwnedFd>);
 
 impl Cwd {
     fn save() -> Self {
-        Self(super::open_above_stdio(".", OFlag::O_RDONLY, Mode::empty()))
+        Self(super::open_above_stdio(".", SEARCH_ONLY, Mode::empty()))
     }
 
     pub(crate) fn restore(self) -> Result<(), RestoreFailure> {
@@ -67,6 +68,29 @@ impl Cwd {
         self.0.as_ref().ok().map(AsRawFd::as_raw_fd)
     }
 }
+
+/// Flags that open a directory for `fchdir` with search permission alone.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+const SEARCH_ONLY: OFlag = OFlag::O_PATH.union(OFlag::O_DIRECTORY);
+#[cfg(any(
+    target_vendor = "apple",
+    target_os = "freebsd",
+    target_os = "netbsd",
+    target_os = "illumos",
+    target_os = "solaris"
+))]
+const SEARCH_ONLY: OFlag = OFlag::O_SEARCH.union(OFlag::O_DIRECTORY);
+/// No search-only open here: reading the directory is needed.
+#[cfg(not(any(
+    target_os = "linux",
+    target_os = "android",
+    target_vendor = "apple",
+    target_os = "freebsd",
+    target_os = "netbsd",
+    target_os = "illumos",
+    target_os = "solaris"
+)))]
+const SEARCH_ONLY: OFlag = OFlag::O_RDONLY.union(OFlag::O_DIRECTORY);
 
 /// Step 10: Clear the signal mask.
 ///
