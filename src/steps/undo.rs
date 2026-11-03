@@ -1,11 +1,13 @@
 //! Undo tokens: what a step changed, put back when the token drops (R164).
 //!
-//! A step that changes state a caller can see returns an [`Undo`], so the
+//! A step that changes state a caller can see makes an [`Undo`], so the
 //! change and its undo are one value: a step cannot make one without the
-//! other. The sequence holds the tokens in the order the steps ran. On
-//! failure it restores them in reverse and reports each that could not be put
-//! back; at step 18 it keeps them all. A token that drops unrestored puts its
-//! change back and reports nothing.
+//! other. A step that makes one change returns its token; a step that makes
+//! several records each in the [`Ledger`] as it makes it, so a failure part
+//! way leaves nothing unrecorded. The ledger holds the tokens in the order
+//! the changes were made. On failure it restores them in reverse and reports
+//! each that could not be put back; at step 18 it keeps them all. A token
+//! that drops unrestored puts its change back and reports nothing.
 //!
 //! Most tokens hold process state, which a daemon's exit discards, so a
 //! daemon saves none ([`Rollback::Skip`]). A file a step left on disk outlives
@@ -159,16 +161,6 @@ impl Drop for Undo {
     }
 }
 
-/// Puts back what `tokens` hold, latest first, and returns what could not
-/// be put back. For a step that fails part way, and for the sequence.
-pub(crate) fn restore_all(tokens: Vec<Undo>) -> Vec<RestoreFailure> {
-    tokens
-        .into_iter()
-        .rev()
-        .filter_map(|undo| undo.restore().err())
-        .collect()
-}
-
 /// The sequence's record of what its steps changed (R164): each step's
 /// tokens, in the order the steps ran.
 ///
@@ -236,7 +228,11 @@ impl Ledger {
     /// Puts back every recorded change, latest first, and returns what could
     /// not be put back.
     pub(crate) fn roll_back(&mut self) -> Vec<RestoreFailure> {
-        restore_all(std::mem::take(&mut self.undo))
+        std::mem::take(&mut self.undo)
+            .into_iter()
+            .rev()
+            .filter_map(|undo| undo.restore().err())
+            .collect()
     }
 
     /// Keeps every recorded change.

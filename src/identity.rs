@@ -92,9 +92,10 @@ impl ResolvedIdentity {
     /// itself, so these paths belong in directories untrusted users cannot
     /// write.
     ///
-    /// Returns a token per file chowned, in both modes: the owner is on
-    /// disk, so it outlives a daemon that exits (R164). A failure gives back
-    /// the owners of the files chowned before it.
+    /// Records a token per file chowned in `ledger`, in both modes: the
+    /// owner is on disk, so it outlives a daemon that exits (R164). Each goes
+    /// in as its file is chowned, so a failure part way leaves the ledger to
+    /// give back the owners of the files chowned before it.
     ///
     /// # Errors
     ///
@@ -102,23 +103,7 @@ impl ResolvedIdentity {
     pub(crate) fn chown_files<'p>(
         &self,
         files: impl IntoIterator<Item = (&'p Path, std::os::fd::BorrowedFd<'p>)>,
-    ) -> Result<Vec<crate::steps::Undo>, DaemonizeError> {
-        let mut chowned = Vec::new();
-        match self.chown_files_into(files, &mut chowned) {
-            Ok(()) => Ok(chowned),
-            Err(e) => {
-                let failures = crate::steps::restore_all(chowned);
-                Err(DaemonizeError::from(e).with_rollback_failures(failures))
-            }
-        }
-    }
-
-    /// The work of [`chown_files`](Self::chown_files), leaving each file's
-    /// token in `chowned`.
-    fn chown_files_into<'p>(
-        &self,
-        files: impl IntoIterator<Item = (&'p Path, std::os::fd::BorrowedFd<'p>)>,
-        chowned: &mut Vec<crate::steps::Undo>,
+        ledger: &mut crate::steps::Ledger,
     ) -> Result<(), ErrorKind> {
         use crate::steps::{Saved, Undo};
         let (owner, group) = self.chown_ids();
@@ -135,11 +120,11 @@ impl ResolvedIdentity {
             // sequence's copy closes when the sequence ends.
             let held = fd.try_clone_to_owned();
             nix::unistd::fchown(fd, owner, group).map_err(|e| failed(path, e))?;
-            chowned.push(Undo::new(Saved::Owner(Owner {
+            ledger.record(Undo::new(Saved::Owner(Owner {
                 path: path.to_path_buf(),
                 fd: held,
                 was: (Uid::from_raw(st.st_uid), Gid::from_raw(st.st_gid)),
-            })));
+            })))?;
         }
         Ok(())
     }

@@ -195,19 +195,6 @@ impl AbortGuard<'_> {
     }
 }
 
-/// As [`Ledger::record`](steps::Ledger::record), for each of a step's tokens.
-fn record_all(ledger: &mut steps::Ledger, undo: Vec<steps::Undo>) -> Result<(), DaemonizeError> {
-    let mut undo = undo.into_iter();
-    while let Some(next) = undo.next() {
-        if let Err(e) = ledger.record(next) {
-            // The rest restore now, latest first, before the recorded.
-            let failures = steps::restore_all(undo.collect());
-            return Err(DaemonizeError::from(e).with_rollback_failures(failures));
-        }
-    }
-    Ok(())
-}
-
 /// Steps 4–18: apply the configuration in the final daemon process.
 ///
 /// Forker-free and fallible: every step returns its error rather than touching
@@ -368,8 +355,7 @@ unsafe fn run_steps<'a, T>(
     if let Some(identity) = &identity {
         // The files as opened, by descriptor (R163); for stdout and stderr,
         // step 12's, as init may have moved fds 1 and 2.
-        let chowned = identity.chown_files(steps::chown_targets(files, config.chown_paths))?;
-        record_all(ledger, chowned)?;
+        identity.chown_files(steps::chown_targets(files, config.chown_paths), ledger)?;
     }
     #[cfg(test)]
     if steps::failpoints::BEFORE_SWITCH_FAILS.injected() {
