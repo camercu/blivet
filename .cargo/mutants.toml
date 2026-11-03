@@ -40,4 +40,10 @@ exclude_re = [
     'replace \| with \^ in open_pidfile$',
     'replace \| with \^ in open_stream$',
     'replace \| with \^ in channel$',
+    # -- equivalent by redundancy --
+    # The guard's Drop rolls the ledger back before `files` releases the
+    # lock. The ledger's own Drop does the same when the guard's body is gone,
+    # because `ledger` is declared before `files`. The body keeps the
+    # pidfile-before-lock order if the fields are ever reordered.
+    'replace <impl Drop for AbortGuard<._>>::drop with [(][)]$',
 ]
