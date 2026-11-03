@@ -68,6 +68,7 @@ dropped, so the daemon can continue to write to them after the switch.
 :   Write the daemon's PID to *path*. The path must be absolute.
     When **--lock** is not specified, the pidfile is also used as the
     lock file, providing single-instance enforcement by default.
+    A *path* that is a symlink is refused.
 
 **-c**, **--chdir** *path*
 :   Change the daemon's working directory to *path* (default: **/**).
@@ -249,8 +250,8 @@ directly does not have this limitation, as it can install its own cleanup
 handler before any **exec**(3).
 
 When **-u** or **-g** is given, the ownership transfer (step 9) uses
-**chown**(2), which follows symlinks: a symlinked PID file, lock file, or
-output path has its target chowned while still privileged. Point these paths
+**chown**(2), which follows symlinks: a symlinked lock file or output path
+has its target chowned while still privileged. Point these paths
 only at directories not writable by untrusted users, so a planted symlink
 cannot redirect the chown onto an arbitrary file.
 

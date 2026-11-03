@@ -262,15 +262,15 @@ unsafe fn run_steps<'a, T>(
     // unless derivation was opted out)
     let lockfile_path = config.effective_lockfile().map(std::path::PathBuf::as_path);
     if let Some(path) = lockfile_path {
-        let (lock, created) = steps::lock_path(path)?;
-        let id = crate::file_identity::file_id(&*lock)
-            .map_err(|e| ErrorKind::LockfileError(format!("fstat: {e}")))?;
-        files.push(path, steps::Role::Lockfile(lock), id);
-        // A lockfile that is the pidfile goes with step 8's token.
         let is_pidfile = config
             .pidfile
             .as_deref()
             .is_some_and(|pidfile| crate::file_identity::paths_same(pidfile, path));
+        let (lock, created) = steps::lock_path(path, is_pidfile)?;
+        let id = crate::file_identity::file_id(&*lock)
+            .map_err(|e| ErrorKind::LockfileError(format!("fstat: {e}")))?;
+        files.push(path, steps::Role::Lockfile(lock), id);
+        // A lockfile that is the pidfile goes with step 8's token.
         if created && !is_pidfile {
             let removal = steps::Removal::new(path, id, steps::Created::Lockfile);
             ledger.record_lasting(steps::Saved::Removal(removal))?;
@@ -1631,6 +1631,98 @@ mod tests {
         assert!(exited.is_err(), "a daemon-mode failure exits");
         let kept = std::fs::read_to_string(&log).unwrap_or_default();
         assert!(kept.starts_with("connect: refused\n"), "log: {kept:?}");
+    }
+
+    // Covers: R164
+    /// A symlink put at the pidfile's path since, even one to the pidfile,
+    /// is not the start's to remove: the rollback unlinks a path only while
+    /// the path itself is the file the start wrote.
+    #[test]
+    fn a_symlink_put_at_the_pidfile_path_is_left() {
+        if !isolated() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let pidfile = dir.path().join("app.pid");
+        let moved = dir.path().join("moved.pid");
+        let mut config = DaemonConfig::new();
+        config
+            .foreground(true)
+            .close_fds(false)
+            .no_lockfile()
+            .pidfile(&pidfile);
+
+        let result: Result<(DaemonContext, ()), _> =
+            run_inner_with(&config, &mut NullForker::new(vec![], Ok(())), || {
+                std::fs::rename(&pidfile, &moved).unwrap();
+                std::os::unix::fs::symlink(&moved, &pidfile).unwrap();
+                Err(DaemonizeError::application(75, "init failed"))
+            });
+
+        assert!(result.is_err());
+        assert!(
+            std::fs::symlink_metadata(&pidfile).is_ok(),
+            "the rollback removed a symlink it did not make"
+        );
+    }
+
+    // Covers: R164
+    /// A pidfile path that is a symlink is refused, not written through: a
+    /// failed start could not then remove what it wrote. Opened standalone.
+    #[test]
+    fn a_standalone_pidfile_symlink_is_refused() {
+        if !isolated() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("target.pid");
+        std::fs::write(&target, "").unwrap();
+        let pidfile = dir.path().join("app.pid");
+        std::os::unix::fs::symlink(&target, &pidfile).unwrap();
+        let mut config = DaemonConfig::new();
+        config
+            .foreground(true)
+            .close_fds(false)
+            .no_lockfile()
+            .pidfile(&pidfile);
+
+        let result = run_inner(&config, &mut NullForker::new(vec![], Ok(())));
+
+        assert!(
+            matches!(
+                result.as_ref().map_err(DaemonizeError::kind),
+                Err(ErrorKind::PidfileError(_))
+            ),
+            "{result:?}"
+        );
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "");
+    }
+
+    // Covers: R164
+    /// The same, for a pidfile that is its own lockfile.
+    #[test]
+    fn a_locked_pidfile_symlink_is_refused() {
+        if !isolated() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("target.pid");
+        std::fs::write(&target, "").unwrap();
+        let pidfile = dir.path().join("app.pid");
+        std::os::unix::fs::symlink(&target, &pidfile).unwrap();
+        let mut config = DaemonConfig::new();
+        config.foreground(true).close_fds(false).pidfile(&pidfile);
+
+        let result = run_inner(&config, &mut NullForker::new(vec![], Ok(())));
+
+        assert!(
+            matches!(
+                result.as_ref().map_err(DaemonizeError::kind),
+                Err(ErrorKind::LockfileError(_))
+            ),
+            "{result:?}"
+        );
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "");
     }
 
     // Covers: R164

@@ -102,6 +102,9 @@ impl DaemonConfig {
     /// [`LockConflict`](crate::ErrorKind::LockConflict) instead of
     /// silently overwriting the pidfile. Opt out with
     /// [`no_lockfile`](DaemonConfig::no_lockfile).
+    ///
+    /// A path that is a symlink fails the start: a failed start removes the
+    /// pidfile it wrote, and could not remove one written through a link.
     pub fn pidfile(&mut self, path: impl Into<PathBuf>) -> &mut Self {
         self.pidfile = Some(path.into());
         self

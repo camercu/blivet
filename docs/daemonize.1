@@ -84,6 +84,7 @@ Write the daemon\(cqs PID to \f[I]path\f[R].
 The path must be absolute.
 When \f[B]\(enlock\f[R] is not specified, the pidfile is also used as
 the lock file, providing single\-instance enforcement by default.
+A \f[I]path\f[R] that is a symlink is refused.
 .TP
 \f[B]\-c\f[R], \f[B]\(enchdir\f[R] \f[I]path\f[R]
 Change the daemon\(cqs working directory to \f[I]path\f[R] (default:
@@ -299,8 +300,7 @@ this limitation, as it can install its own cleanup handler before any
 .PP
 When \f[B]\-u\f[R] or \f[B]\-g\f[R] is given, the ownership transfer
 (step 9) uses \f[B]chown\f[R](2), which follows symlinks: a symlinked
-PID file, lock file, or output path has its target chowned while still
-privileged.
+lock file or output path has its target chowned while still privileged.
 Point these paths only at directories not writable by untrusted users,
 so a planted symlink cannot redirect the chown onto an arbitrary file.
 .SH SEE ALSO

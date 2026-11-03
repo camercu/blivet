@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use nix::fcntl::Flock;
 
 use crate::error::{ChangedState, RestoreFailure};
-use crate::file_identity::{FileId, stat_if_named};
+use crate::file_identity::{FileId, lstat_if_named};
 
 /// What a file is to the sequence, with the descriptor that holds it.
 pub(crate) enum Role {
@@ -70,8 +70,9 @@ impl Created {
 
 /// A file a step left on disk, to remove on failure in either mode (R164).
 ///
-/// Removed only while the path still names it: a file another process put
-/// there since is not this one's to remove.
+/// Removed only while the path itself is still the file: a file another
+/// process put there since, or a symlink, even one to the file, is not this
+/// one's to remove.
 pub(crate) struct Removal {
     path: PathBuf,
     id: FileId,
@@ -89,7 +90,7 @@ impl Removal {
 
     pub(crate) fn restore(self) -> Result<(), RestoreFailure> {
         let failed = |e: std::io::Error| RestoreFailure::at(self.what.state(), &self.path, e);
-        match stat_if_named(&self.path, self.id) {
+        match lstat_if_named(&self.path, self.id) {
             Ok(Some(st)) if self.what.kept_once_written() && st.st_size > 0 => Ok(()),
             Ok(Some(_)) => std::fs::remove_file(&self.path).map_err(failed),
             Ok(None) => Ok(()),

@@ -614,7 +614,8 @@ undefined behaviour.
    pidfile — see Lockfile derivation). Open with
    `O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC`, mode 0644, falling back
    to an open without `O_EXCL` when the file exists, which tells the
-   start whether it created the file (R164). Then
+   start whether it created the file (R164). A lockfile derived from
+   the pidfile also opens with `O_NOFOLLOW` (see pidfile mechanics). Then
    `flock(LOCK_EX | LOCK_NB)`, and recheck that the path still names
    the locked file, reopening if not (R169). Open failure:
    `LockfileError`. Flock failure: `LockConflict`. The fd is held from
@@ -785,7 +786,10 @@ The append flag applies uniformly to both stdout and stderr.
 If lockfile and pidfile are the same path, seek to 0, truncate, and
 write PID + `\n` to the already-locked fd from step 7. Otherwise open
 with `O_WRONLY | O_CREAT | O_TRUNC`, mode 0644, write PID + `\n`, and
-close. Write failure returns `PidfileError`. When not configured, no
+close. Either open adds `O_NOFOLLOW`: a pidfile path that is a symlink
+fails the start (`PidfileError`, or `LockfileError` when the pidfile is
+the lockfile), since a failed start could not remove a pidfile written
+through one (R164). Write failure returns `PidfileError`. When not configured, no
 pidfile is created. The pidfile is removed on exit when `cleanup_on_drop`
 is `true` (the default); see `DaemonContext::cleanup()`.
 
@@ -1727,8 +1731,9 @@ on any change to it, so the rows only copied the snapshot.
   log something wrote to may say why the start failed, so it stays;
   the rollback flushes the process's stdout buffer first).
   It removes each only while its
-  path still names the file the start wrote, compared by device and
-  inode, so a file another process put there since stays. The files
+  path itself is still the file the start wrote, compared by device and
+  inode without following a symlink, so a file or symlink another
+  process put there since stays. The files
   go before the lock is released, so a second instance cannot take the
   lock and lose its pidfile to the first. It cannot restore inherited
   descriptors it closed, or a saved gid that differed from the real one

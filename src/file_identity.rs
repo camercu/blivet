@@ -32,13 +32,29 @@ impl FileId {
     }
 }
 
-/// What `path` names, while that is still the file `id`: `None` once the
-/// path is gone or names another file.
+/// What `path` names, through any symlink, while that is still the file
+/// `id`: `None` once the path is gone or names another file.
 pub(crate) fn stat_if_named(
     path: &Path,
     id: FileId,
 ) -> Result<Option<nix::sys::stat::FileStat>, nix::errno::Errno> {
-    match nix::sys::stat::stat(path) {
+    if_named(nix::sys::stat::stat(path), id)
+}
+
+/// As [`stat_if_named`], for the path itself: a symlink there is not the
+/// file `id`, even one to it. For a check before unlinking the path.
+pub(crate) fn lstat_if_named(
+    path: &Path,
+    id: FileId,
+) -> Result<Option<nix::sys::stat::FileStat>, nix::errno::Errno> {
+    if_named(nix::sys::stat::lstat(path), id)
+}
+
+fn if_named(
+    stat: nix::Result<nix::sys::stat::FileStat>,
+    id: FileId,
+) -> Result<Option<nix::sys::stat::FileStat>, nix::errno::Errno> {
+    match stat {
         Ok(st) if FileId::of(&st) == id => Ok(Some(st)),
         Ok(_) | Err(nix::errno::Errno::ENOENT) => Ok(None),
         Err(e) => Err(e),

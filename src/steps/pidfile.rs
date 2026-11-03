@@ -20,9 +20,15 @@ use crate::file_identity::{FileId, file_id, paths_same, stat_if_named};
 /// lock would guard nothing: the next instance creates the path anew and locks
 /// that. So the lock counts only once the path still names the locked file;
 /// else the step opens the path again, up to [`LOCK_ATTEMPTS`] times.
-pub(crate) fn lock_path(path: &Path) -> Result<(Flock<OwnedFd>, bool), ErrorKind> {
+///
+/// A lockfile that is the pidfile is opened as the pidfile is, refusing a
+/// symlink (see [`open_pidfile`]).
+pub(crate) fn lock_path(
+    path: &Path,
+    is_pidfile: bool,
+) -> Result<(Flock<OwnedFd>, bool), ErrorKind> {
     for _ in 0..LOCK_ATTEMPTS {
-        let (flock, created) = lock_once(path)?;
+        let (flock, created) = lock_once(path, is_pidfile)?;
         let locked = file_id(&*flock)
             .map_err(|e| ErrorKind::LockfileError(format!("fstat {}: {e}", path.display())))?;
         let named = stat_if_named(path, locked)
@@ -40,7 +46,7 @@ pub(crate) fn lock_path(path: &Path) -> Result<(Flock<OwnedFd>, bool), ErrorKind
 /// [`lock_path`], for the tests that want only the lock.
 #[cfg(test)]
 pub(crate) fn open_and_lock(path: &Path) -> Result<Flock<OwnedFd>, ErrorKind> {
-    lock_path(path).map(|(flock, _)| flock)
+    lock_path(path, false).map(|(flock, _)| flock)
 }
 
 /// How often step 7 opens the lockfile again when the path stopped naming the
@@ -49,8 +55,13 @@ pub(crate) fn open_and_lock(path: &Path) -> Result<Flock<OwnedFd>, ErrorKind> {
 const LOCK_ATTEMPTS: usize = 8;
 
 /// Opens the lockfile and takes its lock, without checking the path.
-fn lock_once(path: &Path) -> Result<(Flock<OwnedFd>, bool), ErrorKind> {
-    let (fd, created) = open_creating(path, OFlag::O_WRONLY, Mode::from_bits_truncate(0o644))
+fn lock_once(path: &Path, is_pidfile: bool) -> Result<(Flock<OwnedFd>, bool), ErrorKind> {
+    let flags = if is_pidfile {
+        OFlag::O_WRONLY | OFlag::O_NOFOLLOW
+    } else {
+        OFlag::O_WRONLY
+    };
+    let (fd, created) = open_creating(path, flags, Mode::from_bits_truncate(0o644))
         .map_err(|e| ErrorKind::LockfileError(format!("cannot open {}: {e}", path.display())))?;
 
     #[cfg(test)]
@@ -94,10 +105,13 @@ pub(crate) fn open_pidfile<'a>(
         )));
     }
     // Open explicitly with mode 0644 (R98); std::fs::write would create the
-    // file 0666 & ~umask, violating the mandated pidfile permissions.
+    // file 0666 & ~umask, violating the mandated pidfile permissions. A
+    // symlink is refused: a failed start removes the pidfile only while the
+    // path itself is the file it wrote (R164), and could not remove one
+    // written through a link.
     let fd = open_above_stdio(
         pidfile_path,
-        OFlag::O_WRONLY | OFlag::O_CREAT | OFlag::O_TRUNC,
+        OFlag::O_WRONLY | OFlag::O_CREAT | OFlag::O_TRUNC | OFlag::O_NOFOLLOW,
         Mode::from_bits_truncate(0o644),
     )
     .map_err(|e| ErrorKind::PidfileError(format!("open {}: {e}", pidfile_path.display())))?;

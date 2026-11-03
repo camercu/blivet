@@ -1588,18 +1588,23 @@ fn assert_rejected_as_same_file(output: &std::process::Output) {
 #[test]
 fn stdout_through_a_dangling_symlink_to_the_pidfile_is_rejected() {
     let dir = tempfile::tempdir().unwrap();
-    let out = dir.path().join("out.log");
+    let pidfile = dir.path().join("daemon.pid");
     let link = dir.path().join("link");
-    std::os::unix::fs::symlink(&out, &link).unwrap();
+    std::os::unix::fs::symlink(&pidfile, &link).unwrap();
 
     let output = daemonize_cmd()
-        .args(["-p", link.to_str().unwrap(), "-o", out.to_str().unwrap()])
+        .args([
+            "-p",
+            pidfile.to_str().unwrap(),
+            "-o",
+            link.to_str().unwrap(),
+        ])
         .args(["--", "echo", "hello"])
         .output()
         .unwrap();
 
     assert_rejected_as_same_file(&output);
-    let left = std::fs::read_to_string(&out).unwrap_or_default();
+    let left = std::fs::read_to_string(&pidfile).unwrap_or_default();
     assert!(
         !left.contains("hello"),
         "the program's output reached the pidfile: {left:?}"
