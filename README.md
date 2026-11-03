@@ -231,6 +231,28 @@ error's message stays the kind's. The CLI prints one `rollback left <state>
 instead of returning, and sends the same lines to the launcher after its
 error message.
 
+A foreground start returns every error to its caller, so match on `kind()` to
+handle one failure apart from the rest. (In daemon mode a failure after the
+fork ends the daemon and reaches only the launcher.)
+
+```rust,no_run
+use blivet::{daemonize, DaemonConfig, ErrorKind};
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let mut config = DaemonConfig::new();
+    config.pidfile("/var/run/myapp.pid").foreground(true);
+
+    let mut ctx = match daemonize(&config) {
+        Ok(ctx) => ctx,
+        // Another instance already runs: nothing to do.
+        Err(e) if matches!(e.kind(), ErrorKind::LockConflict { .. }) => return Ok(()),
+        Err(e) => return Err(e.into()),
+    };
+    ctx.notify_parent()?;
+    Ok(())
+}
+```
+
 ## Recipes
 
 ### Pidfile cleanup on signals

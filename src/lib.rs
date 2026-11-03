@@ -253,7 +253,9 @@ use forker::RealForker;
 /// during the daemonization sequence. Pre-fork errors are returned
 /// directly; post-fork errors are reported via the notification channel.
 /// In foreground mode every error is returned directly — the library
-/// never exits the caller's process. A system call that fails with no more
+/// never exits the caller's process — after the sequence puts back what it
+/// changed; see [`rollback_failures`](DaemonizeError::rollback_failures).
+/// Either mode removes the files a failed start created. A system call that fails with no more
 /// specific variant, such as creating the notification channel with no
 /// descriptor free, returns `SystemError`.
 #[cfg(unix)]
@@ -279,7 +281,8 @@ pub unsafe fn daemonize_unchecked(config: &DaemonConfig) -> Result<DaemonContext
 ///
 /// As [`daemonize_unchecked`]. An error from `init` is the sequence's error:
 /// returned in foreground mode, sent to the launcher with its exit code in
-/// daemon mode. Either way the pidfile the sequence wrote is removed.
+/// daemon mode. Either way the start is rolled back as for any failed step,
+/// the pidfile it wrote removed included.
 #[cfg(unix)]
 #[allow(unsafe_code)]
 pub unsafe fn daemonize_with_unchecked<T>(

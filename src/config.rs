@@ -225,6 +225,10 @@ impl DaemonConfig {
     /// redirected to `/dev/null`) unless explicitly configured with
     /// [`stdout`](DaemonConfig::stdout)/[`stderr`](DaemonConfig::stderr).
     /// All other steps (umask, chdir, signal reset, etc.) still execute.
+    ///
+    /// Every error comes back to the caller. A failed start first puts back
+    /// what it changed in the process; what it could not put back is in
+    /// [`rollback_failures`](crate::DaemonizeError::rollback_failures).
     pub fn foreground(&mut self, foreground: bool) -> &mut Self {
         self.foreground = foreground;
         self
