@@ -7,10 +7,9 @@
 
 use std::os::fd::{AsRawFd, OwnedFd};
 
-use nix::fcntl::Flock;
 use nix::unistd::ForkResult;
 
-use crate::error::{ChangedState, RestoreFailure};
+use crate::error::ChangedState;
 use crate::forker::Forker;
 use crate::identity::ResolvedIdentity;
 use crate::notify::{self, NotifyChannel};
@@ -160,122 +159,53 @@ fn panicked(payload: &(dyn std::any::Any + Send)) -> ErrorKind {
     ErrorKind::application(70, format!("daemon panicked during startup: {text}"))
 }
 
-/// What a failed sequence undoes (R164): each step's [`Undo`](steps::Undo)
-/// token, in the reverse of the order the steps ran, and last the lock
-/// (step 7). A half-done identity switch (step 17) undoes itself.
-/// [`roll_back`](Self::roll_back) returns what it could not undo, for the
-/// error; a panic unwinding past the sequence rolls back in `Drop`, with
-/// nowhere to report.
+/// What a failed sequence undoes (R164): each change in the
+/// [`Ledger`](steps::Ledger), in the reverse of the order the steps made
+/// them, and last the lock (step 7). A half-done identity switch (step 17)
+/// undoes itself. A panic unwinding past the sequence rolls back as the
+/// guard drops, with nowhere to report.
 ///
 /// In foreground mode the process is the caller's, and it gets back the parts
 /// that can be restored. In daemon mode the process exits on failure, so only
 /// the tokens for files on disk hold anything. What cannot be restored is in
-/// R164. [`disarm`](Self::disarm) at step 18 keeps every change and hands over
-/// the lock.
+/// R164. Step 18 keeps every change and hands over the lock.
 ///
 /// The pidfile goes while the lock is still held: released first, the lock
 /// would let a second instance in to write its pid into a file this one then
-/// removes. Fields drop after the body of [`Drop::drop`], so the lock in
-/// `files` is released after the body has removed the pidfile.
+/// removes. Fields drop in the order declared, so `ledger` removes the
+/// pidfile before `files` releases the lock.
 struct AbortGuard<'a> {
-    /// `PutBack` in foreground mode, `Skip` in a daemon: the one place the
-    /// sequence decides how much a failure undoes.
-    rollback: steps::Rollback,
-    /// Each step's token, in the order the steps ran.
-    undo: Vec<steps::Undo>,
-    /// The checkpoints passed, where the undo walk may fail the sequence.
-    #[cfg(test)]
-    checkpoints: usize,
+    /// What the steps changed. Declared before `files`: see above.
+    ledger: steps::Ledger,
     /// The files steps 7, 8 and 12 opened, the lock among them.
     files: steps::OpenedFiles<'a>,
 }
 
 impl AbortGuard<'_> {
     fn new(foreground: bool) -> Self {
+        let rollback = if foreground {
+            steps::Rollback::PutBack
+        } else {
+            steps::Rollback::Skip
+        };
         Self {
-            rollback: if foreground {
-                steps::Rollback::PutBack
-            } else {
-                steps::Rollback::Skip
-            },
-            undo: Vec::new(),
-            #[cfg(test)]
-            checkpoints: 0,
+            ledger: steps::Ledger::new(rollback),
             files: steps::OpenedFiles::default(),
         }
     }
-
-    /// Whether steps save what they change.
-    fn rollback(&self) -> steps::Rollback {
-        self.rollback
-    }
-
-    /// Holds a step's token, to drop on failure.
-    fn record(&mut self, undo: steps::Undo) -> Result<(), ErrorKind> {
-        self.undo.push(undo);
-        self.checkpoint()
-    }
-
-    /// A point the undo walk may fail the sequence at; nothing outside tests.
-    fn checkpoint(&mut self) -> Result<(), ErrorKind> {
-        #[cfg(test)]
-        {
-            self.checkpoints += 1;
-            if steps::failpoints::checkpoint_fails(self.checkpoints) {
-                return Err(ErrorKind::SystemError(
-                    steps::failpoints::CHECKPOINT_FAILURE.into(),
-                ));
-            }
-        }
-        Ok(())
-    }
-
-    /// As [`record`](Self::record), for each of a step's tokens.
-    fn record_all(&mut self, undo: Vec<steps::Undo>) -> Result<(), DaemonizeError> {
-        let mut undo = undo.into_iter();
-        while let Some(next) = undo.next() {
-            if let Err(e) = self.record(next) {
-                // The rest restore now, latest first, before the recorded.
-                let failures = steps::restore_all(undo.collect());
-                return Err(DaemonizeError::from(e).with_rollback_failures(failures));
-            }
-        }
-        Ok(())
-    }
-
-    /// From `init` on other threads may run, so a token whose restore is
-    /// unsafe then (the env's `setenv`) restores nothing (R164).
-    fn threads_may_start(&mut self) {
-        self.undo
-            .iter_mut()
-            .for_each(steps::Undo::threads_may_start);
-    }
-
-    /// The descriptors the tokens hold, which the fd sweep must spare.
-    fn held_fds(&self) -> impl Iterator<Item = i32> + '_ {
-        self.undo.iter().filter_map(steps::Undo::held_fd)
-    }
-
-    /// Puts back every recorded change, latest first, and returns what could
-    /// not be put back.
-    fn roll_back(&mut self) -> Vec<RestoreFailure> {
-        steps::restore_all(std::mem::take(&mut self.undo))
-    }
-
-    /// The sequence finished: keep every change, and hand over the lock.
-    fn disarm(&mut self) -> Option<Flock<OwnedFd>> {
-        self.undo.drain(..).for_each(steps::Undo::keep);
-        self.files.take_lock()
-    }
 }
 
-impl Drop for AbortGuard<'_> {
-    fn drop(&mut self) {
-        // Empty unless a panic unwound past `run_post_fork`, which leaves no
-        // error to report the failures in.
-        let _ = self.roll_back();
-        // `files` drops after this body, so the pidfile is gone first.
+/// As [`Ledger::record`](steps::Ledger::record), for each of a step's tokens.
+fn record_all(ledger: &mut steps::Ledger, undo: Vec<steps::Undo>) -> Result<(), DaemonizeError> {
+    let mut undo = undo.into_iter();
+    while let Some(next) = undo.next() {
+        if let Err(e) = ledger.record(next) {
+            // The rest restore now, latest first, before the recorded.
+            let failures = steps::restore_all(undo.collect());
+            return Err(DaemonizeError::from(e).with_rollback_failures(failures));
+        }
     }
+    Ok(())
 }
 
 /// Steps 4–18: apply the configuration in the final daemon process.
@@ -301,7 +231,7 @@ unsafe fn run_post_fork<T>(
     let mut abort = AbortGuard::new(config.foreground);
     // SAFETY: this function's contract, passed on.
     let result = unsafe { run_steps(config, pipe_wr, init, &mut abort) };
-    result.map_err(|e| e.with_rollback_failures(abort.roll_back()))
+    result.map_err(|e| e.with_rollback_failures(abort.ledger.roll_back()))
 }
 
 /// The steps of [`run_post_fork`], recording in `abort` what each changed.
@@ -316,19 +246,20 @@ unsafe fn run_steps<'a, T>(
     init: impl FnOnce() -> Result<T, DaemonizeError>,
     abort: &mut AbortGuard<'a>,
 ) -> Result<(DaemonContext, T), DaemonizeError> {
+    let AbortGuard { ledger, files } = abort;
     // Step 4: Set umask
-    abort.record(steps::set_umask(config.umask, abort.rollback()))?;
+    ledger.record(steps::set_umask(config.umask, ledger.rollback()))?;
 
     // Step 5: chdir
-    abort.record(steps::change_dir(&config.chdir, abort.rollback())?)?;
+    ledger.record(steps::change_dir(&config.chdir, ledger.rollback())?)?;
 
     // Step 6: Redirect stdin to /dev/null (always); redirect stdout/stderr
     // to /dev/null only when not in foreground mode (foreground leaves them
     // inherited so output reaches the terminal or supervisor).
-    abort.record_all(steps::redirect_to_devnull(
-        !config.foreground,
-        abort.rollback(),
-    )?)?;
+    record_all(
+        ledger,
+        steps::redirect_to_devnull(!config.foreground, ledger.rollback())?,
+    )?;
 
     // Step 7: Open and lock lockfile (explicit path, or the pidfile itself
     // unless derivation was opted out)
@@ -337,7 +268,7 @@ unsafe fn run_steps<'a, T>(
         let (lock, created) = steps::lock_path(path)?;
         let id = crate::file_identity::file_id(&*lock)
             .map_err(|e| ErrorKind::LockfileError(format!("fstat: {e}")))?;
-        abort.files.push(path, steps::Role::Lockfile(lock), id);
+        files.push(path, steps::Role::Lockfile(lock), id);
         // A lockfile that is the pidfile goes with step 8's token.
         let is_pidfile = config
             .pidfile
@@ -345,7 +276,7 @@ unsafe fn run_steps<'a, T>(
             .is_some_and(|pidfile| crate::file_identity::paths_same(pidfile, path));
         if created && !is_pidfile {
             let removal = steps::Removal::new(path, id, ChangedState::Lockfile);
-            abort.record(steps::Undo::new(steps::Saved::Removal(removal)))?;
+            ledger.record(steps::Undo::new(steps::Saved::Removal(removal)))?;
         }
     }
 
@@ -359,30 +290,25 @@ unsafe fn run_steps<'a, T>(
     // both modes: the file outlives a daemon that exits.
     let mut pidfile_id = None;
     if let Some(ref pidfile_path) = config.pidfile {
-        let pidfile = steps::open_pidfile(pidfile_path, abort.files.lock())?;
+        let pidfile = steps::open_pidfile(pidfile_path, files.lock())?;
         let removal = steps::Removal::new(pidfile_path, pidfile.id()?, ChangedState::Pidfile);
-        // `pidfile` borrows the lock from `abort.files`, so the token goes in
-        // by field, and its checkpoint follows the write.
-        abort
-            .undo
-            .push(steps::Undo::new(steps::Saved::Removal(removal)));
+        ledger.record(steps::Undo::new(steps::Saved::Removal(removal)))?;
         let (id, fd) = pidfile.write_pid()?;
-        abort.checkpoint()?;
         pidfile_id = Some(id);
         // A standalone pidfile's descriptor, kept for step 16's chown (R163).
         if let Some(fd) = fd {
-            abort.files.push(pidfile_path, steps::Role::Pidfile(fd), id);
+            files.push(pidfile_path, steps::Role::Pidfile(fd), id);
         }
     }
 
     // Step 9: Reset signal dispositions
-    abort.record(signals::reset_signal_dispositions(abort.rollback())?)?;
+    ledger.record(signals::reset_signal_dispositions(ledger.rollback())?)?;
 
     // Step 10: Clear signal mask
-    abort.record(steps::clear_signal_mask(abort.rollback())?)?;
+    ledger.record(steps::clear_signal_mask(ledger.rollback())?)?;
 
     // Step 11: Set environment variables
-    abort.record(steps::set_env_vars(&config.env, abort.rollback()))?;
+    ledger.record(steps::set_env_vars(&config.env, ledger.rollback()))?;
 
     // Step 12: Redirect stdout/stderr to configured files. Only a foreground
     // caller sees the slots after a failure, so only it pays for saving them.
@@ -392,19 +318,19 @@ unsafe fn run_steps<'a, T>(
             config.stdout.as_deref(),
             config.stderr.as_deref(),
             config.append,
-            &abort.files.owned(pidfile_id),
-            abort.rollback(),
+            &files.owned(pidfile_id),
+            ledger.rollback(),
         )?;
-        abort.record_all(redirected.undo)?;
+        record_all(ledger, redirected.undo)?;
         for (path, fd, id) in redirected.files {
-            abort.files.push(path, steps::Role::Stream(fd), id);
+            files.push(path, steps::Role::Stream(fd), id);
         }
     }
 
     // Step 13: Close inherited fds (if enabled)
     if config.close_fds {
         let pipe = pipe_wr.as_ref().map(|wr| wr.as_fd().as_raw_fd());
-        let spared = steps::spared_fds(&abort.files, abort.held_fds(), pipe);
+        let spared = steps::spared_fds(files, ledger.held_fds(), pipe);
         steps::close_inherited_fds(&spared)?;
     }
 
@@ -421,14 +347,14 @@ unsafe fn run_steps<'a, T>(
     // The supplementary groups too, from the real group database, before
     // init can change root (R162).
     if let Some(identity) = &identity {
-        abort.record(identity.join_groups(abort.rollback())?)?;
+        ledger.record(identity.join_groups(ledger.rollback())?)?;
     }
 
     // Step 15: Empty the stream files, the one change no rollback can undo,
     // so it comes as late as `init` allows: init writes to them.
     if !config.append {
-        let emptied = steps::truncate_streams(abort.files.streams())?;
-        abort.record_all(emptied)?;
+        let emptied = steps::truncate_streams(files.streams())?;
+        record_all(ledger, emptied)?;
     }
 
     // The caller's privileged init (R153). After the lock, so only
@@ -438,8 +364,8 @@ unsafe fn run_steps<'a, T>(
     // alive is undefined behaviour, so a failure leaves the env as step 11
     // set it.
     // A change between the last token and here, not undone, fails the walk.
-    abort.checkpoint()?;
-    abort.threads_may_start();
+    ledger.checkpoint()?;
+    ledger.threads_may_start();
     let value = init()?;
 
     // Steps 16-17: Hand the daemon's files to the target identity while still
@@ -447,9 +373,8 @@ unsafe fn run_steps<'a, T>(
     if let Some(identity) = &identity {
         // The files as opened, by descriptor (R163); for stdout and stderr,
         // step 12's, as init may have moved fds 1 and 2.
-        let chowned =
-            identity.chown_files(steps::chown_targets(&abort.files, config.chown_paths))?;
-        abort.record_all(chowned)?;
+        let chowned = identity.chown_files(steps::chown_targets(files, config.chown_paths))?;
+        record_all(ledger, chowned)?;
     }
     #[cfg(test)]
     if steps::failpoints::BEFORE_SWITCH_FAILS.injected() {
@@ -464,7 +389,8 @@ unsafe fn run_steps<'a, T>(
     // Step 18: Return DaemonContext (clones the config-derived fields it needs).
     // The context owns the pidfile and the lock from here, so the abort guard
     // stands down.
-    let lockfile = abort.disarm();
+    ledger.keep_all();
+    let lockfile = files.take_lock();
     Ok((DaemonContext::new(config, lockfile, pipe_wr.take()), value))
 }
 

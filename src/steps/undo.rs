@@ -13,7 +13,7 @@
 
 use std::os::fd::RawFd;
 
-use crate::error::RestoreFailure;
+use crate::error::{ErrorKind, RestoreFailure};
 
 /// Whether a step saves what it changes, so a failure can put it back
 /// (R147, R164).
@@ -167,6 +167,88 @@ pub(crate) fn restore_all(tokens: Vec<Undo>) -> Vec<RestoreFailure> {
         .rev()
         .filter_map(|undo| undo.restore().err())
         .collect()
+}
+
+/// The sequence's record of what its steps changed (R164): each step's
+/// tokens, in the order the steps ran.
+///
+/// A step records each change as it makes it, so a step that fails part way
+/// leaves the changes it made in here, and [`roll_back`](Self::roll_back)
+/// puts them back with the rest. Dropped unkept, it rolls back too, latest
+/// first, reporting nothing: for a panic, which leaves no error to report in.
+pub(crate) struct Ledger {
+    /// `PutBack` in foreground mode, `Skip` in a daemon: the one place the
+    /// sequence decides how much a failure undoes.
+    rollback: Rollback,
+    /// Each change's token, in the order the steps made them.
+    undo: Vec<Undo>,
+    /// The checkpoints passed, where the undo walk may fail the sequence.
+    #[cfg(test)]
+    checkpoints: usize,
+}
+
+impl Ledger {
+    pub(crate) fn new(rollback: Rollback) -> Self {
+        Self {
+            rollback,
+            undo: Vec::new(),
+            #[cfg(test)]
+            checkpoints: 0,
+        }
+    }
+
+    /// Whether steps save what they change.
+    pub(crate) fn rollback(&self) -> Rollback {
+        self.rollback
+    }
+
+    /// Holds a change's token, to put back on failure.
+    pub(crate) fn record(&mut self, undo: Undo) -> Result<(), ErrorKind> {
+        self.undo.push(undo);
+        self.checkpoint()
+    }
+
+    /// A point the undo walk may fail the sequence at; nothing outside tests.
+    pub(crate) fn checkpoint(&mut self) -> Result<(), ErrorKind> {
+        #[cfg(test)]
+        {
+            self.checkpoints += 1;
+            if super::failpoints::checkpoint_fails(self.checkpoints) {
+                return Err(ErrorKind::SystemError(
+                    super::failpoints::CHECKPOINT_FAILURE.into(),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// From `init` on other threads may run, so a token whose restore is
+    /// unsafe then (the env's `setenv`) restores nothing (R164).
+    pub(crate) fn threads_may_start(&mut self) {
+        self.undo.iter_mut().for_each(Undo::threads_may_start);
+    }
+
+    /// The descriptors the tokens hold, which the fd sweep must spare.
+    pub(crate) fn held_fds(&self) -> impl Iterator<Item = RawFd> + '_ {
+        self.undo.iter().filter_map(Undo::held_fd)
+    }
+
+    /// Puts back every recorded change, latest first, and returns what could
+    /// not be put back.
+    pub(crate) fn roll_back(&mut self) -> Vec<RestoreFailure> {
+        restore_all(std::mem::take(&mut self.undo))
+    }
+
+    /// Keeps every recorded change.
+    pub(crate) fn keep_all(&mut self) {
+        self.undo.drain(..).for_each(Undo::keep);
+    }
+}
+
+impl Drop for Ledger {
+    fn drop(&mut self) {
+        let _ = self.roll_back();
+    }
 }
 
 #[cfg(test)]
