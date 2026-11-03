@@ -7,7 +7,7 @@ use std::process::ExitCode;
 
 use clap::Parser;
 
-use blivet::{DaemonConfig, DaemonizeError, ErrorKind};
+use blivet::{ChangedState, DaemonConfig, DaemonizeError, ErrorKind};
 
 /// Run a program as a Unix daemon.
 #[derive(Parser)]
@@ -211,10 +211,8 @@ fn main() -> ExitCode {
         Ok(ctx) => ctx,
         Err(e) => {
             eprintln!("{e}");
-            // This process exits now, so only what outlives it is worth a
-            // line, unless asked for everything.
             for failure in e.rollback_failures() {
-                if args.verbose || failure.state().outlives_process() {
+                if reported(failure.state(), args.verbose) {
                     eprintln!("rollback left {failure}");
                 }
             }
@@ -294,9 +292,32 @@ fn derive_stderr_path(stdout: &Path) -> PathBuf {
     }
 }
 
+/// Whether the CLI prints a `rollback left` line for `state`. This process
+/// exits on a failed start, so only what outlives it is worth a line, unless
+/// asked for everything.
+fn reported(state: ChangedState, verbose: bool) -> bool {
+    verbose || state.outlives_process()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_file_left_on_disk_is_reported_without_verbose() {
+        assert!(reported(ChangedState::Pidfile, false));
+    }
+
+    #[test]
+    fn process_state_is_reported_only_when_verbose() {
+        assert_eq!(
+            (
+                reported(ChangedState::WorkingDirectory, false),
+                reported(ChangedState::WorkingDirectory, true)
+            ),
+            (false, true)
+        );
+    }
 
     // --- README flag table parity ---
 
