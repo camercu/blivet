@@ -12,6 +12,8 @@ pub blivet::ChangedState::Stdin
 pub blivet::ChangedState::Stdout
 pub blivet::ChangedState::SupplementaryGroups
 pub blivet::ChangedState::WorkingDirectory
+impl blivet::ChangedState
+pub fn blivet::ChangedState::outlives_process(self) -> bool
 impl core::clone::Clone for blivet::ChangedState
 pub fn blivet::ChangedState::clone(&self) -> blivet::ChangedState
 impl core::cmp::Eq for blivet::ChangedState

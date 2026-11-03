@@ -67,7 +67,8 @@ struct Args {
     #[arg(short = 'f', long = "foreground")]
     foreground: bool,
 
-    /// Diagnostic output before daemonizing
+    /// Diagnostic output: the settings before daemonizing, and every change a
+    /// failed start left (not only files)
     #[arg(short = 'v', long = "verbose")]
     verbose: bool,
 
@@ -210,8 +211,12 @@ fn main() -> ExitCode {
         Ok(ctx) => ctx,
         Err(e) => {
             eprintln!("{e}");
+            // This process exits now, so only what outlives it is worth a
+            // line, unless asked for everything.
             for failure in e.rollback_failures() {
-                eprintln!("rollback left {failure}");
+                if args.verbose || failure.state().outlives_process() {
+                    eprintln!("rollback left {failure}");
+                }
             }
             return ExitCode::from(e.exit_code());
         }

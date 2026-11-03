@@ -206,6 +206,25 @@ pub enum ChangedState {
     FileOwner,
 }
 
+impl ChangedState {
+    /// Whether the change stays after the process exits: a file on disk, not
+    /// the process's own state. A program that exits on a failed start need
+    /// only report these.
+    pub fn outlives_process(self) -> bool {
+        match self {
+            Self::Stdin
+            | Self::Stdout
+            | Self::Stderr
+            | Self::WorkingDirectory
+            | Self::SignalMask
+            | Self::SignalDispositions
+            | Self::SupplementaryGroups
+            | Self::PrimaryGroup => false,
+            Self::Pidfile | Self::Lockfile | Self::OutputFile | Self::FileOwner => true,
+        }
+    }
+}
+
 impl std::fmt::Display for ChangedState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
@@ -684,6 +703,27 @@ mod tests {
                 std::io::Error::from_raw_os_error(libc::EACCES)
             )
         );
+    }
+
+    #[test]
+    fn only_file_changes_outlive_the_process() {
+        use ChangedState::*;
+        let all = [
+            Stdin,
+            Stdout,
+            Stderr,
+            WorkingDirectory,
+            SignalMask,
+            SignalDispositions,
+            SupplementaryGroups,
+            PrimaryGroup,
+            Pidfile,
+            Lockfile,
+            OutputFile,
+            FileOwner,
+        ];
+        let lasting: Vec<_> = all.into_iter().filter(|s| s.outlives_process()).collect();
+        assert_eq!(lasting, [Pidfile, Lockfile, OutputFile, FileOwner]);
     }
 
     #[test]

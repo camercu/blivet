@@ -51,8 +51,9 @@ diagnostic to stderr.
 
 A failed start puts back what the steps changed: in foreground mode the
 process state, in both modes the files it created or chowned. For each
-change it could not put back, it prints one more line after the
-diagnostic: **rollback left** *state* \[*path*\]**:** *reason*.
+file it could not remove or give back its owner, it prints one more line
+after the diagnostic: **rollback left** *state* \[*path*\]**:** *reason*.
+With **-v** it prints such a line for process state too.
 
 When **-u** or **-g** is specified, ownership of the PID file, lock file, and
 output files is transferred to the target user/group before privileges are
@@ -129,7 +130,8 @@ dropped, so the daemon can continue to write to them after the switch.
     Useful for systemd, containers, and debugging.
 
 **-v**, **--verbose**
-:   Print diagnostic information to stderr before daemonizing.
+:   Print diagnostic information to stderr before daemonizing, and after a
+    failed start, a line for every change it could not put back.
 
 **-h**, **--help**
 :   Print a help message and exit.

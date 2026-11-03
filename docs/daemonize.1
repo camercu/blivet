@@ -64,9 +64,10 @@ diagnostic to stderr.
 .PP
 A failed start puts back what the steps changed: in foreground mode the
 process state, in both modes the files it created or chowned.
-For each change it could not put back, it prints one more line after the
-diagnostic: \f[B]rollback left\f[R] \f[I]state\f[R]
+For each file it could not remove or give back its owner, it prints one
+more line after the diagnostic: \f[B]rollback left\f[R] \f[I]state\f[R]
 [\f[I]path\f[R]]\f[B]:\f[R] \f[I]reason\f[R].
+With \f[B]\-v\f[R] it prints such a line for process state too.
 .PP
 When \f[B]\-u\f[R] or \f[B]\-g\f[R] is specified, ownership of the PID
 file, lock file, and output files is transferred to the target
@@ -163,7 +164,8 @@ Stdout and stderr are left inherited (not redirected to
 Useful for systemd, containers, and debugging.
 .TP
 \f[B]\-v\f[R], \f[B]\(enverbose\f[R]
-Print diagnostic information to stderr before daemonizing.
+Print diagnostic information to stderr before daemonizing, and after a
+failed start, a line for every change it could not put back.
 .TP
 \f[B]\-h\f[R], \f[B]\(enhelp\f[R]
 Print a help message and exit.

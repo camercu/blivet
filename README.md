@@ -226,8 +226,10 @@ meaningful status:
 A foreground start that fails puts back what it changed in your process. Each
 change it could not put back is in `rollback_failures()`: the `ChangedState`
 left changed, the path for a file, and the `io::Error` that stopped it. The
-error's message stays the kind's. The CLI prints one `rollback left <state>
-[<path>]: <error>` line for each, after the error. A daemon that fails exits
+error's message stays the kind's. `ChangedState::outlives_process()` tells a
+file left on disk from process state, which ends with the process. After the
+error, the CLI prints one `rollback left <state> [<path>]: <error>` line for
+each file left on disk, or with `-v` for every change. A daemon that fails exits
 instead of returning, and sends the same lines to the launcher after its
 error message.
 
@@ -402,7 +404,7 @@ them.
 | `-u` | `--user NAME\|UID`  | Switch to user after daemonizing (requires root) |
 | `-g` | `--group NAME\|GID` | Switch to group after daemonizing (requires root) |
 | `-f` | `--foreground`      | Stay in foreground (no fork/setsid) |
-| `-v` | `--verbose`         | Print diagnostic info before daemonizing |
+| `-v` | `--verbose`         | Print diagnostic info before daemonizing, and every change a failed start left |
 
 ## Platform support
 

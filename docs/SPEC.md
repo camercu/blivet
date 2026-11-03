@@ -950,7 +950,7 @@ Clap defaults for `--help` and `--version` are acceptable.
 | `-u`  | `--user`          | name or uid  | Run daemon as user                   |
 | `-g`  | `--group`         | name or gid  | Run daemon as group                  |
 | `-f`  | `--foreground`    |              | Stay in foreground (no fork)         |
-| `-v`  | `--verbose`       |              | Diagnostic output before daemonizing |
+| `-v`  | `--verbose`       |              | Diagnostic output; every rollback line |
 
 Assign all short flags explicitly to avoid collisions.
 
@@ -1063,7 +1063,9 @@ with `NotifyFailed` (exit 71).
 ### Verbose mode
 
 With `-v`: implementation-defined diagnostics to stderr before
-daemonization. Without `-v`: no diagnostic output.
+daemonization, and after a failed start a rollback line for every change
+it could not put back. Without `-v`: no diagnostic output, and rollback
+lines only for changes that outlive the process (R164).
 
 ### Exit codes
 
@@ -1363,7 +1365,8 @@ verification points.
 - R49. Each `ErrorKind` variant maps to its exit code table entry.
 - R50. CLI binary name is `daemonize`.
 - R51. CLI exits with mapped exit code for each error condition.
-- R52. With `-v`, diagnostic output to stderr before daemonization.
+- R52. With `-v`, diagnostic output to stderr before daemonization,
+  and every rollback line (R164).
 - R53. Without `-v`, no diagnostic output.
 - R54. Dropping `DaemonContext` releases the lock.
 - R55. CLI canonicalizes program paths containing `/` before
@@ -1721,8 +1724,10 @@ on any change to it, so the rows only copied the snapshot.
   could not save, a file it could not remove, with its path (one
   already gone is not a failure), and a log step 15 emptied of content,
   which no rollback can put back. Each prints as one `rollback left
-  <state>[ <path>]: <reason>` line after the error: the CLI prints them
-  in foreground mode, and a daemon sends them to the launcher (R160).
+  <state>[ <path>]: <reason>` line after the error: a daemon sends them
+  to the launcher (R160), and in foreground mode the CLI prints those
+  that outlive its process (`ChangedState::outlives_process()`: files,
+  not process state), or all of them with `-v`.
 - R165. The notification pipe is a connected `AF_UNIX` stream socket
   pair, one-way: the launcher's end cannot send and the daemon's end
   cannot receive. The daemon writes to it only with `send` and
