@@ -281,12 +281,14 @@ impl Owner {
         match fd {
             Ok(fd) => nix::unistd::fchown(&fd, owner, group).map_err(failed),
             Err(_) => match crate::file_identity::stat_if_named(&path, id).map_err(failed)? {
+                // Following a symlink, as the identity check did, so the
+                // chown reaches the file it matched.
                 Some(_) => nix::unistd::fchownat(
                     nix::fcntl::AT_FDCWD,
                     &path,
                     owner,
                     group,
-                    nix::fcntl::AtFlags::AT_SYMLINK_NOFOLLOW,
+                    nix::fcntl::AtFlags::empty(),
                 )
                 .map_err(failed),
                 None => Ok(()),

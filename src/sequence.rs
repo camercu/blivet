@@ -867,6 +867,46 @@ mod tests {
     }
 
     // Covers: R164
+    /// A file another process put at the path since is not the one step 16
+    /// chowned: the rollback by path leaves its owner alone.
+    #[test]
+    #[ignore = "needs root: the privileged tier runs it"]
+    fn root_leaves_the_owner_of_a_file_put_at_the_path_since() {
+        use std::os::unix::fs::MetadataExt;
+        if !isolated() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("app.log");
+        let other_gid = crate::test_support::foreign_gid() + 1;
+        let mut config = DaemonConfig::new();
+        config
+            .foreground(true)
+            .close_fds(false)
+            .stdout(&log)
+            .group(crate::test_support::foreign_gid().to_string());
+        steps::failpoints::BEFORE_SWITCH_FAILS.set();
+
+        let result: Result<(DaemonContext, ()), _> =
+            run_inner_with(&config, &mut NullForker::new(vec![], Ok(())), || {
+                std::fs::rename(&log, dir.path().join("moved.log")).unwrap();
+                std::fs::write(&log, "another process's\n").unwrap();
+                nix::unistd::chown(&log, None, Some(nix::unistd::Gid::from_raw(other_gid)))
+                    .unwrap();
+                std::mem::forget(crate::test_support::fill_fd_table(0));
+                Ok(())
+            });
+
+        let err = result.expect_err("the failpoint failed the start");
+        assert!(
+            err.rollback_failures().is_empty(),
+            "{:?}",
+            err.rollback_failures()
+        );
+        assert_eq!(std::fs::metadata(&log).unwrap().gid(), other_gid);
+    }
+
+    // Covers: R164
     /// The same, as root, where the owner really changes: the file gets its
     /// owner back by path.
     #[test]
