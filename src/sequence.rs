@@ -838,6 +838,32 @@ mod tests {
         assert_eq!(owner(std::fs::metadata("/dev/null").unwrap()), before);
     }
 
+    // Covers: R164
+    /// The descriptor that lets a failure give a file back its owner is an
+    /// undo aid: an init that leaves no descriptor free must not fail the
+    /// chown for want of one.
+    #[test]
+    fn a_full_fd_table_does_not_fail_the_chown() {
+        if !isolated() {
+            return;
+        }
+        crate::test_support::shed_root();
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = DaemonConfig::new();
+        config
+            .foreground(true)
+            .close_fds(false)
+            .stdout(dir.path().join("app.log"))
+            .group(nix::unistd::getgid().to_string());
+
+        let result = run_inner_with(&config, &mut NullForker::new(vec![], Ok(())), || {
+            std::mem::forget(crate::test_support::fill_fd_table(0));
+            Ok(())
+        });
+
+        assert!(result.is_ok(), "{:?}", result.err());
+    }
+
     // Covers: R163
     /// An init that puts another file on fd 1 must not have that file
     /// chowned: the chown reaches the stream step 12 opened. Here that is a

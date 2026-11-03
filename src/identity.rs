@@ -133,9 +133,7 @@ impl ResolvedIdentity {
             }
             // Its own descriptor, above stdio and close-on-exec, as the
             // sequence's copy closes when the sequence ends.
-            let held = fd
-                .try_clone_to_owned()
-                .map_err(|e| ErrorKind::ChownError(format!("{}: {e}", path.display())))?;
+            let held = fd.try_clone_to_owned();
             nix::unistd::fchown(fd, owner, group).map_err(|e| failed(path, e))?;
             chowned.push(Undo::new(Saved::Owner(Owner {
                 path: path.to_path_buf(),
@@ -276,16 +274,22 @@ fn resolve_group_gid(spec: &str) -> Result<Gid, ErrorKind> {
 }
 
 /// A file step 16 chowned, and the owner and group it had before.
+///
+/// The descriptor to give it back by is best-effort, as the working
+/// directory's is: with no descriptor free it is missing, and the chown goes
+/// on (R164). The restore then reports why it could not give the file back.
 pub(crate) struct Owner {
     path: std::path::PathBuf,
-    fd: std::os::fd::OwnedFd,
+    fd: std::io::Result<std::os::fd::OwnedFd>,
     was: (Uid, Gid),
 }
 
 impl Owner {
     pub(crate) fn restore(self) -> Result<(), RestoreFailure> {
-        nix::unistd::fchown(&self.fd, Some(self.was.0), Some(self.was.1))
-            .map_err(|e| RestoreFailure::at(ChangedState::FileOwner, &self.path, e))
+        let Self { path, fd, was } = self;
+        let failed = |e| RestoreFailure::at(ChangedState::FileOwner, &path, e);
+        let fd = fd.map_err(failed)?;
+        nix::unistd::fchown(&fd, Some(was.0), Some(was.1)).map_err(|e| failed(e.into()))
     }
 }
 
