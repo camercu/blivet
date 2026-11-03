@@ -10,7 +10,7 @@ use nix::sys::stat::Mode;
 use nix::unistd::{self};
 
 use super::{Ledger, Rollback, Saved, Undo};
-use crate::error::{ChangedState, DaemonizeError, ErrorKind, RestoreFailure};
+use crate::error::{ChangedState, ErrorKind, RestoreFailure};
 use crate::file_identity::FileId;
 use std::os::fd::AsRawFd;
 
@@ -157,25 +157,11 @@ fn open_stream<'a>(
 /// The truncation cannot be undone, so it waits until just before `init`: a
 /// start that fails before it leaves the previous run's logs as they were.
 /// A file it empties of content gets a token in either mode that reports the
-/// loss if the start then fails (R164). A failure part way reports the files
-/// it already emptied.
+/// loss if the start then fails (R164). It goes in `ledger` as the file
+/// empties, so a failure part way reports the files already emptied.
 pub(crate) fn truncate_streams<'p>(
     files: impl IntoIterator<Item = (&'p Path, BorrowedFd<'p>)>,
-) -> Result<Vec<Undo>, DaemonizeError> {
-    let mut emptied = Vec::new();
-    match truncate_streams_into(files, &mut emptied) {
-        Ok(()) => Ok(emptied),
-        Err(e) => {
-            let failures = super::restore_all(emptied);
-            Err(DaemonizeError::from(e).with_rollback_failures(failures))
-        }
-    }
-}
-
-/// The work of [`truncate_streams`], leaving each loss's token in `emptied`.
-fn truncate_streams_into<'p>(
-    files: impl IntoIterator<Item = (&'p Path, BorrowedFd<'p>)>,
-    emptied: &mut Vec<Undo>,
+    ledger: &mut Ledger,
 ) -> Result<(), ErrorKind> {
     for (path, fd) in files {
         let failed =
@@ -194,7 +180,7 @@ fn truncate_streams_into<'p>(
         }
         nix::unistd::ftruncate(fd, 0).map_err(|e| failed("truncate", e))?;
         if st.st_size > 0 {
-            emptied.push(Undo::new(Saved::Emptied(Emptied(path.to_path_buf()))));
+            ledger.record(Undo::new(Saved::Emptied(Emptied(path.to_path_buf()))))?;
         }
     }
     Ok(())
@@ -487,10 +473,7 @@ mod tests {
         let files = redirect_output(stdout, stderr, append, &[], &mut ledger)?;
         if !append {
             let files: Vec<_> = files.iter().map(|(p, fd, _)| (*p, fd.as_fd())).collect();
-            super::truncate_streams(files)
-                .map_err(crate::DaemonizeError::into_kind)?
-                .into_iter()
-                .for_each(super::Undo::keep);
+            super::truncate_streams(files, &mut ledger)?;
         }
         ledger.keep_all();
         Ok(())

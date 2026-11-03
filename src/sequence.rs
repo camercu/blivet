@@ -349,8 +349,7 @@ unsafe fn run_steps<'a, T>(
     // Step 15: Empty the stream files, the one change no rollback can undo,
     // so it comes as late as `init` allows: init writes to them.
     if !config.append {
-        let emptied = steps::truncate_streams(files.streams())?;
-        record_all(ledger, emptied)?;
+        steps::truncate_streams(files.streams(), ledger)?;
     }
 
     // The caller's privileged init (R153). After the lock, so only
