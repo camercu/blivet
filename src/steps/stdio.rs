@@ -129,11 +129,11 @@ struct OpenStream<'a> {
 
 /// Opens `path` for a stream without truncating it: nothing on disk may
 /// change until [`plan_output_redirect`] has seen what the file is. A file it
-/// creates gets a token in `moved` that removes it again.
+/// creates gets a token in `ledger` that removes it again.
 fn open_stream<'a>(
     path: &'a Path,
     append: bool,
-    moved: &mut Vec<Undo>,
+    ledger: &mut Ledger,
 ) -> Result<OpenStream<'a>, ErrorKind> {
     let mut flags = OFlag::O_WRONLY;
     if append {
@@ -146,7 +146,7 @@ fn open_stream<'a>(
     let id = FileId::of(&st);
     if created {
         let removal = super::Removal::of_log(path, id);
-        moved.push(Undo::new(Saved::Removal(removal)));
+        ledger.record(Undo::new(Saved::Removal(removal)))?;
     }
     Ok(OpenStream { path, id, fd })
 }
@@ -225,52 +225,33 @@ impl Emptied {
 /// (R146). stdout is on fd 1 before stderr is opened, so a stderr of
 /// `/dev/stdout` names the stdout file and shares its descriptor.
 ///
-/// With [`Rollback::PutBack`], a failure undoes what this did (R147), and on
-/// success the saved slots are returned, so a later failure in the sequence
-/// can put them back too (R164). The opened files come back too: step 15
-/// truncates them and step 16 chowns them, by these descriptors, not by
-/// whatever `init` left on fds 1 and 2 (R163). Each stdio slot is saved
-/// before it moves. A stream file it created has a token in either mode,
-/// which removes it on failure while nothing has written to it. It
-/// truncates nothing: see
-/// [`truncate_streams`].
-#[must_use = "the slot tokens put stdio back when dropped; keep() them to leave it redirected"]
+/// Each change's token goes in `ledger` as it is made: a moved slot's under
+/// [`Rollback::PutBack`] (R147, R164), a created stream file's in either
+/// mode, which removes it on failure while nothing has written to it. A
+/// failure part way leaves them for the ledger to put back. Each stdio slot
+/// is saved before it moves.
+///
+/// Returns each stream's file by the path that names it, once: stderr
+/// sharing stdout's file is not repeated, with its identity. Close-on-exec,
+/// above fd 2. Step 15 truncates them and step 16 chowns them, by these
+/// descriptors, not by whatever `init` left on fds 1 and 2 (R163). This
+/// truncates nothing: see [`truncate_streams`].
 pub(crate) fn redirect_output<'a>(
     stdout: Option<&'a Path>,
     stderr: Option<&'a Path>,
     append: bool,
     owned: &[(&'static str, FileId)],
-    rollback: Rollback,
-) -> Result<Redirected<'a>, DaemonizeError> {
+    ledger: &mut Ledger,
+) -> Result<Vec<(&'a Path, OwnedFd, FileId)>, ErrorKind> {
     #[cfg(test)]
     crate::test_support::assert_isolated("redirect_output");
-    let mut moved = Vec::new();
-    match redirect_output_into(stdout, stderr, append, owned, rollback, &mut moved) {
-        Ok(files) => Ok(Redirected { undo: moved, files }),
-        Err(e) => {
-            let failures = super::restore_all(moved);
-            Err(DaemonizeError::from(e).with_rollback_failures(failures))
-        }
-    }
-}
-
-/// The work of [`redirect_output`], leaving each slot's token in `moved`.
-fn redirect_output_into<'a>(
-    stdout: Option<&'a Path>,
-    stderr: Option<&'a Path>,
-    append: bool,
-    owned: &[(&'static str, FileId)],
-    rollback: Rollback,
-    moved: &mut Vec<Undo>,
-) -> Result<Vec<(&'a Path, OwnedFd, FileId)>, ErrorKind> {
     let out = match stdout {
         Some(path) => {
-            let out = open_stream(path, append, moved)?;
+            let out = open_stream(path, append, ledger)?;
             plan_output_redirect(Some(out.id), None, owned).map_err(|c| refusal(&c, &out))?;
-            moved.push(
-                move_slot(&out.fd, StdioSlot::Stdout, rollback)
-                    .map_err(|e| e.into_output_error(StdioSlot::Stdout))?,
-            );
+            let undo = move_slot(&out.fd, StdioSlot::Stdout, ledger.rollback())
+                .map_err(|e| e.into_output_error(StdioSlot::Stdout))?;
+            ledger.record(undo)?;
             Some(out)
         }
         None => None,
@@ -278,15 +259,14 @@ fn redirect_output_into<'a>(
 
     let err = match stderr {
         Some(path) => {
-            let err = open_checked_stderr(path, append, out.as_ref(), owned, moved)?;
+            let err = open_checked_stderr(path, append, out.as_ref(), owned, ledger)?;
             let source = match &err {
                 Stderr::Own(err) => &err.fd,
                 Stderr::SharesStdout(out) => &out.fd,
             };
-            moved.push(
-                move_slot(source, StdioSlot::Stderr, rollback)
-                    .map_err(|e| e.into_output_error(StdioSlot::Stderr))?,
-            );
+            let undo = move_slot(source, StdioSlot::Stderr, ledger.rollback())
+                .map_err(|e| e.into_output_error(StdioSlot::Stderr))?;
+            ledger.record(undo)?;
             Some(err)
         }
         None => None,
@@ -301,18 +281,6 @@ fn redirect_output_into<'a>(
         .chain(out.map(|out| (out.path, out.fd, out.id)))
         .collect();
     Ok(files)
-}
-
-/// What step 12 did: the stdio slots it moved, and the files it opened.
-#[must_use = "the slot tokens put stdio back when dropped; keep() them to leave it redirected"]
-pub(crate) struct Redirected<'a> {
-    /// For each stream, a token for its file if this created it, then one
-    /// for the slot it moved.
-    pub(crate) undo: Vec<Undo>,
-    /// Each stream's file by the path that names it, once: stderr sharing
-    /// stdout's file is not repeated, with its identity. Close-on-exec, above
-    /// fd 2.
-    pub(crate) files: Vec<(&'a Path, OwnedFd, FileId)>,
 }
 
 /// A stdio slot steps 6 and 12 move a file onto.
@@ -416,9 +384,9 @@ fn open_checked_stderr<'a, 'o>(
     append: bool,
     out: Option<&'o OpenStream<'a>>,
     owned: &[(&'static str, FileId)],
-    moved: &mut Vec<Undo>,
+    ledger: &mut Ledger,
 ) -> Result<Stderr<'a, 'o>, ErrorKind> {
-    let err = open_stream(path, append, moved)?;
+    let err = open_stream(path, append, ledger)?;
     let plan = plan_output_redirect(out.map(|o| o.id), Some(err.id), owned)
         .map_err(|c| refusal(&c, &err))?;
     Ok(match out.filter(|_| plan.stderr_shares_stdout) {
@@ -494,35 +462,37 @@ pub(crate) fn above_stdio(fd: OwnedFd) -> std::io::Result<OwnedFd> {
 
 #[cfg(test)]
 mod tests {
-    /// `redirect_output`, leaving the redirect in place when it succeeds, as
-    /// the sequence does at step 18.
+    /// `redirect_output` as a foreground sequence runs it: a failure puts
+    /// back what it changed, and a success stays in place, as at step 18.
     fn kept(
-        result: Result<super::Redirected<'_>, crate::DaemonizeError>,
+        stdout: Option<&Path>,
+        stderr: Option<&Path>,
+        append: bool,
+        owned: &[(&'static str, FileId)],
     ) -> Result<(), crate::ErrorKind> {
-        result
-            .map(|done| done.undo.into_iter().for_each(super::Undo::keep))
-            .map_err(crate::DaemonizeError::into_kind)
+        let mut ledger = Ledger::new(Rollback::PutBack);
+        redirect_output(stdout, stderr, append, owned, &mut ledger)?;
+        ledger.keep_all();
+        Ok(())
     }
 
     /// [`kept`], then step 15's truncation unless appending, as the sequence
     /// runs them.
     fn kept_truncated(
-        result: Result<super::Redirected<'_>, crate::DaemonizeError>,
+        stdout: Option<&Path>,
+        stderr: Option<&Path>,
         append: bool,
     ) -> Result<(), crate::ErrorKind> {
-        let done = result.map_err(crate::DaemonizeError::into_kind)?;
+        let mut ledger = Ledger::new(Rollback::PutBack);
+        let files = redirect_output(stdout, stderr, append, &[], &mut ledger)?;
         if !append {
-            let files: Vec<_> = done
-                .files
-                .iter()
-                .map(|(p, fd, _)| (*p, fd.as_fd()))
-                .collect();
+            let files: Vec<_> = files.iter().map(|(p, fd, _)| (*p, fd.as_fd())).collect();
             super::truncate_streams(files)
                 .map_err(crate::DaemonizeError::into_kind)?
                 .into_iter()
                 .for_each(super::Undo::keep);
         }
-        done.undo.into_iter().for_each(super::Undo::keep);
+        ledger.keep_all();
         Ok(())
     }
 
@@ -760,7 +730,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "changes process-wide state under the shared test process")]
     fn redirect_output_refuses_the_shared_test_process() {
-        let _ = kept(redirect_output(None, None, false, &[], Rollback::PutBack));
+        let _ = kept(None, None, false, &[]);
     }
 
     /// The one stdio mover refuses too. Stdin onto itself would move nothing
@@ -782,13 +752,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let stdout_path = dir.path().join("stdout.log");
         let stderr_path = dir.path().join("stderr.log");
-        let result = kept(redirect_output(
-            Some(&stdout_path),
-            Some(&stderr_path),
-            false,
-            &[],
-            Rollback::PutBack,
-        ));
+        let result = kept(Some(&stdout_path), Some(&stderr_path), false, &[]);
         assert!(result.is_ok());
         assert!(stdout_path.exists());
         assert!(stderr_path.exists());
@@ -805,11 +769,7 @@ mod tests {
         // Truncate mode. The old content is longer than the new, so a skipped
         // truncate leaves a tail behind instead of being overwritten exactly.
         std::fs::write(&stdout_path, "old content, longer than what replaces it\n").unwrap();
-        kept_truncated(
-            redirect_output(Some(&stdout_path), None, false, &[], Rollback::PutBack),
-            false,
-        )
-        .unwrap();
+        kept_truncated(Some(&stdout_path), None, false).unwrap();
         std::io::stdout().write_all(b"new content\n").unwrap();
         std::io::stdout().flush().unwrap();
         // A skipped truncate would leave the old line's tail behind.
@@ -819,11 +779,7 @@ mod tests {
         );
 
         // Append mode
-        kept_truncated(
-            redirect_output(Some(&stdout_path), None, true, &[], Rollback::PutBack),
-            true,
-        )
-        .unwrap();
+        kept_truncated(Some(&stdout_path), None, true).unwrap();
         std::io::stdout().write_all(b"appended\n").unwrap();
         std::io::stdout().flush().unwrap();
         assert_eq!(
@@ -839,14 +795,7 @@ mod tests {
         }
         let dir = tempfile::tempdir().unwrap();
         let combined = dir.path().join("combined.log");
-        kept(redirect_output(
-            Some(&combined),
-            Some(&combined),
-            false,
-            &[],
-            Rollback::PutBack,
-        ))
-        .unwrap();
+        kept(Some(&combined), Some(&combined), false, &[]).unwrap();
 
         std::io::stdout().write_all(b"stdout\n").unwrap();
         std::io::stdout().flush().unwrap();
@@ -877,13 +826,7 @@ mod tests {
         std::fs::write(&log, "the previous run\n").unwrap();
         let stdout_before = fstat(std::io::stdout()).unwrap();
 
-        let result = kept(redirect_output(
-            Some(&log),
-            Some(dir.path()),
-            false,
-            &[],
-            Rollback::PutBack,
-        ));
+        let result = kept(Some(&log), Some(dir.path()), false, &[]);
 
         assert!(
             matches!(result, Err(ErrorKind::OutputFileError(_))),
@@ -912,13 +855,7 @@ mod tests {
         std::fs::write(&log, "the previous run\n").unwrap();
         nix::unistd::close(1).unwrap();
 
-        let result = kept(redirect_output(
-            Some(&log),
-            Some(dir.path()),
-            false,
-            &[],
-            Rollback::PutBack,
-        ));
+        let result = kept(Some(&log), Some(dir.path()), false, &[]);
 
         assert!(
             matches!(result, Err(ErrorKind::OutputFileError(_))),
@@ -951,13 +888,7 @@ mod tests {
         // file takes it, and saving fd 1 finds none.
         let held = crate::test_support::fill_fd_table(1);
 
-        let result = kept(redirect_output(
-            Some(&log),
-            None,
-            false,
-            &[],
-            Rollback::PutBack,
-        ));
+        let result = kept(Some(&log), None, false, &[]);
         drop(held);
 
         assert!(
@@ -985,14 +916,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let log = dir.path().join("combined.log");
 
-        kept(redirect_output(
-            Some(&log),
-            Some(Path::new("/dev/stdout")),
-            false,
-            &[],
-            Rollback::PutBack,
-        ))
-        .unwrap();
+        kept(Some(&log), Some(Path::new("/dev/stdout")), false, &[]).unwrap();
         std::io::stdout().write_all(b"stdout\n").unwrap();
         std::io::stdout().flush().unwrap();
         std::io::stderr().write_all(b"stderr\n").unwrap();
@@ -1014,14 +938,7 @@ mod tests {
         }
         let dir = tempfile::tempdir().unwrap();
         let stderr_path = dir.path().join("stderr.log");
-        kept(redirect_output(
-            None,
-            Some(&stderr_path),
-            false,
-            &[],
-            Rollback::PutBack,
-        ))
-        .unwrap();
+        kept(None, Some(&stderr_path), false, &[]).unwrap();
         assert!(stderr_path.exists());
 
         std::io::stderr().write_all(b"stderr content\n").unwrap();
@@ -1040,17 +957,7 @@ mod tests {
         let stderr_path = dir.path().join("stderr.log");
         std::fs::write(&stderr_path, "stale stderr from a previous run\n").unwrap();
 
-        kept_truncated(
-            redirect_output(
-                Some(&stdout_path),
-                Some(&stderr_path),
-                false,
-                &[],
-                Rollback::PutBack,
-            ),
-            false,
-        )
-        .unwrap();
+        kept_truncated(Some(&stdout_path), Some(&stderr_path), false).unwrap();
 
         let content = std::fs::read_to_string(&stderr_path).unwrap();
         assert!(
@@ -1071,14 +978,7 @@ mod tests {
         let stdout_path = dir.path().join("stdout.log");
         nix::unistd::close(1).unwrap();
 
-        kept(redirect_output(
-            Some(&stdout_path),
-            None,
-            false,
-            &[],
-            Rollback::PutBack,
-        ))
-        .unwrap();
+        kept(Some(&stdout_path), None, false, &[]).unwrap();
 
         let written = nix::unistd::write(std::io::stdout(), b"reached\n");
         assert_eq!(written, Ok(8), "fd 1 is not open after the redirect");
@@ -1098,14 +998,7 @@ mod tests {
         let stderr_path = dir.path().join("stderr.log");
         nix::unistd::close(2).unwrap();
 
-        kept(redirect_output(
-            None,
-            Some(&stderr_path),
-            false,
-            &[],
-            Rollback::PutBack,
-        ))
-        .unwrap();
+        kept(None, Some(&stderr_path), false, &[]).unwrap();
 
         let written = nix::unistd::write(std::io::stderr(), b"reached\n");
         assert_eq!(written, Ok(8), "fd 2 is not open after the redirect");
@@ -1127,13 +1020,7 @@ mod tests {
             file_id(std::fs::File::open(&pidfile).unwrap()).unwrap(),
         )];
 
-        let result = kept(redirect_output(
-            Some(&pidfile),
-            None,
-            false,
-            &owned,
-            Rollback::PutBack,
-        ));
+        let result = kept(Some(&pidfile), None, false, &owned);
 
         let named = pidfile.display().to_string();
         assert!(
@@ -1151,16 +1038,6 @@ mod tests {
         }
         // ftruncate refuses a device where O_TRUNC ignored it; `-o /dev/null`
         // must keep working.
-        kept_truncated(
-            redirect_output(
-                Some(Path::new("/dev/null")),
-                None,
-                false,
-                &[],
-                Rollback::PutBack,
-            ),
-            false,
-        )
-        .unwrap();
+        kept_truncated(Some(Path::new("/dev/null")), None, false).unwrap();
     }
 }

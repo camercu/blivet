@@ -311,15 +311,14 @@ unsafe fn run_steps<'a, T>(
     // caller sees the slots after a failure, so only it pays for saving them.
     // The files it opened stay held for step 16's chown (R163).
     if config.stdout.is_some() || config.stderr.is_some() {
-        let redirected = steps::redirect_output(
+        let opened = steps::redirect_output(
             config.stdout.as_deref(),
             config.stderr.as_deref(),
             config.append,
             &files.owned(pidfile_id),
-            ledger.rollback(),
+            ledger,
         )?;
-        record_all(ledger, redirected.undo)?;
-        for (path, fd, id) in redirected.files {
+        for (path, fd, id) in opened {
             files.push(path, steps::Role::Stream(fd), id);
         }
     }
