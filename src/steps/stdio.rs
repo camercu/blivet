@@ -145,7 +145,7 @@ fn open_stream<'a>(
         .map_err(|e| ErrorKind::OutputFileError(format!("fstat {}: {e}", path.display())))?;
     let id = FileId::of(&st);
     if created {
-        let removal = super::Removal::new(path, id, ChangedState::OutputFile);
+        let removal = super::Removal::of_log(path, id);
         moved.push(Undo::new(Saved::Removal(removal)));
     }
     Ok(OpenStream { path, id, fd })
@@ -231,7 +231,8 @@ impl Emptied {
 /// truncates them and step 16 chowns them, by these descriptors, not by
 /// whatever `init` left on fds 1 and 2 (R163). Each stdio slot is saved
 /// before it moves. A stream file it created has a token in either mode,
-/// which removes it on failure. It truncates nothing: see
+/// which removes it on failure while nothing has written to it. It
+/// truncates nothing: see
 /// [`truncate_streams`].
 #[must_use = "the slot tokens put stdio back when dropped; keep() them to leave it redirected"]
 pub(crate) fn redirect_output<'a>(

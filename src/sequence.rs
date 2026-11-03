@@ -1575,6 +1575,32 @@ mod tests {
     }
 
     // Covers: R164
+    /// A log the start created but its daemon wrote to holds what went
+    /// wrong: the failure keeps it.
+    #[test]
+    fn a_failed_daemon_keeps_a_log_it_wrote_to() {
+        if !isolated() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("err.log");
+        let mut config = DaemonConfig::new();
+        config.close_fds(false).stderr(&log);
+        let mut forker = NullForker::both_child();
+
+        let exited = catch_unwind(std::panic::AssertUnwindSafe(|| {
+            run_inner_with(&config, &mut forker, || -> Result<(), _> {
+                std::io::Write::write_all(&mut std::io::stderr(), b"connect: refused\n").unwrap();
+                Err(DaemonizeError::application(75, "database unreachable"))
+            })
+        }));
+
+        assert!(exited.is_err(), "a daemon-mode failure exits");
+        let kept = std::fs::read_to_string(&log).unwrap_or_default();
+        assert!(kept.starts_with("connect: refused\n"), "log: {kept:?}");
+    }
+
+    // Covers: R164
     /// A lockfile that was there before the start is not the start's to
     /// remove.
     #[test]

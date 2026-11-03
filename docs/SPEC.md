@@ -739,7 +739,8 @@ fails: to what it held, or closed again if it was closed. A stream file
 it created is removed again, in both modes. It truncates nothing, so a
 failed step 12 leaves the previous run's logs, and a foreground
 caller's stdout and stderr, as they were. A later step that fails puts
-the slots back and removes the created files too, through the abort
+the slots back and removes the created files too, a log only while it
+is empty, through the abort
 guard (R164). The truncation at step 15 cannot be undone: a failure
 from there on reports each log it emptied of content.
 
@@ -1718,8 +1719,10 @@ on any change to it, so the rows only copied the snapshot.
   search, cannot be opened, and the start goes on without saving it.
   In both modes it puts back the
   owner and group of each file step 16 chowned, and removes the files
-  it left on disk: the pidfile it wrote, and the lockfile and stdout
-  and stderr files it created. It removes each only while its
+  it left on disk: the pidfile it wrote, the lockfile it created, and
+  the stdout and stderr files it created while they are still empty (a
+  log something wrote to may say why the start failed, so it stays).
+  It removes each only while its
   path still names the file the start wrote, compared by device and
   inode, so a file another process put there since stays. The files
   go before the lock is released, so a second instance cannot take the

@@ -255,9 +255,10 @@ use forker::RealForker;
 /// In foreground mode every error is returned directly — the library
 /// never exits the caller's process — after the sequence puts back what it
 /// changed; see [`rollback_failures`](DaemonizeError::rollback_failures).
-/// Either mode removes the files a failed start created. A system call that fails with no more
-/// specific variant, such as creating the notification channel with no
-/// descriptor free, returns `SystemError`.
+/// Either mode removes the pidfile a failed start wrote, and the lockfile
+/// and any still-empty log it created. A system call that fails with no
+/// more specific variant, such as creating the notification channel with
+/// no descriptor free, returns `SystemError`.
 #[cfg(unix)]
 #[allow(unsafe_code)]
 pub unsafe fn daemonize_unchecked(config: &DaemonConfig) -> Result<DaemonContext, DaemonizeError> {

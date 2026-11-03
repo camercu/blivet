@@ -50,9 +50,12 @@ If any step fails, the parent exits with a non-zero status and prints a
 diagnostic to stderr.
 
 A failed start puts back what the steps changed: in foreground mode the
-process state, in both modes the files it created or chowned. For each
-file it could not remove or give back its owner, it prints one more line
-after the diagnostic: **rollback left** *state* \[*path*\]**:** *reason*.
+process state. In both modes it removes the PID file it wrote, and the
+lock file and any still-empty output file it created; an output file
+something wrote to stays, as it may say why the start failed. It gives
+the files it chowned back their owners. For each file it could not
+remove or give back its owner, it prints one more line after the
+diagnostic: **rollback left** *state* \[*path*\]**:** *reason*.
 With **-v** it prints such a line for process state too.
 
 When **-u** or **-g** is specified, ownership of the PID file, lock file, and

@@ -48,6 +48,8 @@ pub(crate) struct Removal {
     path: PathBuf,
     id: FileId,
     state: ChangedState,
+    /// A log is kept once written to: it may hold why the start failed.
+    only_if_empty: bool,
 }
 
 impl Removal {
@@ -56,12 +58,22 @@ impl Removal {
             path: path.to_path_buf(),
             id,
             state,
+            only_if_empty: false,
+        }
+    }
+
+    /// A log, removed only while nothing has written to it.
+    pub(crate) fn of_log(path: &Path, id: FileId) -> Self {
+        Self {
+            only_if_empty: true,
+            ..Self::new(path, id, ChangedState::OutputFile)
         }
     }
 
     pub(crate) fn restore(self) -> Result<(), RestoreFailure> {
         let failed = |e: std::io::Error| RestoreFailure::at(self.state, &self.path, e);
         match stat_if_named(&self.path, self.id) {
+            Ok(Some(st)) if self.only_if_empty && st.st_size > 0 => Ok(()),
             Ok(Some(_)) => std::fs::remove_file(&self.path).map_err(failed),
             Ok(None) => Ok(()),
             Err(e) => Err(failed(e.into())),
