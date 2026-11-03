@@ -864,6 +864,44 @@ mod tests {
         assert!(result.is_ok(), "{:?}", result.err());
     }
 
+    // Covers: R164
+    /// With no descriptor to give the file back its owner by, a failed start
+    /// says so, naming the file.
+    #[test]
+    fn an_owner_the_rollback_cannot_give_back_is_reported() {
+        use crate::ChangedState;
+        if !isolated() {
+            return;
+        }
+        crate::test_support::shed_root();
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("app.log");
+        let mut config = DaemonConfig::new();
+        config
+            .foreground(true)
+            .close_fds(false)
+            .stdout(&log)
+            .group(nix::unistd::getgid().to_string());
+        steps::failpoints::BEFORE_SWITCH_FAILS.set();
+
+        let result: Result<(DaemonContext, ()), _> =
+            run_inner_with(&config, &mut NullForker::new(vec![], Ok(())), || {
+                std::mem::forget(crate::test_support::fill_fd_table(0));
+                Ok(())
+            });
+
+        let err = result.expect_err("the failpoint failed the start");
+        let report: Vec<_> = err
+            .rollback_failures()
+            .iter()
+            .map(|f| (f.state(), f.path(), f.error().raw_os_error()))
+            .collect();
+        assert_eq!(
+            report,
+            [(ChangedState::FileOwner, Some(&*log), Some(libc::EMFILE))]
+        );
+    }
+
     // Covers: R163
     /// An init that puts another file on fd 1 must not have that file
     /// chowned: the chown reaches the stream step 12 opened. Here that is a
