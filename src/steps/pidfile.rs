@@ -10,7 +10,7 @@ use nix::unistd::Whence;
 
 use super::*;
 use crate::error::ErrorKind;
-use crate::file_identity::{FileId, file_id, paths_same};
+use crate::file_identity::{FileId, file_id, paths_same, stat_if_named};
 
 /// Step 7: Open and exclusively lock a lockfile, saying whether this start
 /// created it.
@@ -25,15 +25,10 @@ pub(crate) fn lock_path(path: &Path) -> Result<(Flock<OwnedFd>, bool), ErrorKind
         let (flock, created) = lock_once(path)?;
         let locked = file_id(&*flock)
             .map_err(|e| ErrorKind::LockfileError(format!("fstat {}: {e}", path.display())))?;
-        match nix::sys::stat::stat(path) {
-            Ok(st) if FileId::of(&st) == locked => return Ok((flock, created)),
-            Ok(_) | Err(nix::errno::Errno::ENOENT) => {}
-            Err(e) => {
-                return Err(ErrorKind::LockfileError(format!(
-                    "stat {}: {e}",
-                    path.display()
-                )));
-            }
+        let named = stat_if_named(path, locked)
+            .map_err(|e| ErrorKind::LockfileError(format!("stat {}: {e}", path.display())))?;
+        if named.is_some() {
+            return Ok((flock, created));
         }
     }
     Err(ErrorKind::LockfileError(format!(

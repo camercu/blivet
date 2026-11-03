@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use nix::fcntl::Flock;
 
 use crate::error::{ChangedState, RestoreFailure};
-use crate::file_identity::FileId;
+use crate::file_identity::{FileId, stat_if_named};
 
 /// What a file is to the sequence, with the descriptor that holds it.
 pub(crate) enum Role {
@@ -61,11 +61,9 @@ impl Removal {
 
     pub(crate) fn restore(self) -> Result<(), RestoreFailure> {
         let failed = |e: std::io::Error| RestoreFailure::at(self.state, &self.path, e);
-        match nix::sys::stat::stat(&self.path) {
-            Ok(st) if FileId::of(&st) == self.id => {
-                std::fs::remove_file(&self.path).map_err(failed)
-            }
-            Ok(_) | Err(nix::errno::Errno::ENOENT) => Ok(()),
+        match stat_if_named(&self.path, self.id) {
+            Ok(Some(_)) => std::fs::remove_file(&self.path).map_err(failed),
+            Ok(None) => Ok(()),
             Err(e) => Err(failed(e.into())),
         }
     }

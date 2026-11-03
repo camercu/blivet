@@ -32,6 +32,19 @@ impl FileId {
     }
 }
 
+/// What `path` names, while that is still the file `id`: `None` once the
+/// path is gone or names another file.
+pub(crate) fn stat_if_named(
+    path: &Path,
+    id: FileId,
+) -> Result<Option<nix::sys::stat::FileStat>, nix::errno::Errno> {
+    match nix::sys::stat::stat(path) {
+        Ok(st) if FileId::of(&st) == id => Ok(Some(st)),
+        Ok(_) | Err(nix::errno::Errno::ENOENT) => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
 /// True when both paths name one file, whether or not it exists yet.
 ///
 /// An existing file is settled by `canonicalize` on both operands. A file that
