@@ -52,4 +52,9 @@ exclude_re = [
     # chain prints it once. The delegation keeps a source a later variant
     # adds.
     'replace <impl std::error::Error for DaemonizeError>::source -> Option<&[(]dyn std::error::Error ..static[)]> with None$',
+    # -- killed only by the root tier --
+    # Unprivileged, initgroups fails before step 14 records a token, so only
+    # root reaches this restore. root_gets_its_groups_back_after_a_failed_
+    # foreground_start kills it under `just docker-test` (checked by hand).
+    'replace Groups::restore -> Result<[(][)], RestoreFailure> with Ok[(][(][)][)]$',
 ]
