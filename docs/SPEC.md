@@ -617,8 +617,8 @@ undefined behaviour.
    start whether it created the file (R164). Then
    `flock(LOCK_EX | LOCK_NB)`, and recheck that the path still names
    the locked file, reopening if not (R169). Open failure:
-   `LockfileError`. Flock failure: `LockConflict`. Fd is retained
-   through step 13.
+   `LockfileError`. Flock failure: `LockConflict`. The fd is held from
+   here on: step 13 spares it, and step 18 hands it to the context.
 8. **Write pidfile** (if configured). See pidfile mechanics.
 9. **Reset signal dispositions.** See signal reset.
 10. **Clear signal mask** via `sigprocmask(SIG_SETMASK, empty_set)`.
