@@ -227,7 +227,12 @@ unsafe fn run_post_fork<T>(
     let mut abort = AbortGuard::new(config.foreground);
     // SAFETY: this function's contract, passed on.
     let result = unsafe { run_steps(config, pipe_wr, init, &mut abort) };
-    result.map_err(|e| e.with_rollback_failures(abort.ledger.roll_back()))
+    result.map_err(|e| {
+        // What init left in stdout's buffer belongs in the log, and decides
+        // whether the rollback keeps it.
+        let _ = std::io::Write::flush(&mut std::io::stdout());
+        e.with_rollback_failures(abort.ledger.roll_back())
+    })
 }
 
 /// The steps of [`run_post_fork`], recording in `abort` what each changed.
@@ -1678,6 +1683,33 @@ mod tests {
             err.rollback_failures().is_empty(),
             "{:?}",
             err.rollback_failures()
+        );
+    }
+
+    // Covers: R164
+    /// Output init left in stdout's buffer, a partial line, reaches the log
+    /// before the rollback looks at it, so the log stays.
+    #[test]
+    fn output_still_buffered_keeps_the_log() {
+        use std::io::Write;
+        if !isolated() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("app.log");
+        let mut config = DaemonConfig::new();
+        config.foreground(true).close_fds(false).stdout(&log);
+
+        let result: Result<(DaemonContext, ()), _> =
+            run_inner_with(&config, &mut NullForker::new(vec![], Ok(())), || {
+                write!(std::io::stdout(), "connecting").unwrap();
+                Err(DaemonizeError::application(75, "init failed"))
+            });
+
+        assert!(result.is_err());
+        assert_eq!(
+            std::fs::read_to_string(&log).ok().as_deref(),
+            Some("connecting")
         );
     }
 

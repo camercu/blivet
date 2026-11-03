@@ -1724,7 +1724,8 @@ on any change to it, so the rows only copied the snapshot.
   removes the files
   it left on disk: the pidfile it wrote, the lockfile it created, and
   the stdout and stderr files it created while they are still empty (a
-  log something wrote to may say why the start failed, so it stays).
+  log something wrote to may say why the start failed, so it stays;
+  the rollback flushes the process's stdout buffer first).
   It removes each only while its
   path still names the file the start wrote, compared by device and
   inode, so a file another process put there since stays. The files
