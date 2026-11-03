@@ -783,16 +783,19 @@ mod tests {
     }
 
     // Covers: R164
-    /// With no descriptor to give the file back its owner by, a failed start
-    /// says so, naming the file.
+    /// With no descriptor left to give a file back its owner by, the rollback
+    /// goes by path. A log it keeps, written to, is no rollback failure.
     #[test]
-    fn an_owner_the_rollback_cannot_give_back_is_reported() {
-        use crate::ChangedState;
+    #[allow(clippy::disallowed_methods)] // init writes to fd 1, in a subprocess of its own
+    fn an_owner_without_a_descriptor_is_given_back_by_path() {
         if !isolated() {
             return;
         }
         crate::test_support::shed_root();
         let dir = tempfile::tempdir().unwrap();
+        // BSD gives a new file its directory's group, which the caller may
+        // not be in, and so could not give back.
+        nix::unistd::chown(dir.path(), None, Some(nix::unistd::getgid())).unwrap();
         let log = dir.path().join("app.log");
         let mut config = DaemonConfig::new();
         config
@@ -805,19 +808,56 @@ mod tests {
         let result: Result<(DaemonContext, ()), _> =
             run_inner_with(&config, &mut NullForker::new(vec![], Ok(())), || {
                 std::mem::forget(crate::test_support::fill_fd_table(0));
+                nix::unistd::write(std::io::stdout(), b"started\n").unwrap();
                 Ok(())
             });
 
         let err = result.expect_err("the failpoint failed the start");
-        let report: Vec<_> = err
-            .rollback_failures()
-            .iter()
-            .map(|f| (f.state(), f.path(), f.error().raw_os_error()))
-            .collect();
-        assert_eq!(
-            report,
-            [(ChangedState::FileOwner, Some(&*log), Some(libc::EMFILE))]
+        assert!(log.exists(), "the log written to was removed");
+        assert!(
+            err.rollback_failures().is_empty(),
+            "{:?}",
+            err.rollback_failures()
         );
+    }
+
+    // Covers: R164
+    /// The same, as root, where the owner really changes: the file gets its
+    /// owner back by path.
+    #[test]
+    #[ignore = "needs root: the privileged tier runs it"]
+    #[allow(clippy::disallowed_methods)] // init writes to fd 1, in a subprocess of its own
+    fn root_gives_a_file_its_owner_back_without_a_descriptor() {
+        use std::os::unix::fs::MetadataExt;
+        if !isolated() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("app.log");
+        std::fs::write(&log, "").unwrap();
+        let before = std::fs::metadata(&log).unwrap().gid();
+        let mut config = DaemonConfig::new();
+        config
+            .foreground(true)
+            .close_fds(false)
+            .append(true)
+            .stdout(&log)
+            .group(crate::test_support::foreign_gid().to_string());
+        steps::failpoints::BEFORE_SWITCH_FAILS.set();
+
+        let result: Result<(DaemonContext, ()), _> =
+            run_inner_with(&config, &mut NullForker::new(vec![], Ok(())), || {
+                std::mem::forget(crate::test_support::fill_fd_table(0));
+                Ok(())
+            });
+
+        let err = result.expect_err("the failpoint failed the start");
+        assert!(
+            err.rollback_failures().is_empty(),
+            "{:?}",
+            err.rollback_failures()
+        );
+        assert_eq!(std::fs::metadata(&log).unwrap().gid(), before);
     }
 
     // Covers: R163

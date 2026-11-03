@@ -123,6 +123,7 @@ impl ResolvedIdentity {
             ledger.record(Undo::new(Saved::Owner(Owner {
                 path: path.to_path_buf(),
                 fd: held,
+                id: crate::file_identity::FileId::of(&st),
                 was: (Uid::from_raw(st.st_uid), Gid::from_raw(st.st_gid)),
             })))?;
         }
@@ -262,19 +263,38 @@ fn resolve_group_gid(spec: &str) -> Result<Gid, ErrorKind> {
 ///
 /// The descriptor to give it back by is best-effort, as the working
 /// directory's is: with no descriptor free it is missing, and the chown goes
-/// on (R164). The restore then reports why it could not give the file back.
+/// on (R164). The restore then goes by path.
 pub(crate) struct Owner {
     path: std::path::PathBuf,
     fd: std::io::Result<std::os::fd::OwnedFd>,
+    id: crate::file_identity::FileId,
     was: (Uid, Gid),
 }
 
 impl Owner {
+    /// Gives the file its owner back by descriptor. Without one, by path,
+    /// while the path still names the file: one a later token removes, or
+    /// one gone already, is nothing to report.
     pub(crate) fn restore(self) -> Result<(), RestoreFailure> {
-        let Self { path, fd, was } = self;
-        let failed = |e| RestoreFailure::at(ChangedState::FileOwner, &path, e);
-        let fd = fd.map_err(failed)?;
-        nix::unistd::fchown(&fd, Some(was.0), Some(was.1)).map_err(|e| failed(e.into()))
+        let Self { path, fd, id, was } = self;
+        let failed = |e: nix::errno::Errno| {
+            RestoreFailure::at(ChangedState::FileOwner, &path, std::io::Error::from(e))
+        };
+        let (owner, group) = (Some(was.0), Some(was.1));
+        match fd {
+            Ok(fd) => nix::unistd::fchown(&fd, owner, group).map_err(failed),
+            Err(_) => match crate::file_identity::stat_if_named(&path, id).map_err(failed)? {
+                Some(_) => nix::unistd::fchownat(
+                    nix::fcntl::AT_FDCWD,
+                    &path,
+                    owner,
+                    group,
+                    nix::fcntl::AtFlags::AT_SYMLINK_NOFOLLOW,
+                )
+                .map_err(failed),
+                None => Ok(()),
+            },
+        }
     }
 }
 

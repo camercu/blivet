@@ -1719,7 +1719,9 @@ on any change to it, so the rows only copied the snapshot.
   Elsewhere such a directory, and anywhere one the caller can no longer
   search, cannot be opened, and the start goes on without saving it.
   In both modes it puts back the
-  owner and group of each file step 16 chowned, and removes the files
+  owner and group of each file step 16 chowned (by the descriptor it
+  holds, or with none free by path while the path names the file), and
+  removes the files
   it left on disk: the pidfile it wrote, the lockfile it created, and
   the stdout and stderr files it created while they are still empty (a
   log something wrote to may say why the start failed, so it stays).
