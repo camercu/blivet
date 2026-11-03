@@ -172,10 +172,10 @@ fn panicked(payload: &(dyn std::any::Any + Send)) -> ErrorKind {
 ///
 /// The pidfile goes while the lock is still held: released first, the lock
 /// would let a second instance in to write its pid into a file this one then
-/// removes. Fields drop in the order declared, so `ledger` removes the
-/// pidfile before `files` releases the lock.
+/// removes. [`Drop`] rolls the ledger back in its body, and `files`, the
+/// lock among them, drops after the body.
 struct AbortGuard<'a> {
-    /// What the steps changed. Declared before `files`: see above.
+    /// What the steps changed.
     ledger: steps::Ledger,
     /// The files steps 7, 8 and 12 opened, the lock among them.
     files: steps::OpenedFiles<'a>,
@@ -192,6 +192,15 @@ impl AbortGuard<'_> {
             ledger: steps::Ledger::new(rollback),
             files: steps::OpenedFiles::default(),
         }
+    }
+}
+
+impl Drop for AbortGuard<'_> {
+    fn drop(&mut self) {
+        // Empty unless a panic unwound past `run_post_fork`, which leaves no
+        // error to report the failures in. Here, not by field order, so the
+        // pidfile goes before the lock whatever order the fields are in.
+        let _ = self.ledger.roll_back();
     }
 }
 
