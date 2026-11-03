@@ -283,6 +283,19 @@ mod tests {
     }
 
     #[test]
+    fn a_dropped_ledger_restores_latest_first() {
+        if !isolated() {
+            return;
+        }
+        umask(Mode::from_bits_truncate(CALLER_UMASK));
+        let mut ledger = Ledger::new(Rollback::PutBack);
+        ledger.record(set_umask(0o077, Rollback::PutBack)).unwrap();
+        ledger.record(set_umask(0o027, Rollback::PutBack)).unwrap();
+        drop(ledger);
+        assert_eq!(current_umask().bits(), CALLER_UMASK);
+    }
+
+    #[test]
     fn a_kept_token_restores_nothing() {
         if !isolated() {
             return;
