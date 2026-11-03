@@ -36,7 +36,8 @@ minimum_test_timeout = 30
 # it in, and every entry below is then one honest category.
 exclude_re = [
     # -- equivalent bitflag mutants --
-    'replace \| with \^ in open_and_lock$',
+    'replace \| with \^ in lock_once$',
+    'replace \| with \^ in open_creating$',
     'replace \| with \^ in open_pidfile$',
     'replace \| with \^ in open_stream$',
     'replace \| with \^ in channel$',
@@ -46,4 +47,9 @@ exclude_re = [
     # because `ledger` is declared before `files`. The body keeps the
     # pidfile-before-lock order if the fields are ever reordered.
     'replace <impl Drop for AbortGuard<._>>::drop with [(][)]$',
+    # -- equivalent today --
+    # No ErrorKind variant has a source: each message names its cause, so a
+    # chain prints it once. The delegation keeps a source a later variant
+    # adds.
+    'replace <impl std::error::Error for DaemonizeError>::source -> Option<&[(]dyn std::error::Error ..static[)]> with None$',
 ]
