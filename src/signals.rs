@@ -8,7 +8,7 @@
 #![allow(unsafe_code)]
 
 use crate::error::{ChangedState, ErrorKind, RestoreFailure};
-use crate::steps::{Ledger, Rollback, Saved, Undo};
+use crate::steps::{Ledger, Rollback, Saved};
 
 /// Reset signal dispositions from 1 through the signal ceiling to SIG_DFL.
 ///
@@ -55,12 +55,12 @@ pub(crate) fn reset_signal_dispositions(ledger: &mut Ledger) -> Result<(), Error
             // EINVAL: signal cannot be caught, skip
             Err(err) if err.raw_os_error() == Some(libc::EINVAL) => {}
             Err(err) => {
-                ledger.record(Undo::saving(rollback, || Saved::Dispositions(saved)))?;
+                ledger.record_saving(|| Saved::Dispositions(saved))?;
                 return Err(ErrorKind::SystemError(format!("sigaction({sig}): {err}")));
             }
         }
     }
-    ledger.record(Undo::saving(rollback, || Saved::Dispositions(saved)))
+    ledger.record_saving(|| Saved::Dispositions(saved))
 }
 
 /// Sets `sig` to SIG_DFL, reporting what it replaced in `was`.

@@ -10,7 +10,7 @@ use nix::fcntl::OFlag;
 use nix::sys::signal::SigSet;
 use nix::sys::stat::Mode;
 
-use super::{Rollback, Saved, Undo};
+use super::{Ledger, Rollback, Saved, Undo};
 use crate::error::{ChangedState, ErrorKind, RestoreFailure};
 
 /// Step 4: Set process umask.
@@ -19,11 +19,11 @@ use crate::error::{ChangedState, ErrorKind, RestoreFailure};
 /// [`DaemonConfig::validate`](crate::DaemonConfig::validate)); the cast to
 /// `mode_t` is therefore lossless.
 #[allow(clippy::cast_possible_truncation)] // validated <= 0o7777; mode_t is u16 on macOS and FreeBSD
-pub(crate) fn set_umask(mode: u32, rollback: Rollback) -> Undo {
+pub(crate) fn set_umask(mode: u32, ledger: &mut Ledger) -> Result<(), ErrorKind> {
     #[cfg(test)]
     crate::test_support::assert_isolated("set_umask");
     let was = nix::sys::stat::umask(Mode::from_bits_truncate(mode as libc::mode_t));
-    Undo::saving(rollback, || Saved::Umask(Umask(was)))
+    ledger.record_saving(|| Saved::Umask(Umask(was)))
 }
 
 /// The umask step 4 replaced.
@@ -36,13 +36,13 @@ impl Umask {
 }
 
 /// Step 5: Change working directory.
-pub(crate) fn change_dir(path: &Path, rollback: Rollback) -> Result<Undo, ErrorKind> {
+pub(crate) fn change_dir(path: &Path, ledger: &mut Ledger) -> Result<(), ErrorKind> {
     #[cfg(test)]
     crate::test_support::assert_isolated("change_dir");
-    let undo = Undo::saving(rollback, || Saved::Cwd(Cwd::save()));
+    let undo = Undo::saving(ledger.rollback(), || Saved::Cwd(Cwd::save()));
     nix::unistd::chdir(path)
         .map_err(|e| ErrorKind::ChdirFailed(format!("{}: {e}", path.display())))?;
-    Ok(undo)
+    ledger.record(undo)
 }
 
 /// A descriptor of the working directory step 5 left, to `fchdir` back to.
@@ -82,7 +82,7 @@ pub(crate) const SEARCH_ONLY: OFlag = OFlag::O_RDONLY.union(OFlag::O_DIRECTORY);
 ///
 /// Returns [`SystemError`](ErrorKind::SystemError) if `sigprocmask` fails
 /// (e.g. blocked by a seccomp filter) so the caller can report it.
-pub(crate) fn clear_signal_mask(rollback: Rollback) -> Result<Undo, ErrorKind> {
+pub(crate) fn clear_signal_mask(ledger: &mut Ledger) -> Result<(), ErrorKind> {
     use nix::sys::signal::SigmaskHow;
     #[cfg(test)]
     if crate::steps::failpoints::SIGPROCMASK_FAILS.injected() {
@@ -97,9 +97,7 @@ pub(crate) fn clear_signal_mask(rollback: Rollback) -> Result<Undo, ErrorKind> {
         Some(&mut was),
     )
     .map_err(|e| ErrorKind::SystemError(format!("sigprocmask: {e}")))?;
-    Ok(Undo::saving(rollback, || {
-        Saved::SignalMask(SignalMask(was))
-    }))
+    ledger.record_saving(|| Saved::SignalMask(SignalMask(was)))
 }
 
 /// The signal mask step 10 replaced.
@@ -129,9 +127,10 @@ impl SignalMask {
 /// The token restores only before `init`: it calls `setenv` too.
 #[allow(unsafe_code)]
 #[allow(clippy::disallowed_methods)] // setenv thread safety: single thread, per the contract
-pub(crate) fn set_env_vars(env: &[(String, String)], rollback: Rollback) -> Undo {
+pub(crate) fn set_env_vars(env: &[(String, String)], ledger: &mut Ledger) -> Result<(), ErrorKind> {
     #[cfg(test)]
     crate::test_support::assert_isolated("set_env_vars");
+    let rollback = ledger.rollback();
     let mut was = Vec::new();
     for (key, value) in env {
         if let Rollback::PutBack = rollback {
@@ -141,7 +140,7 @@ pub(crate) fn set_env_vars(env: &[(String, String)], rollback: Rollback) -> Undo
         // foreground entry gate), so the `setenv` cannot race.
         unsafe { std::env::set_var(key, value) };
     }
-    Undo::saving(rollback, || Saved::EnvVars(EnvVars(was)))
+    ledger.record_saving(|| Saved::EnvVars(EnvVars(was)))
 }
 
 /// Each variable step 11 set, with the value it had before, in the order set.
@@ -178,7 +177,7 @@ mod tests {
         }
         // Start from a different umask, so a set_umask that did nothing fails.
         nix::sys::stat::umask(Mode::from_bits_truncate(0o077));
-        set_umask(0o022, Rollback::Skip).keep();
+        set_umask(0o022, &mut Ledger::new(Rollback::Skip)).unwrap();
         let readback = nix::sys::stat::umask(Mode::from_bits_truncate(0o077));
         assert_eq!(readback, Mode::from_bits_truncate(0o022));
     }
@@ -189,7 +188,7 @@ mod tests {
             return;
         }
         let tmp = tempfile::tempdir().unwrap();
-        let result = change_dir(tmp.path(), Rollback::Skip).map(Undo::keep);
+        let result = change_dir(tmp.path(), &mut Ledger::new(Rollback::Skip));
         assert!(result.is_ok());
         let cwd = std::env::current_dir().unwrap();
         assert_eq!(cwd, std::fs::canonicalize(tmp.path()).unwrap());
@@ -202,9 +201,8 @@ mod tests {
         }
         let result = change_dir(
             Path::new("/nonexistent_daemonize_test_path"),
-            Rollback::Skip,
-        )
-        .map(Undo::keep);
+            &mut Ledger::new(Rollback::Skip),
+        );
         assert!(matches!(result, Err(ErrorKind::ChdirFailed(_))));
     }
 
@@ -218,7 +216,7 @@ mod tests {
         set.add(Signal::SIGUSR1);
         nix::sys::signal::sigprocmask(SigmaskHow::SIG_BLOCK, Some(&set), None).unwrap();
 
-        clear_signal_mask(Rollback::Skip).unwrap().keep();
+        clear_signal_mask(&mut Ledger::new(Rollback::Skip)).unwrap();
 
         let mut current = SigSet::empty();
         nix::sys::signal::sigprocmask(SigmaskHow::SIG_SETMASK, None, Some(&mut current)).unwrap();
@@ -235,7 +233,7 @@ mod tests {
             ("DAEMONIZE_TEST_A".into(), "1".into()),
             ("DAEMONIZE_TEST_B".into(), "2".into()),
         ];
-        set_env_vars(&vars, Rollback::Skip).keep();
+        set_env_vars(&vars, &mut Ledger::new(Rollback::Skip)).unwrap();
         assert_eq!(std::env::var("DAEMONIZE_TEST_A").unwrap(), "1");
         assert_eq!(std::env::var("DAEMONIZE_TEST_B").unwrap(), "2");
     }
@@ -250,7 +248,7 @@ mod tests {
             ("DAEMONIZE_TEST_DUP".into(), "first".into()),
             ("DAEMONIZE_TEST_DUP".into(), "second".into()),
         ];
-        set_env_vars(&vars, Rollback::Skip).keep();
+        set_env_vars(&vars, &mut Ledger::new(Rollback::Skip)).unwrap();
         assert_eq!(std::env::var("DAEMONIZE_TEST_DUP").unwrap(), "second");
     }
 }

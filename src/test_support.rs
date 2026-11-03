@@ -718,16 +718,22 @@ mod tests {
             ("writer_with_no_reader", || drop(writer_with_no_reader())),
             ("shed_root", shed_root),
             ("set_umask", || {
-                drop(steps::set_umask(0o022, Rollback::PutBack))
+                drop(steps::set_umask(
+                    0o022,
+                    &mut steps::Ledger::new(Rollback::PutBack),
+                ))
             }),
             ("change_dir", || {
                 drop(steps::change_dir(
                     std::path::Path::new("."),
-                    Rollback::PutBack,
+                    &mut steps::Ledger::new(Rollback::PutBack),
                 ))
             }),
             ("set_env_vars", || {
-                drop(steps::set_env_vars(&[], Rollback::PutBack))
+                drop(steps::set_env_vars(
+                    &[],
+                    &mut steps::Ledger::new(Rollback::PutBack),
+                ))
             }),
             ("close_inherited_fds", || {
                 drop(steps::close_inherited_fds(&[]))
@@ -753,7 +759,7 @@ mod tests {
                 ));
             }),
             ("joining the user's groups", || {
-                drop(identity().join_groups(Rollback::PutBack));
+                drop(identity().join_groups(&mut steps::Ledger::new(Rollback::PutBack)));
             }),
             ("the identity switch", || {
                 // SAFETY: the guard panics before the switch touches anything.

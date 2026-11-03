@@ -248,10 +248,10 @@ unsafe fn run_steps<'a, T>(
 ) -> Result<(DaemonContext, T), DaemonizeError> {
     let AbortGuard { ledger, files } = abort;
     // Step 4: Set umask
-    ledger.record(steps::set_umask(config.umask, ledger.rollback()))?;
+    steps::set_umask(config.umask, ledger)?;
 
     // Step 5: chdir
-    ledger.record(steps::change_dir(&config.chdir, ledger.rollback())?)?;
+    steps::change_dir(&config.chdir, ledger)?;
 
     // Step 6: Redirect stdin to /dev/null (always); redirect stdout/stderr
     // to /dev/null only when not in foreground mode (foreground leaves them
@@ -273,7 +273,7 @@ unsafe fn run_steps<'a, T>(
             .is_some_and(|pidfile| crate::file_identity::paths_same(pidfile, path));
         if created && !is_pidfile {
             let removal = steps::Removal::new(path, id, steps::Created::Lockfile);
-            ledger.record(steps::Undo::new(steps::Saved::Removal(removal)))?;
+            ledger.record_lasting(steps::Saved::Removal(removal))?;
         }
     }
 
@@ -289,7 +289,7 @@ unsafe fn run_steps<'a, T>(
     if let Some(ref pidfile_path) = config.pidfile {
         let pidfile = steps::open_pidfile(pidfile_path, files.lock())?;
         let removal = steps::Removal::new(pidfile_path, pidfile.id()?, steps::Created::Pidfile);
-        ledger.record(steps::Undo::new(steps::Saved::Removal(removal)))?;
+        ledger.record_lasting(steps::Saved::Removal(removal))?;
         let (id, fd) = pidfile.write_pid()?;
         pidfile_id = Some(id);
         // A standalone pidfile's descriptor, kept for step 16's chown (R163).
@@ -302,10 +302,10 @@ unsafe fn run_steps<'a, T>(
     signals::reset_signal_dispositions(ledger)?;
 
     // Step 10: Clear signal mask
-    ledger.record(steps::clear_signal_mask(ledger.rollback())?)?;
+    steps::clear_signal_mask(ledger)?;
 
     // Step 11: Set environment variables
-    ledger.record(steps::set_env_vars(&config.env, ledger.rollback()))?;
+    steps::set_env_vars(&config.env, ledger)?;
 
     // Step 12: Redirect stdout/stderr to configured files. Only a foreground
     // caller sees the slots after a failure, so only it pays for saving them.
@@ -343,7 +343,7 @@ unsafe fn run_steps<'a, T>(
     // The supplementary groups too, from the real group database, before
     // init can change root (R162).
     if let Some(identity) = &identity {
-        ledger.record(identity.join_groups(ledger.rollback())?)?;
+        identity.join_groups(ledger)?;
     }
 
     // Step 15: Empty the stream files, the one change no rollback can undo,

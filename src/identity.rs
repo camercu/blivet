@@ -105,7 +105,7 @@ impl ResolvedIdentity {
         files: impl IntoIterator<Item = (&'p Path, std::os::fd::BorrowedFd<'p>)>,
         ledger: &mut crate::steps::Ledger,
     ) -> Result<(), ErrorKind> {
-        use crate::steps::{Saved, Undo};
+        use crate::steps::Saved;
         let (owner, group) = self.chown_ids();
         let failed = |path: &Path, e| ErrorKind::ChownError(format!("{}: {e}", path.display()));
         for (path, fd) in files {
@@ -120,12 +120,12 @@ impl ResolvedIdentity {
             // sequence's copy closes when the sequence ends.
             let held = fd.try_clone_to_owned();
             nix::unistd::fchown(fd, owner, group).map_err(|e| failed(path, e))?;
-            ledger.record(Undo::new(Saved::Owner(Owner {
+            ledger.record_lasting(Saved::Owner(Owner {
                 path: path.to_path_buf(),
                 fd: held,
                 id: crate::file_identity::FileId::of(&st),
                 was: (Uid::from_raw(st.st_uid), Gid::from_raw(st.st_gid)),
-            })))?;
+            }))?;
         }
         Ok(())
     }
@@ -143,22 +143,19 @@ impl ResolvedIdentity {
     ///
     /// Returns `ErrorKind::PermissionDenied` if `initgroups` fails, and
     /// `UserNotFound` for a name with a NUL byte.
-    pub(crate) fn join_groups(
-        &self,
-        rollback: crate::steps::Rollback,
-    ) -> Result<crate::steps::Undo, ErrorKind> {
+    pub(crate) fn join_groups(&self, ledger: &mut crate::steps::Ledger) -> Result<(), ErrorKind> {
         use crate::steps::{Saved, Undo};
         #[cfg(test)]
         crate::test_support::assert_isolated("joining the user's groups");
         let Some(info) = self.user() else {
-            return Ok(Undo::nothing());
+            return Ok(());
         };
-        let undo = Undo::saving(rollback, || {
+        let undo = Undo::saving(ledger.rollback(), || {
             Saved::Groups(Groups(crate::sys::raw_getgroups()))
         });
         crate::sys::raw_initgroups(&info.cname()?, info.gid.as_raw())
             .map_err(|e| ErrorKind::PermissionDenied(format!("initgroups: {e}")))?;
-        Ok(undo)
+        ledger.record(undo)
     }
 
     /// Switch the process to this identity.

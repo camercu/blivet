@@ -146,7 +146,7 @@ fn open_stream<'a>(
     let id = FileId::of(&st);
     if created {
         let removal = super::Removal::new(path, id, super::Created::Log);
-        ledger.record(Undo::new(Saved::Removal(removal)))?;
+        ledger.record_lasting(Saved::Removal(removal))?;
     }
     Ok(OpenStream { path, id, fd })
 }
@@ -180,7 +180,7 @@ pub(crate) fn truncate_streams<'p>(
         }
         nix::unistd::ftruncate(fd, 0).map_err(|e| failed("truncate", e))?;
         if st.st_size > 0 {
-            ledger.record(Undo::new(Saved::Emptied(Emptied(path.to_path_buf()))))?;
+            ledger.record_lasting(Saved::Emptied(Emptied(path.to_path_buf())))?;
         }
     }
     Ok(())

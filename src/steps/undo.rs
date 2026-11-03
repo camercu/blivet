@@ -2,16 +2,17 @@
 //!
 //! A step that changes state a caller can see makes an [`Undo`], so the
 //! change and its undo are one value: a step cannot make one without the
-//! other. A step that makes one change returns its token; a step that makes
-//! several records each in the [`Ledger`] as it makes it, so a failure part
-//! way leaves nothing unrecorded. The ledger holds the tokens in the order
-//! the changes were made. On failure it restores them in reverse and reports
-//! each that could not be put back; at step 18 it keeps them all. A token
-//! that drops unrestored puts its change back and reports nothing.
+//! other. Every step records each token in the [`Ledger`] as it makes the
+//! change, so a failure part way leaves nothing unrecorded. The ledger holds
+//! the tokens in the order the changes were made. On failure it restores
+//! them in reverse and reports each that could not be put back; at step 18
+//! it keeps them all. A token that drops unrestored puts its change back and
+//! reports nothing.
 //!
 //! Most tokens hold process state, which a daemon's exit discards, so a
-//! daemon saves none ([`Rollback::Skip`]). A file a step left on disk outlives
-//! the process: its token is made with [`Undo::new`] in both modes.
+//! daemon saves none ([`Ledger::record_saving`]). A file a step left on disk
+//! outlives the process: its token goes in with [`Ledger::record_lasting`],
+//! in both modes.
 
 use std::os::fd::RawFd;
 
@@ -194,10 +195,26 @@ impl Ledger {
         self.rollback
     }
 
-    /// Holds a change's token, to put back on failure.
+    /// Holds a change's token, to put back on failure. One that restores
+    /// nothing is not kept.
     pub(crate) fn record(&mut self, undo: Undo) -> Result<(), ErrorKind> {
-        self.undo.push(undo);
+        if undo.0.is_some() {
+            self.undo.push(undo);
+        }
         self.checkpoint()
+    }
+
+    /// Records what `save` saves, under [`Rollback::PutBack`]; in a daemon
+    /// `save` does not run. For process state, which a daemon's exit
+    /// discards.
+    pub(crate) fn record_saving(&mut self, save: impl FnOnce() -> Saved) -> Result<(), ErrorKind> {
+        self.record(Undo::saving(self.rollback, save))
+    }
+
+    /// Records a change that outlives the process, a file on disk, to put
+    /// back in both modes.
+    pub(crate) fn record_lasting(&mut self, saved: Saved) -> Result<(), ErrorKind> {
+        self.record(Undo::new(saved))
     }
 
     /// A point the undo walk may fail the sequence at; nothing outside tests.
@@ -259,8 +276,9 @@ mod tests {
         if !isolated() {
             return;
         }
-        let undo = set_umask(0o077, Rollback::PutBack);
-        assert_eq!(undo.held_fd(), None);
+        let mut ledger = Ledger::new(Rollback::PutBack);
+        set_umask(0o077, &mut ledger).unwrap();
+        assert_eq!(ledger.held_fds().count(), 0);
     }
 
     #[test]
@@ -268,18 +286,9 @@ mod tests {
         if !isolated() {
             return;
         }
-        let undo = change_dir(std::path::Path::new("/"), Rollback::PutBack).unwrap();
-        assert!(undo.held_fd().is_some());
-    }
-
-    #[test]
-    fn a_dropped_token_restores() {
-        if !isolated() {
-            return;
-        }
-        umask(Mode::from_bits_truncate(CALLER_UMASK));
-        drop(set_umask(0o077, Rollback::PutBack));
-        assert_eq!(current_umask().bits(), CALLER_UMASK);
+        let mut ledger = Ledger::new(Rollback::PutBack);
+        change_dir(std::path::Path::new("/"), &mut ledger).unwrap();
+        assert_eq!(ledger.held_fds().count(), 1);
     }
 
     #[test]
@@ -289,19 +298,22 @@ mod tests {
         }
         umask(Mode::from_bits_truncate(CALLER_UMASK));
         let mut ledger = Ledger::new(Rollback::PutBack);
-        ledger.record(set_umask(0o077, Rollback::PutBack)).unwrap();
-        ledger.record(set_umask(0o027, Rollback::PutBack)).unwrap();
+        set_umask(0o077, &mut ledger).unwrap();
+        set_umask(0o027, &mut ledger).unwrap();
         drop(ledger);
         assert_eq!(current_umask().bits(), CALLER_UMASK);
     }
 
     #[test]
-    fn a_kept_token_restores_nothing() {
+    fn a_kept_ledger_restores_nothing() {
         if !isolated() {
             return;
         }
         umask(Mode::from_bits_truncate(CALLER_UMASK));
-        set_umask(0o077, Rollback::PutBack).keep();
+        let mut ledger = Ledger::new(Rollback::PutBack);
+        set_umask(0o077, &mut ledger).unwrap();
+        ledger.keep_all();
+        drop(ledger);
         assert_eq!(current_umask().bits(), 0o077);
     }
 
@@ -316,7 +328,9 @@ mod tests {
             return;
         }
         umask(Mode::from_bits_truncate(CALLER_UMASK));
-        drop(set_umask(0o077, Rollback::Skip));
+        let mut ledger = Ledger::new(Rollback::Skip);
+        set_umask(0o077, &mut ledger).unwrap();
+        drop(ledger);
         assert_eq!(current_umask().bits(), 0o077);
     }
 
@@ -326,9 +340,10 @@ mod tests {
             return;
         }
         let key = "BLIVET_UNDO_TEST";
-        let mut undo = set_env_vars(&[(key.into(), "set".into())], Rollback::PutBack);
-        undo.threads_may_start();
-        drop(undo);
+        let mut ledger = Ledger::new(Rollback::PutBack);
+        set_env_vars(&[(key.into(), "set".into())], &mut ledger).unwrap();
+        ledger.threads_may_start();
+        drop(ledger);
         assert_eq!(std::env::var(key).as_deref(), Ok("set"));
     }
 
@@ -338,9 +353,10 @@ mod tests {
             return;
         }
         umask(Mode::from_bits_truncate(CALLER_UMASK));
-        let mut undo = set_umask(0o077, Rollback::PutBack);
-        undo.threads_may_start();
-        drop(undo);
+        let mut ledger = Ledger::new(Rollback::PutBack);
+        set_umask(0o077, &mut ledger).unwrap();
+        ledger.threads_may_start();
+        drop(ledger);
         assert_eq!(current_umask().bits(), CALLER_UMASK);
     }
 }
