@@ -286,7 +286,7 @@ unsafe fn run_steps<'a, T>(
     }
 
     // Step 9: Reset signal dispositions
-    ledger.record(signals::reset_signal_dispositions(ledger.rollback())?)?;
+    signals::reset_signal_dispositions(ledger)?;
 
     // Step 10: Clear signal mask
     ledger.record(steps::clear_signal_mask(ledger.rollback())?)?;

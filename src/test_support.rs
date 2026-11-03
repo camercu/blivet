@@ -730,7 +730,9 @@ mod tests {
                 ));
             }),
             ("reset_signal_dispositions", || {
-                drop(crate::signals::reset_signal_dispositions(Rollback::PutBack));
+                drop(crate::signals::reset_signal_dispositions(
+                    &mut steps::Ledger::new(Rollback::PutBack),
+                ));
             }),
             ("restore_default_sigpipe", || {
                 let _ = crate::signals::restore_default_sigpipe();

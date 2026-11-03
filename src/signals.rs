@@ -7,8 +7,8 @@
 
 #![allow(unsafe_code)]
 
-use crate::error::{ChangedState, DaemonizeError, RestoreFailure};
-use crate::steps::{Rollback, Saved, Undo};
+use crate::error::{ChangedState, ErrorKind, RestoreFailure};
+use crate::steps::{Ledger, Rollback, Saved, Undo};
 
 /// Reset signal dispositions from 1 through the signal ceiling to SIG_DFL.
 ///
@@ -31,11 +31,13 @@ use crate::steps::{Rollback, Saved, Undo};
 /// to the parent rather than panicking. `EINVAL` — an uncatchable or invalid
 /// signal number — is skipped silently.
 ///
-/// The token puts back each disposition it replaced, latest first (R164). A
-/// failure part way puts back those already replaced before it returns.
-pub(crate) fn reset_signal_dispositions(rollback: Rollback) -> Result<Undo, DaemonizeError> {
+/// Its token, in `ledger`, puts back each disposition it replaced, latest
+/// first (R164). A failure part way records the token for those already
+/// replaced before it returns.
+pub(crate) fn reset_signal_dispositions(ledger: &mut Ledger) -> Result<(), ErrorKind> {
     #[cfg(test)]
     crate::test_support::assert_isolated("reset_signal_dispositions");
+    let rollback = ledger.rollback();
     let mut saved = Dispositions(Vec::new());
     let signals = signal_range();
     for sig in signals {
@@ -53,15 +55,12 @@ pub(crate) fn reset_signal_dispositions(rollback: Rollback) -> Result<Undo, Daem
             // EINVAL: signal cannot be caught, skip
             Err(err) if err.raw_os_error() == Some(libc::EINVAL) => {}
             Err(err) => {
-                let failed =
-                    crate::error::ErrorKind::SystemError(format!("sigaction({sig}): {err}"));
-                return Err(
-                    DaemonizeError::from(failed).with_rollback_failures(saved.restore().err())
-                );
+                ledger.record(Undo::saving(rollback, || Saved::Dispositions(saved)))?;
+                return Err(ErrorKind::SystemError(format!("sigaction({sig}): {err}")));
             }
         }
     }
-    Ok(Undo::saving(rollback, || Saved::Dispositions(saved)))
+    ledger.record(Undo::saving(rollback, || Saved::Dispositions(saved)))
 }
 
 /// Sets `sig` to SIG_DFL, reporting what it replaced in `was`.
@@ -345,7 +344,7 @@ mod tests {
     /// failpoint fails at SIGTERM, so the step has replaced both first.
     #[test]
     #[allow(unsafe_code)]
-    fn a_reset_failing_part_way_puts_back_what_it_replaced() {
+    fn a_reset_failing_part_way_leaves_what_it_replaced_to_put_back() {
         if !isolated() {
             return;
         }
@@ -358,13 +357,16 @@ mod tests {
         let before = crate::test_support::signal_state();
         crate::steps::failpoints::SIGACTION_FAILS.set();
 
-        let result = reset_signal_dispositions(Rollback::PutBack);
+        let mut ledger = Ledger::new(Rollback::PutBack);
+        let result = reset_signal_dispositions(&mut ledger);
+        let failures = ledger.roll_back();
 
         let failed_at_sigterm = matches!(
-            result.as_ref().map_err(DaemonizeError::kind),
-            Err(crate::error::ErrorKind::SystemError(m)) if m.starts_with("sigaction(15)")
+            &result,
+            Err(ErrorKind::SystemError(m)) if m.starts_with("sigaction(15)")
         );
         assert!(failed_at_sigterm, "{:?}", result.err());
+        assert!(failures.is_empty(), "{failures:?}");
         assert_eq!(crate::test_support::signal_state(), before);
     }
 
@@ -386,7 +388,7 @@ mod tests {
         }
         crate::steps::failpoints::SIGACTION_REFUSES.set();
 
-        reset_signal_dispositions(Rollback::Skip).unwrap().keep();
+        reset_signal_dispositions(&mut Ledger::new(Rollback::Skip)).unwrap();
 
         let handler = |sig| disposition(sig).unwrap().sa_sigaction;
         assert_eq!(handler(libc::SIGTERM), libc::SIG_IGN);
@@ -416,7 +418,7 @@ mod tests {
         );
 
         // Reset all dispositions
-        reset_signal_dispositions(Rollback::Skip).unwrap().keep();
+        reset_signal_dispositions(&mut Ledger::new(Rollback::Skip)).unwrap();
 
         // Read back SIGUSR1 disposition — should be SIG_DFL now
         // SAFETY: SIG_IGN and SIG_DFL install no handler, so no code runs.
@@ -442,7 +444,7 @@ mod tests {
         let ign = SigAction::new(SigHandler::SigIgn, SaFlags::empty(), SigSet::empty());
         // SAFETY: SIG_IGN and SIG_DFL install no handler, so no code runs.
         unsafe { sigaction(Signal::SIGPIPE, &ign) }.unwrap();
-        reset_signal_dispositions(Rollback::Skip).unwrap().keep();
+        reset_signal_dispositions(&mut Ledger::new(Rollback::Skip)).unwrap();
         // SAFETY: SIG_IGN and SIG_DFL install no handler, so no code runs.
         let after = unsafe { sigaction(Signal::SIGPIPE, &ign) }.unwrap();
         assert!(
@@ -455,7 +457,7 @@ mod tests {
         let dfl = SigAction::new(SigHandler::SigDfl, SaFlags::empty(), SigSet::empty());
         // SAFETY: SIG_IGN and SIG_DFL install no handler, so no code runs.
         unsafe { sigaction(Signal::SIGPIPE, &dfl) }.unwrap();
-        reset_signal_dispositions(Rollback::Skip).unwrap().keep();
+        reset_signal_dispositions(&mut Ledger::new(Rollback::Skip)).unwrap();
         // SAFETY: SIG_IGN and SIG_DFL install no handler, so no code runs.
         let after = unsafe { sigaction(Signal::SIGPIPE, &dfl) }.unwrap();
         assert!(
