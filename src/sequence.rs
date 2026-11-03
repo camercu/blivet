@@ -826,6 +826,47 @@ mod tests {
     }
 
     // Covers: R164
+    /// With no descriptor, and a path the rollback can no longer look up, the
+    /// owner cannot be given back, and the error says so, naming the file.
+    #[test]
+    fn an_owner_the_rollback_cannot_reach_is_reported() {
+        use crate::ChangedState;
+        use std::os::unix::fs::PermissionsExt;
+        if !isolated() {
+            return;
+        }
+        crate::test_support::shed_root();
+        let dir = tempfile::tempdir().unwrap();
+        let logs = dir.path().join("logs");
+        std::fs::create_dir(&logs).unwrap();
+        let log = logs.join("app.log");
+        let mut config = DaemonConfig::new();
+        config
+            .foreground(true)
+            .close_fds(false)
+            .stdout(&log)
+            .group(nix::unistd::getgid().to_string());
+        steps::failpoints::BEFORE_SWITCH_FAILS.set();
+
+        let result: Result<(DaemonContext, ()), _> =
+            run_inner_with(&config, &mut NullForker::new(vec![], Ok(())), || {
+                std::fs::set_permissions(&logs, std::fs::Permissions::from_mode(0o000)).unwrap();
+                std::mem::forget(crate::test_support::fill_fd_table(0));
+                Ok(())
+            });
+        std::fs::set_permissions(&logs, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+        let err = result.expect_err("the failpoint failed the start");
+        let owners: Vec<_> = err
+            .rollback_failures()
+            .iter()
+            .filter(|f| f.state() == ChangedState::FileOwner)
+            .map(|f| (f.path(), f.error().raw_os_error()))
+            .collect();
+        assert_eq!(owners, [(Some(&*log), Some(libc::EACCES))]);
+    }
+
+    // Covers: R164
     /// The same, as root, where the owner really changes: the file gets its
     /// owner back by path.
     #[test]
