@@ -612,9 +612,13 @@ undefined behaviour.
    foreground). See /dev/null redirect policy.
 7. **Open and lock lockfile** (if configured or derived from the
    pidfile — see Lockfile derivation). Open with
-   `O_WRONLY | O_CREAT | O_CLOEXEC`, mode 0644, then
-   `flock(LOCK_EX | LOCK_NB)`. Open failure: `LockfileError`.
-   Flock failure: `LockConflict`. Fd is retained through step 13.
+   `O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC`, mode 0644, falling back
+   to an open without `O_EXCL` when the file exists, which tells the
+   start whether it created the file (R164). Then
+   `flock(LOCK_EX | LOCK_NB)`, and recheck that the path still names
+   the locked file, reopening if not (R169). Open failure:
+   `LockfileError`. Flock failure: `LockConflict`. Fd is retained
+   through step 13.
 8. **Write pidfile** (if configured). See pidfile mechanics.
 9. **Reset signal dispositions.** See signal reset.
 10. **Clear signal mask** via `sigprocmask(SIG_SETMASK, empty_set)`.

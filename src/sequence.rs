@@ -294,8 +294,8 @@ unsafe fn run_post_fork<T>(
     init: impl FnOnce() -> Result<T, DaemonizeError>,
 ) -> Result<(DaemonContext, T), DaemonizeError> {
     // What a failure must undo (R164): everything restorable in foreground
-    // mode, where the process is the caller's; only the pidfile in a daemon,
-    // whose process exits on failure.
+    // mode, where the process is the caller's; in a daemon, whose process
+    // exits on failure, only what it left on disk.
     let mut abort = AbortGuard::new(config.foreground);
     // SAFETY: this function's contract, passed on.
     let result = unsafe { run_steps(config, pipe_wr, init, &mut abort) };

@@ -495,7 +495,7 @@ mod tests {
     }
 
     /// One sample of every variant, by hand. [`variant_name`] is the one
-    /// exhaustive match over `DaemonizeError`: a new variant fails to compile
+    /// exhaustive match over `ErrorKind`: a new variant fails to compile
     /// there, which is the prompt to sample it here. Nothing checks that it
     /// was: a variant left out of this list escapes the README guard below.
     /// Every test that needs every variant iterates this list.

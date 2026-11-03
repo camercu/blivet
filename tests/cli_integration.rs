@@ -1695,8 +1695,8 @@ fn stdout_and_stderr_on_one_file_share_a_descriptor() {
 
 // Covers: R164
 /// In foreground mode the CLI prints, after the error, each change the
-/// rollback could not put back. A working directory the caller may enter but
-/// not read cannot be saved, and a lock conflict then fails the start.
+/// rollback could not put back. A working directory the caller can no longer
+/// search cannot be saved, and a lock conflict then fails the start.
 #[test]
 fn verbose_foreground_failure_prints_what_the_rollback_left_changed() {
     if nix::unistd::geteuid().is_root() {

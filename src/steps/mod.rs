@@ -1,6 +1,6 @@
 //! Post-fork daemonization steps, one submodule per sub-concept.
 //!
-//! The sequence in `sequence.rs` runs them in order (steps 4 to 13). Each is
+//! The sequence in `sequence.rs` runs them in order (steps 4 to 18). Each is
 //! a function here rather than inline there because each is independently
 //! testable. Callers use `steps::name`; the submodules are an internal
 //! grouping.
@@ -109,7 +109,7 @@ pub(crate) mod failpoints {
         }
     }
 
-    /// Fails step 12's truncation of a stream file, the last thing it does:
+    /// Fails step 15's truncation of a stream file, just before `init`:
     /// every stdio slot has moved by then.
     pub(crate) static STREAM_TRUNCATE_FAILS: Failpoint = Failpoint::new();
 
