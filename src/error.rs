@@ -708,21 +708,10 @@ mod tests {
     #[test]
     fn only_file_changes_outlive_the_process() {
         use ChangedState::*;
-        let all = [
-            Stdin,
-            Stdout,
-            Stderr,
-            WorkingDirectory,
-            SignalMask,
-            SignalDispositions,
-            SupplementaryGroups,
-            PrimaryGroup,
-            Pidfile,
-            Lockfile,
-            OutputFile,
-            FileOwner,
-        ];
-        let lasting: Vec<_> = all.into_iter().filter(|s| s.outlives_process()).collect();
+        let lasting: Vec<_> = ALL_STATES
+            .into_iter()
+            .filter(|s| s.outlives_process())
+            .collect();
         assert_eq!(lasting, [Pidfile, Lockfile, OutputFile, FileOwner]);
     }
 
@@ -736,24 +725,55 @@ mod tests {
     // Covers: R83
     #[test]
     fn changed_state_names_are_lowercase() {
-        use ChangedState as S;
-        for state in [
-            S::Stdin,
-            S::Stdout,
-            S::Stderr,
-            S::WorkingDirectory,
-            S::SignalMask,
-            S::SignalDispositions,
-            S::SupplementaryGroups,
-            S::PrimaryGroup,
-            S::Pidfile,
-            S::Lockfile,
-            S::OutputFile,
-            S::FileOwner,
-        ] {
+        for state in ALL_STATES {
             let name = state.to_string();
-            assert_eq!(name, name.to_lowercase());
+            assert!(!name.is_empty() && name == name.to_lowercase(), "{name:?}");
         }
+    }
+
+    /// Every [`ChangedState`], in declaration order.
+    const ALL_STATES: [ChangedState; 12] = {
+        use ChangedState::*;
+        [
+            Stdin,
+            Stdout,
+            Stderr,
+            WorkingDirectory,
+            SignalMask,
+            SignalDispositions,
+            SupplementaryGroups,
+            PrimaryGroup,
+            Pidfile,
+            Lockfile,
+            OutputFile,
+            FileOwner,
+        ]
+    };
+
+    /// A new variant fails to compile here: the prompt to give it the next
+    /// position and add it to [`ALL_STATES`] in that place.
+    fn position(state: ChangedState) -> usize {
+        use ChangedState::*;
+        match state {
+            Stdin => 0,
+            Stdout => 1,
+            Stderr => 2,
+            WorkingDirectory => 3,
+            SignalMask => 4,
+            SignalDispositions => 5,
+            SupplementaryGroups => 6,
+            PrimaryGroup => 7,
+            Pidfile => 8,
+            Lockfile => 9,
+            OutputFile => 10,
+            FileOwner => 11,
+        }
+    }
+
+    #[test]
+    fn all_states_lists_every_variant_once() {
+        let positions: Vec<_> = ALL_STATES.into_iter().map(position).collect();
+        assert_eq!(positions, (0..ALL_STATES.len()).collect::<Vec<_>>());
     }
 
     // Covers: R156
