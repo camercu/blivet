@@ -256,10 +256,7 @@ unsafe fn run_steps<'a, T>(
     // Step 6: Redirect stdin to /dev/null (always); redirect stdout/stderr
     // to /dev/null only when not in foreground mode (foreground leaves them
     // inherited so output reaches the terminal or supervisor).
-    record_all(
-        ledger,
-        steps::redirect_to_devnull(!config.foreground, ledger.rollback())?,
-    )?;
+    steps::redirect_to_devnull(!config.foreground, ledger)?;
 
     // Step 7: Open and lock lockfile (explicit path, or the pidfile itself
     // unless derivation was opted out)

@@ -724,7 +724,10 @@ mod tests {
                 drop(steps::close_inherited_fds(&[]))
             }),
             ("redirect_to_devnull", || {
-                drop(steps::redirect_to_devnull(false, Rollback::PutBack));
+                drop(steps::redirect_to_devnull(
+                    false,
+                    &mut steps::Ledger::new(Rollback::PutBack),
+                ));
             }),
             ("reset_signal_dispositions", || {
                 drop(crate::signals::reset_signal_dispositions(Rollback::PutBack));

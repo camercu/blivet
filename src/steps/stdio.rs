@@ -9,7 +9,7 @@ use nix::fcntl::{OFlag, open};
 use nix::sys::stat::Mode;
 use nix::unistd::{self};
 
-use super::{Rollback, Saved, Undo};
+use super::{Ledger, Rollback, Saved, Undo};
 use crate::error::{ChangedState, DaemonizeError, ErrorKind, RestoreFailure};
 use crate::file_identity::FileId;
 use std::os::fd::AsRawFd;
@@ -68,16 +68,20 @@ pub(crate) fn open_creating(
 /// Returns [`SystemError`](ErrorKind::SystemError) if `/dev/null` cannot
 /// be opened or a `dup2` fails (e.g. a minimal container with no `/dev/null`),
 /// so the caller can report the failure to the parent rather than crashing.
+/// Each slot's token goes in `ledger` as the slot moves, so a failure part
+/// way leaves the slots already moved for the ledger to put back.
 #[allow(clippy::disallowed_methods)] // a stdio mover; asserts isolation under test
 pub(crate) fn redirect_to_devnull(
     stdout_stderr: bool,
-    rollback: Rollback,
-) -> Result<Vec<Undo>, DaemonizeError> {
+    ledger: &mut Ledger,
+) -> Result<(), ErrorKind> {
     #[cfg(test)]
     crate::test_support::assert_isolated("redirect_to_devnull");
     #[cfg(test)]
     if crate::steps::failpoints::DEVNULL_OPEN_FAILS.injected() {
-        return Err(ErrorKind::SystemError("open /dev/null: injected failure".into()).into());
+        return Err(ErrorKind::SystemError(
+            "open /dev/null: injected failure".into(),
+        ));
     }
     let devnull = open_above_stdio(c"/dev/null", OFlag::O_RDWR, Mode::empty())
         .map_err(|e| ErrorKind::SystemError(format!("open /dev/null: {e}")))?;
@@ -86,16 +90,12 @@ pub(crate) fn redirect_to_devnull(
     } else {
         &[StdioSlot::Stdin]
     };
-    let mut moved = Vec::new();
     for &slot in slots {
-        if let Err(e) = move_slot(&devnull, slot, rollback, &mut moved) {
-            let failures = super::restore_all(moved);
-            return Err(
-                DaemonizeError::from(e.into_devnull_error(slot)).with_rollback_failures(failures)
-            );
-        }
+        let undo =
+            move_slot(&devnull, slot, ledger.rollback()).map_err(|e| e.into_devnull_error(slot))?;
+        ledger.record(undo)?;
     }
-    Ok(moved)
+    Ok(())
 }
 
 /// Decides step 12 from the identities of the files it opened.
@@ -267,8 +267,10 @@ fn redirect_output_into<'a>(
         Some(path) => {
             let out = open_stream(path, append, moved)?;
             plan_output_redirect(Some(out.id), None, owned).map_err(|c| refusal(&c, &out))?;
-            move_slot(&out.fd, StdioSlot::Stdout, rollback, moved)
-                .map_err(|e| e.into_output_error(StdioSlot::Stdout))?;
+            moved.push(
+                move_slot(&out.fd, StdioSlot::Stdout, rollback)
+                    .map_err(|e| e.into_output_error(StdioSlot::Stdout))?,
+            );
             Some(out)
         }
         None => None,
@@ -281,8 +283,10 @@ fn redirect_output_into<'a>(
                 Stderr::Own(err) => &err.fd,
                 Stderr::SharesStdout(out) => &out.fd,
             };
-            move_slot(source, StdioSlot::Stderr, rollback, moved)
-                .map_err(|e| e.into_output_error(StdioSlot::Stderr))?;
+            moved.push(
+                move_slot(source, StdioSlot::Stderr, rollback)
+                    .map_err(|e| e.into_output_error(StdioSlot::Stderr))?,
+            );
             Some(err)
         }
         None => None,
@@ -382,23 +386,19 @@ impl SlotError {
     }
 }
 
-/// Moves `source` onto stdio slot `target`, with its token in `moved` when
-/// `rollback` asks for one. Saving a slot needs a free descriptor, so under
-/// [`Rollback::PutBack`] this fails when none is left. The choice lives here,
-/// not in [`SavedSlot`], so a `SavedSlot` always holds what it saved.
-fn move_slot(
-    source: &OwnedFd,
-    target: StdioSlot,
-    rollback: Rollback,
-    moved: &mut Vec<Undo>,
-) -> Result<(), SlotError> {
+/// Moves `source` onto stdio slot `target`, returning its token, which
+/// restores nothing unless `rollback` asks for one. Saving a slot needs a
+/// free descriptor, so under [`Rollback::PutBack`] this fails when none is
+/// left. The choice lives here, not in [`SavedSlot`], so a `SavedSlot` always
+/// holds what it saved.
+fn move_slot(source: &OwnedFd, target: StdioSlot, rollback: Rollback) -> Result<Undo, SlotError> {
     match rollback {
-        Rollback::PutBack => {
-            moved.push(Undo::new(Saved::Slot(SavedSlot::redirect(source, target)?)))
+        Rollback::PutBack => Ok(Undo::new(Saved::Slot(SavedSlot::redirect(source, target)?))),
+        Rollback::Skip => {
+            target.dup2(source).map_err(SlotError::Dup2)?;
+            Ok(Undo::nothing())
         }
-        Rollback::Skip => target.dup2(source).map_err(SlotError::Dup2)?,
     }
-    Ok(())
 }
 
 /// stderr as step 12 opened it.
@@ -616,10 +616,7 @@ mod tests {
         }
         let devnull = fstat(open(c"/dev/null", OFlag::O_RDONLY, Mode::empty()).unwrap()).unwrap();
 
-        redirect_to_devnull(true, Rollback::Skip)
-            .unwrap()
-            .into_iter()
-            .for_each(super::Undo::keep);
+        redirect_to_devnull(true, &mut Ledger::new(Rollback::Skip)).unwrap();
 
         // fd 2 is /dev/null too by now, so a failure here reports only through
         // the exit status.
@@ -648,10 +645,7 @@ mod tests {
         }
         nix::unistd::close(0).unwrap();
 
-        redirect_to_devnull(false, Rollback::Skip)
-            .unwrap()
-            .into_iter()
-            .for_each(super::Undo::keep);
+        redirect_to_devnull(false, &mut Ledger::new(Rollback::Skip)).unwrap();
 
         let devnull = fstat(open(c"/dev/null", OFlag::O_RDONLY, Mode::empty()).unwrap()).unwrap();
         let stdin = fstat(std::io::stdin()).expect("fd 0 is not open after the redirect");
@@ -672,10 +666,7 @@ mod tests {
 
         let stdout_before = fstat(std::io::stdout()).unwrap();
         let stderr_before = fstat(std::io::stderr()).unwrap();
-        redirect_to_devnull(false, Rollback::Skip)
-            .unwrap()
-            .into_iter()
-            .for_each(super::Undo::keep);
+        redirect_to_devnull(false, &mut Ledger::new(Rollback::Skip)).unwrap();
 
         // stdin should be /dev/null
         let devnull = fstat(open(c"/dev/null", OFlag::O_RDONLY, Mode::empty()).unwrap()).unwrap();
