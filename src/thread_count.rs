@@ -291,7 +291,8 @@ fn single_threaded_violation(caller: &str, count: usize) -> Option<String> {
 /// `caller` in the message.
 ///
 /// The imperative shell around [`single_threaded_violation`], used by the
-/// checked entry points, [`daemonize`] and [`daemonize_with`], before the fork.
+/// checked entry points, [`daemonize`](crate::daemonize) and
+/// [`daemonize_with`](crate::daemonize_with), before the fork.
 #[cfg(blivet_thread_count)]
 pub(crate) fn assert_single_threaded(caller: &str) {
     let count = ThreadCount::open()

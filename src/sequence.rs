@@ -22,9 +22,11 @@ use crate::{DaemonConfig, DaemonContext, DaemonizeError, ErrorKind, signals, ste
 ///
 /// With a real `Forker` this performs `fork`; the process must be
 /// single-threaded at the call, since forking with other threads running is
-/// undefined behavior. The checked [`daemonize`] establishes this, and the
-/// public [`daemonize_unchecked`] forwards the contract to its caller. (The
-/// test `NullForker` does not fork, so test calls are sound.)
+/// undefined behavior. The checked [`daemonize`](crate::daemonize)
+/// establishes this, and the public
+/// [`daemonize_unchecked`](crate::daemonize_unchecked) forwards the contract
+/// to its caller. (The test `NullForker` does not fork, so test calls are
+/// sound.)
 #[allow(unsafe_code)]
 pub(crate) unsafe fn daemonize_inner(
     config: &DaemonConfig,
