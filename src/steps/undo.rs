@@ -1,4 +1,4 @@
-//! Undo tokens: what a step changed, put back when the token drops (R164).
+//! Undo tokens: what a step changed, and how to put it back (R164).
 //!
 //! A step that changes state a caller can see makes an [`Undo`], so the
 //! change and its undo are one value: a step cannot make one without the
@@ -6,8 +6,9 @@
 //! change, so a failure part way leaves nothing unrecorded. The ledger holds
 //! the tokens in the order the changes were made. On failure it restores
 //! them in reverse and reports each that could not be put back; at step 18
-//! it keeps them all. A token that drops unrestored puts its change back and
-//! reports nothing.
+//! it keeps them all. Dropped unkept, as by a panic, it restores them and
+//! reports nothing. A token holds no rollback of its own: dropped outside
+//! the ledger, it puts nothing back.
 //!
 //! Most tokens hold process state, which a daemon's exit discards, so a
 //! daemon saves none ([`Ledger::record_saving`]). A file a step left on disk
@@ -104,9 +105,10 @@ impl Saved {
     }
 }
 
-/// A change a step made, put back when this drops unless [`keep`](Self::keep)
-/// was called.
-#[must_use = "a dropped token puts its change back at once"]
+/// A change a step made, put back by [`restore`](Self::restore). Dropped, it
+/// puts nothing back: a step records each token in the [`Ledger`] as it makes
+/// the change, and the ledger is what rolls back.
+#[must_use = "a dropped token's change is never put back"]
 pub(crate) struct Undo(Option<Saved>);
 
 impl Undo {
@@ -137,28 +139,14 @@ impl Undo {
         }
     }
 
-    /// Puts the change back now, unless it was kept.
-    pub(crate) fn restore(mut self) -> Result<(), RestoreFailure> {
-        self.0.take().map_or(Ok(()), Saved::restore)
-    }
-
-    /// Leaves the change in place.
-    pub(crate) fn keep(mut self) {
-        self.0 = None;
+    /// Puts the change back now.
+    pub(crate) fn restore(self) -> Result<(), RestoreFailure> {
+        self.0.map_or(Ok(()), Saved::restore)
     }
 
     /// The descriptor this holds, which step 13's sweep must spare.
     pub(crate) fn held_fd(&self) -> Option<RawFd> {
         self.0.as_ref().and_then(Saved::held_fd)
-    }
-}
-
-impl Drop for Undo {
-    fn drop(&mut self) {
-        if let Some(saved) = self.0.take() {
-            // A token restored by dropping has no one to report to.
-            let _ = saved.restore();
-        }
     }
 }
 
@@ -254,7 +242,7 @@ impl Ledger {
 
     /// Keeps every recorded change.
     pub(crate) fn keep_all(&mut self) {
-        self.undo.drain(..).for_each(Undo::keep);
+        self.undo.clear();
     }
 }
 
@@ -319,7 +307,7 @@ mod tests {
 
     #[test]
     fn under_skip_nothing_is_saved() {
-        Undo::saving(Rollback::Skip, || unreachable!("Skip must not save")).keep();
+        let _ = Undo::saving(Rollback::Skip, || unreachable!("Skip must not save"));
     }
 
     #[test]
