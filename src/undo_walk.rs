@@ -9,7 +9,7 @@
 
 use crate::forker::null_forker::NullForker;
 use crate::steps::failpoints;
-use crate::test_support::{ProcessSnapshot, isolated};
+use crate::test_support::{ProcessSnapshot, isolated, open_fds_above_stdio};
 use crate::{DaemonConfig, ErrorKind};
 
 extern "C" fn caller_handler(_: libc::c_int) {}
@@ -111,7 +111,8 @@ fn walk(config: &DaemonConfig, dir: &std::path::Path) {
             e.rollback_failures()
         );
         // The sweep may close what the caller had open, but a token must not
-        // leave a descriptor of its own behind.
+        // leave a descriptor of its own behind, on a number the sweep freed
+        // or any other: each is compared with the file it is open on.
         let leaked: Vec<_> = open_fds_above_stdio()
             .into_iter()
             .filter(|fd| !fds_before.contains(fd))
@@ -122,13 +123,6 @@ fn walk(config: &DaemonConfig, dir: &std::path::Path) {
             return;
         }
     }
-}
-
-/// The descriptors open above stdio, up to a bound no test reaches.
-fn open_fds_above_stdio() -> Vec<std::os::fd::RawFd> {
-    (3..1024)
-        .filter(|&fd| crate::test_support::slot_file_id(fd).is_some())
-        .collect()
 }
 
 /// The config every step with a token acts on: umask, cwd, the stdio slots,

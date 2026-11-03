@@ -224,7 +224,7 @@ pub(crate) fn fill_fd_table(free: usize) -> Vec<std::os::fd::OwnedFd> {
 ///
 /// Raw `fstat`, since a `BorrowedFd` must name an open descriptor.
 #[allow(unsafe_code)]
-pub(crate) fn slot_file_id(fd: std::os::fd::RawFd) -> Option<crate::file_identity::FileId> {
+fn slot_file_id(fd: std::os::fd::RawFd) -> Option<crate::file_identity::FileId> {
     let mut st = std::mem::MaybeUninit::<libc::stat>::uninit();
     // SAFETY: `fstat` writes only `st`; a closed slot is EBADF.
     if unsafe { libc::fstat(fd, st.as_mut_ptr()) } != 0 {
@@ -236,6 +236,14 @@ pub(crate) fn slot_file_id(fd: std::os::fd::RawFd) -> Option<crate::file_identit
     }))
 }
 
+/// Each descriptor open above stdio, with the file it is open on, up to a
+/// bound no test reaches.
+pub(crate) fn open_fds_above_stdio() -> Vec<(std::os::fd::RawFd, crate::file_identity::FileId)> {
+    (3..1024)
+        .filter_map(|fd| slot_file_id(fd).map(|id| (fd, id)))
+        .collect()
+}
+
 /// Points every descriptor above stdio open on the file at `path` at
 /// `/dev/null` instead, so a token holding one restores from the wrong file.
 /// Closing it would trip the owner's I/O-safety check.
@@ -245,13 +253,14 @@ pub(crate) fn swap_out_fds_open_on(path: &std::path::Path) {
     let target = crate::file_identity::FileId::of(&nix::sys::stat::stat(path).unwrap());
     #[allow(clippy::disallowed_methods)] // a test's own file, held across no dup2
     let null = std::fs::File::open("/dev/null").unwrap();
-    for fd in 3..1024 {
-        if slot_file_id(fd) == Some(target) {
-            #[allow(clippy::disallowed_methods)] // swaps the file under a held fd
-            // SAFETY: `dup2` touches no memory; the owner keeps an open fd.
-            let swapped = unsafe { libc::dup2(std::os::fd::AsRawFd::as_raw_fd(&null), fd) };
-            assert_eq!(swapped, fd, "could not swap out fd {fd}");
-        }
+    for (fd, _) in open_fds_above_stdio()
+        .into_iter()
+        .filter(|&(_, id)| id == target)
+    {
+        #[allow(clippy::disallowed_methods)] // swaps the file under a held fd
+        // SAFETY: `dup2` touches no memory; the owner keeps an open fd.
+        let swapped = unsafe { libc::dup2(std::os::fd::AsRawFd::as_raw_fd(&null), fd) };
+        assert_eq!(swapped, fd, "could not swap out fd {fd}");
     }
 }
 
