@@ -73,9 +73,11 @@ lint-deny:
 machete:
     cargo machete
 
-# Build documentation (warnings are errors)
+# Build documentation (warnings are errors), private items too, so a broken
+# link in internal docs fails as one in the public docs does.
 doc:
     RUSTDOCFLAGS="-D warnings" cargo doc {{locked}} --no-deps
+    RUSTDOCFLAGS="-D warnings" cargo doc {{locked}} --no-deps --document-private-items
 
 # Type-check and lint the non-host Unix targets, catching platform type
 # differences (rlim_t is i64 on FreeBSD, u64 elsewhere), libc constants a
