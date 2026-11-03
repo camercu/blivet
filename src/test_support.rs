@@ -224,7 +224,7 @@ pub(crate) fn fill_fd_table(free: usize) -> Vec<std::os::fd::OwnedFd> {
 ///
 /// Raw `fstat`, since a `BorrowedFd` must name an open descriptor.
 #[allow(unsafe_code)]
-fn slot_file_id(fd: std::os::fd::RawFd) -> Option<crate::file_identity::FileId> {
+pub(crate) fn slot_file_id(fd: std::os::fd::RawFd) -> Option<crate::file_identity::FileId> {
     let mut st = std::mem::MaybeUninit::<libc::stat>::uninit();
     // SAFETY: `fstat` writes only `st`; a closed slot is EBADF.
     if unsafe { libc::fstat(fd, st.as_mut_ptr()) } != 0 {

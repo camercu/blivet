@@ -73,6 +73,7 @@ fn realtime_caller_state() {
 fn walk(config: &DaemonConfig, dir: &std::path::Path) {
     failpoints::BEFORE_SWITCH_FAILS.set();
     let before = ProcessSnapshot::take(dir);
+    let fds_before = open_fds_above_stdio();
     for n in 1.. {
         failpoints::fail_at_checkpoint(n);
         let mut init_ran = false;
@@ -104,11 +105,30 @@ fn walk(config: &DaemonConfig, dir: &std::path::Path) {
             (before.clone(), after)
         };
         assert_eq!(after, expected, "state differs after failure {n}");
+        assert!(
+            e.rollback_failures().is_empty(),
+            "failure {n} left changes: {:?}",
+            e.rollback_failures()
+        );
+        // The sweep may close what the caller had open, but a token must not
+        // leave a descriptor of its own behind.
+        let leaked: Vec<_> = open_fds_above_stdio()
+            .into_iter()
+            .filter(|fd| !fds_before.contains(fd))
+            .collect();
+        assert!(leaked.is_empty(), "failure {n} leaked fds {leaked:?}");
         if last {
             assert!(n > 1, "the walk failed no token");
             return;
         }
     }
+}
+
+/// The descriptors open above stdio, up to a bound no test reaches.
+fn open_fds_above_stdio() -> Vec<std::os::fd::RawFd> {
+    (3..1024)
+        .filter(|&fd| crate::test_support::slot_file_id(fd).is_some())
+        .collect()
 }
 
 /// The config every step with a token acts on: umask, cwd, the stdio slots,
