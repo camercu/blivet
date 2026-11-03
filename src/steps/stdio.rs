@@ -145,7 +145,7 @@ fn open_stream<'a>(
         .map_err(|e| ErrorKind::OutputFileError(format!("fstat {}: {e}", path.display())))?;
     let id = FileId::of(&st);
     if created {
-        let removal = super::Removal::of_log(path, id);
+        let removal = super::Removal::new(path, id, super::Created::Log);
         ledger.record(Undo::new(Saved::Removal(removal)))?;
     }
     Ok(OpenStream { path, id, fd })

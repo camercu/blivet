@@ -40,6 +40,34 @@ impl AsFd for Role {
     }
 }
 
+/// What a start creates on disk, which a failure removes (R164).
+#[derive(Clone, Copy)]
+pub(crate) enum Created {
+    Pidfile,
+    Lockfile,
+    /// A stdout or stderr file.
+    Log,
+}
+
+impl Created {
+    fn state(self) -> ChangedState {
+        match self {
+            Self::Pidfile => ChangedState::Pidfile,
+            Self::Lockfile => ChangedState::Lockfile,
+            Self::Log => ChangedState::OutputFile,
+        }
+    }
+
+    /// Whether the file stays once written to. A log does: it may hold why
+    /// the start failed.
+    fn kept_once_written(self) -> bool {
+        match self {
+            Self::Log => true,
+            Self::Pidfile | Self::Lockfile => false,
+        }
+    }
+}
+
 /// A file a step left on disk, to remove on failure in either mode (R164).
 ///
 /// Removed only while the path still names it: a file another process put
@@ -47,33 +75,22 @@ impl AsFd for Role {
 pub(crate) struct Removal {
     path: PathBuf,
     id: FileId,
-    state: ChangedState,
-    /// A log is kept once written to: it may hold why the start failed.
-    only_if_empty: bool,
+    what: Created,
 }
 
 impl Removal {
-    pub(crate) fn new(path: &Path, id: FileId, state: ChangedState) -> Self {
+    pub(crate) fn new(path: &Path, id: FileId, what: Created) -> Self {
         Self {
             path: path.to_path_buf(),
             id,
-            state,
-            only_if_empty: false,
-        }
-    }
-
-    /// A log, removed only while nothing has written to it.
-    pub(crate) fn of_log(path: &Path, id: FileId) -> Self {
-        Self {
-            only_if_empty: true,
-            ..Self::new(path, id, ChangedState::OutputFile)
+            what,
         }
     }
 
     pub(crate) fn restore(self) -> Result<(), RestoreFailure> {
-        let failed = |e: std::io::Error| RestoreFailure::at(self.state, &self.path, e);
+        let failed = |e: std::io::Error| RestoreFailure::at(self.what.state(), &self.path, e);
         match stat_if_named(&self.path, self.id) {
-            Ok(Some(st)) if self.only_if_empty && st.st_size > 0 => Ok(()),
+            Ok(Some(st)) if self.what.kept_once_written() && st.st_size > 0 => Ok(()),
             Ok(Some(_)) => std::fs::remove_file(&self.path).map_err(failed),
             Ok(None) => Ok(()),
             Err(e) => Err(failed(e.into())),

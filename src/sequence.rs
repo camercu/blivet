@@ -9,7 +9,6 @@ use std::os::fd::{AsRawFd, OwnedFd};
 
 use nix::unistd::ForkResult;
 
-use crate::error::ChangedState;
 use crate::forker::Forker;
 use crate::identity::ResolvedIdentity;
 use crate::notify::{self, NotifyChannel};
@@ -273,7 +272,7 @@ unsafe fn run_steps<'a, T>(
             .as_deref()
             .is_some_and(|pidfile| crate::file_identity::paths_same(pidfile, path));
         if created && !is_pidfile {
-            let removal = steps::Removal::new(path, id, ChangedState::Lockfile);
+            let removal = steps::Removal::new(path, id, steps::Created::Lockfile);
             ledger.record(steps::Undo::new(steps::Saved::Removal(removal)))?;
         }
     }
@@ -289,7 +288,7 @@ unsafe fn run_steps<'a, T>(
     let mut pidfile_id = None;
     if let Some(ref pidfile_path) = config.pidfile {
         let pidfile = steps::open_pidfile(pidfile_path, files.lock())?;
-        let removal = steps::Removal::new(pidfile_path, pidfile.id()?, ChangedState::Pidfile);
+        let removal = steps::Removal::new(pidfile_path, pidfile.id()?, steps::Created::Pidfile);
         ledger.record(steps::Undo::new(steps::Saved::Removal(removal)))?;
         let (id, fd) = pidfile.write_pid()?;
         pidfile_id = Some(id);
