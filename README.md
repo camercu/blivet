@@ -200,8 +200,7 @@ A `DaemonizeError` says what failed in `kind()`, an `ErrorKind`. The kinds cover
 validation, fork, setsid, lock, permission, chown, exec, and parent-notify
 failures, plus a caller-supplied `Application` variant. Each variant maps to a
 `sysexits.h` exit code through `exit_code()`, so failures reach the shell with a
-meaningful status. [daemonize(1)](docs/daemonize.1.md#exit-status) lists the
-codes.
+meaningful status. [docs/exit-codes.md](docs/exit-codes.md) lists the codes.
 
 A foreground start that fails puts back what it changed in your process. Each
 change it could not put back is in `rollback_failures()`: the `ChangedState`
@@ -286,7 +285,7 @@ daemonize -p /var/run/myapp.pid -o /var/log/myapp.log -c /var/lib/myapp \
 The launcher blocks until the daemon successfully `exec`s, then exits 0. On
 failure (lockfile conflict, permission denied, exec error) it prints the error
 to stderr and exits with the same `sysexits.h` code the library returns (see
-[Errors & exit codes](#errors--exit-codes)). When `-u`/`-g` are
+[daemonize(1)](docs/daemonize.1.md#exit-status)). When `-u`/`-g` are
 given, the CLI transfers ownership of the pidfile, lockfile, and log files to the
 target user/group before dropping privileges, so the daemon can keep writing to
 them.

@@ -48,7 +48,8 @@ impl DaemonizeError {
         &self.rollback_failures
     }
 
-    /// Returns the `sysexits.h` exit code for the [`kind`](Self::kind).
+    /// Returns the `sysexits.h` exit code for the [`kind`](Self::kind), as
+    /// [`ErrorKind`]'s table lists.
     ///
     /// Always non-zero, so it is safe to pass to `std::process::exit`: a
     /// reported error can never be mistaken for success. A caller-supplied
@@ -284,9 +285,15 @@ impl std::fmt::Display for ChangedState {
 
 /// What failed: the [`kind`](DaemonizeError::kind) of a [`DaemonizeError`].
 ///
-/// Each variant maps to a `sysexits.h` exit code via [`exit_code`](DaemonizeError::exit_code).
 /// `ProgramNotFound` and `ExecFailed` come only from
 /// [`DaemonContext::exec`](crate::DaemonContext::exec) and the CLI's checks.
+///
+/// # Exit codes
+///
+/// Each variant maps to a `sysexits.h` exit code via
+/// [`exit_code`](DaemonizeError::exit_code):
+///
+#[doc = include_str!("../docs/exit-codes.md")]
 ///
 /// # Payload stability
 ///
@@ -535,7 +542,7 @@ mod tests {
     /// One sample of every variant, by hand. [`variant_name`] is the one
     /// exhaustive match over `ErrorKind`: a new variant fails to compile
     /// there, which is the prompt to sample it here. Nothing checks that it
-    /// was: a variant left out of this list escapes the SPEC guard below.
+    /// was: a variant left out of this list escapes the exit-code table guard below.
     /// Every test that needs every variant iterates this list.
     fn every_variant() -> Vec<ErrorKind> {
         vec![
@@ -562,7 +569,7 @@ mod tests {
         ]
     }
 
-    /// The variant's name, as the SPEC table writes it.
+    /// The variant's name, as the exit-code table writes it.
     fn variant_name(err: &ErrorKind) -> &'static str {
         match err {
             ErrorKind::ValidationError(_) => "ValidationError",
@@ -603,20 +610,20 @@ mod tests {
         }
     }
 
-    /// SPEC, baked in at compile time.
+    /// The exit-code table, baked in at compile time.
     ///
     /// Never read at run time: this test ships with the crate, and a run-time
     /// read would panic for anyone running `cargo test` on a packaged or
     /// vendored copy. `just package-test` runs it on the packaged copy.
-    const SPEC: &str = include_str!("../docs/SPEC.md");
+    const EXIT_CODES: &str = include_str!("../docs/exit-codes.md");
 
-    /// SPEC's exit-code table restates `DaemonizeError`: its variants and
-    /// what `exit_code()` returns for each. Nothing outside the crate can
-    /// enumerate a `#[non_exhaustive]` enum, so this guard lives here, in the
-    /// crate. The table must list every variant, no more, and each code must
-    /// match.
+    /// The exit-code table restates `DaemonizeError`: its variants, what
+    /// `exit_code()` returns for each, and that code's `sysexits.h` name.
+    /// Nothing outside the crate can enumerate a `#[non_exhaustive]` enum, so
+    /// this guard lives here, in the crate. The table must list every
+    /// variant, once, and each row must match.
     #[test]
-    fn spec_exit_codes_match_error_impl() {
+    fn exit_code_table_matches_error_impl() {
         let documented = parse_exit_code_table();
         let names: std::collections::BTreeSet<&str> =
             every_variant().iter().map(variant_name).collect();
@@ -624,51 +631,76 @@ mod tests {
             documented.keys().map(String::as_str).collect();
         assert_eq!(
             names, table,
-            "SPEC exit-code table and DaemonizeError variants must match exactly"
+            "exit-code table and DaemonizeError variants must match exactly"
         );
 
         for err in every_variant() {
             let name = variant_name(&err);
-            let cell = &documented[name];
+            let (cell, constant) = &documented[name];
             if name == "Application" {
-                assert!(
-                    cell.starts_with("caller's"),
-                    "Application row should read \"caller's\", got {cell:?}"
+                assert_eq!(
+                    cell, "caller's `code`; 0 remapped to 70",
+                    "Application row drifted"
                 );
                 assert_eq!(
                     err.exit_code(),
                     42,
                     "Application forwards the caller's code"
                 );
+                assert_eq!(
+                    DaemonizeError::application(0, "x").exit_code(),
+                    70,
+                    "Application remaps 0 to 70"
+                );
             } else {
                 let code: u8 = cell
                     .parse()
                     .unwrap_or_else(|_| panic!("{name} exit code cell '{cell}' is not a number"));
-                assert_eq!(code, err.exit_code(), "{name} exit code drifted from SPEC");
+                assert_eq!(
+                    code,
+                    err.exit_code(),
+                    "{name} exit code drifted from the table"
+                );
+                assert_eq!(
+                    constant.trim_matches('`'),
+                    sysexits_name(code),
+                    "{name}'s sysexits.h name drifted"
+                );
             }
         }
     }
 
-    /// Parse SPEC's "Exit codes" table into `variant -> code cell`.
-    fn parse_exit_code_table() -> std::collections::BTreeMap<String, String> {
-        let section = SPEC
-            .split("### Exit codes")
-            .nth(1)
-            .expect("SPEC has an 'Exit codes' section")
-            .split("\n## ")
-            .next()
-            .unwrap();
+    /// The `sysexits.h` name of each code `exit_code()` returns.
+    fn sysexits_name(code: u8) -> &'static str {
+        match code {
+            64 => "EX_USAGE",
+            66 => "EX_NOINPUT",
+            67 => "EX_NOUSER",
+            69 => "EX_UNAVAILABLE",
+            70 => "EX_SOFTWARE",
+            71 => "EX_OSERR",
+            73 => "EX_CANTCREAT",
+            77 => "EX_NOPERM",
+            _ => panic!("no sysexits.h name for {code}"),
+        }
+    }
 
+    /// Parse the exit-code table into `variant -> (code cell, constant cell)`.
+    fn parse_exit_code_table() -> std::collections::BTreeMap<String, (String, String)> {
         let mut map = std::collections::BTreeMap::new();
-        for line in section.lines() {
-            let line = line.trim();
-            // Data rows start with a backticked variant name; the header
-            // (`ErrorKind` variant) and the `| --- |` separator do not.
-            if !line.starts_with("| `") || line.contains("variant") {
+        for line in EXIT_CODES.lines() {
+            let cells: Vec<&str> = line.split('|').map(str::trim).collect();
+            // Data rows name a variant in backticks; the header names the
+            // column, and the `| --- |` separator names nothing.
+            let Some(variant) = cells.get(1).filter(|c| c.starts_with('`')) else {
+                continue;
+            };
+            if *variant == "`ErrorKind` variant" {
                 continue;
             }
-            let cells: Vec<&str> = line.split('|').map(str::trim).collect();
-            map.insert(cells[1].trim_matches('`').to_string(), cells[2].to_string());
+            let row = (cells[2].to_string(), cells[3].to_string());
+            let earlier = map.insert(variant.trim_matches('`').to_string(), row);
+            assert!(earlier.is_none(), "{variant} has two rows");
         }
         assert!(!map.is_empty(), "parsed no rows from the exit-code table");
         map

@@ -17,8 +17,8 @@ categories = ["os::unix-apis"]
 # clap. build.rs is required — it resolves the capability `cfg`
 # aliases every platform branch gates on, so without it every branch takes the
 # unknown-Unix fallback. docs/SPEC.md ships so a vendored copy carries the
-# numbered requirements its tests cite, and the exit-code table src/error.rs
-# checks. Cargo.toml and Cargo.lock are packaged
+# numbered requirements its tests cite. docs/exit-codes.md is required —
+# src/error.rs includes it in the rustdoc and checks it. Cargo.toml and Cargo.lock are packaged
 # automatically.
 include = [
     "/src/**/*.rs",
@@ -26,6 +26,7 @@ include = [
     "/examples/**/*.rs",
     "/README.md",
     "/docs/SPEC.md",
+    "/docs/exit-codes.md",
     "/docs/daemonize.1.md",
     "/CHANGELOG.md",
     "/LICENSE-APACHE",

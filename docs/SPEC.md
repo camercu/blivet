@@ -83,7 +83,7 @@ that check the repository against itself are integration tests, so they
 run only on the tiers that build integration targets, Linux and macOS.
 The exception is the exit-code table, checked against the error type by a
 library test because the check is an exhaustive match that only
-compiles inside the crate; it bakes the README in and so runs wherever
+compiles inside the crate; it bakes the table in and so runs wherever
 the library suite does.
 
 ## Dependency policy
@@ -981,29 +981,9 @@ lines only for changes that outlive the process (R164).
 
 ### Exit codes
 
-This table is the single authoritative source. `DaemonizeError::
-exit_code()` returns these values.
-
-| `ErrorKind` variant | Exit code | `sysexits.h` constant |
-| ------------------- | --------- | --------------------- |
-| `ValidationError`        | 64        | `EX_USAGE`            |
-| `ProgramNotFound`        | 66        | `EX_NOINPUT`          |
-| `UserNotFound`           | 67        | `EX_NOUSER`           |
-| `GroupNotFound`          | 67        | `EX_NOUSER`           |
-| `LockConflict`           | 69        | `EX_UNAVAILABLE`      |
-| `LockfileError`          | 73        | `EX_CANTCREAT`        |
-| `ForkFailed`             | 71        | `EX_OSERR`            |
-| `SetsidFailed`           | 71        | `EX_OSERR`            |
-| `ChdirFailed`            | 71        | `EX_OSERR`            |
-| `SystemError`            | 71        | `EX_OSERR`            |
-| `PermissionDenied`       | 77        | `EX_NOPERM`           |
-| `PidfileError`           | 73        | `EX_CANTCREAT`        |
-| `OutputFileError`        | 73        | `EX_CANTCREAT`        |
-| `ChownError`             | 73        | `EX_CANTCREAT`        |
-| `ExecFailed`             | 71        | `EX_OSERR`            |
-| `NotifyFailed`           | 71        | `EX_OSERR`            |
-| `InitLeftThreads`        | 70        | `EX_SOFTWARE`         |
-| `Application`            | caller's `code`; 0 remapped to 70 | (caller's choice) |
+[`exit-codes.md`](exit-codes.md) is the single authoritative table:
+`DaemonizeError::exit_code()` returns its values, and the `ErrorKind`
+rustdoc includes it.
 
 Pre-daemonization errors: CLI prints message to stderr, exits per
 table. Post-daemonization errors: reported to the parent via the

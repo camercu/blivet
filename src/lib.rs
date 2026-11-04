@@ -118,7 +118,7 @@
 //! # Exit codes
 //!
 //! [`DaemonizeError::exit_code`] maps each error to a `sysexits.h` code — see
-//! its docs for the full table — but `fn main() -> Result<(), E>` ignores it
+//! [`ErrorKind`] for the table — but `fn main() -> Result<(), E>` ignores it
 //! and exits **1**. To surface the codes, call `exit_code()` yourself. To
 //! report a failure from your own init code (e.g. a socket bind) with a chosen
 //! code, use [`WithExitCode`] or [`DaemonizeError::application`] in `init`, or call
