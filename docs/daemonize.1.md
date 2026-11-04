@@ -36,7 +36,7 @@ The daemonization sequence:
    (if configured).
 8. Closes all inherited file descriptors (except the lock file).
 9. Transfers ownership of pidfile, lockfile, and output files to the target
-   user/group (if configured) via **chown**(2).
+   user/group (if configured) via **fchown**(2).
 10. Switches user and group (if configured) via **initgroups**(3),
     **setgid**(2), and **setuid**(2), in that order.
 11. Restores the default SIGPIPE disposition and exec's *program*.

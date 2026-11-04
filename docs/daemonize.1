@@ -43,7 +43,7 @@ configured).
 Closes all inherited file descriptors (except the lock file).
 .IP " 9." 4
 Transfers ownership of pidfile, lockfile, and output files to the target
-user/group (if configured) via \f[B]chown\f[R](2).
+user/group (if configured) via \f[B]fchown\f[R](2).
 .IP "10." 4
 Switches user and group (if configured) via \f[B]initgroups\f[R](3),
 \f[B]setgid\f[R](2), and \f[B]setuid\f[R](2), in that order.

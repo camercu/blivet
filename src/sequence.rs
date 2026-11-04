@@ -3048,7 +3048,7 @@ mod tests {
             ),
             "foreground mode should surface setup errors as Err, not exit"
         );
-        // The abort guard removes the pidfile a failed sequence wrote. This
+        // The rollback removes the pidfile a failed sequence wrote. This
         // sequence failed at step 7, before step 8 wrote anything, so the file
         // on disk belongs to the daemon already running — deleting it would
         // strand whoever is supervising it.

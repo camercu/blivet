@@ -422,8 +422,9 @@ impl DaemonContext {
     /// code.
     ///
     /// Uses `libc::_exit` rather than `std::process::exit` to avoid running
-    /// atexit handlers or flushing stdio buffers inherited from the pre-fork
-    /// parent, which could cause double-flush corruption or deadlocks.
+    /// atexit handlers or flushing C stdio buffers inherited from the
+    /// pre-fork parent, which could cause double-flush corruption or
+    /// deadlocks.
     ///
     /// Because `_exit` bypasses [`Drop`], this replicates the drop-time pidfile
     /// cleanup itself: a daemon that aborts startup must not leave a stale
