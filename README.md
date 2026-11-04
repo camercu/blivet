@@ -200,28 +200,8 @@ A `DaemonizeError` says what failed in `kind()`, an `ErrorKind`. The kinds cover
 validation, fork, setsid, lock, permission, chown, exec, and parent-notify
 failures, plus a caller-supplied `Application` variant. Each variant maps to a
 `sysexits.h` exit code through `exit_code()`, so failures reach the shell with a
-meaningful status:
-
-| Variant            | Exit code   | Meaning                                  |
-| ------------------ | ----------- | ---------------------------------------- |
-| `ValidationError`  | 64          | Bad config (paths, env keys, overlaps)   |
-| `ProgramNotFound`  | 66          | Program missing or not executable (the CLI's pre-fork check, or `exec` failing with `ENOENT`/`EACCES`) |
-| `UserNotFound`     | 67          | User doesn't exist                       |
-| `GroupNotFound`    | 67          | Group doesn't exist                      |
-| `LockConflict`     | 69          | Lockfile held by another process         |
-| `LockfileError`    | 73          | Can't open lockfile                      |
-| `PidfileError`     | 73          | Can't write pidfile                      |
-| `OutputFileError`  | 73          | Can't open/redirect output file          |
-| `ChownError`       | 73          | Can't chown pidfile/lockfile/output file |
-| `ForkFailed`       | 71          | `fork()` error                           |
-| `SetsidFailed`     | 71          | `setsid()` error                         |
-| `ChdirFailed`      | 71          | `chdir()` error                          |
-| `SystemError`      | 71          | Syscall failed (notification channel, `/dev/null` open or `dup2`, `sigaction`, `sigprocmask`, `getrlimit`, thread count around init) |
-| `PermissionDenied` | 77          | Not root, or initgroups/setgid/setuid failed |
-| `ExecFailed`       | 71          | `exec` failed (other than `ENOENT`/`EACCES`) |
-| `NotifyFailed`     | 71          | Can't write readiness to launcher        |
-| `InitLeftThreads`  | 70          | `daemonize_with` init left threads running before an identity switch to a user |
-| `Application`      | caller's    | App-level failure you report yourself    |
+meaningful status. [daemonize(1)](docs/daemonize.1.md#exit-status) lists the
+codes.
 
 A foreground start that fails puts back what it changed in your process. Each
 change it could not put back is in `rollback_failures()`: the `ChangedState`
@@ -311,21 +291,8 @@ given, the CLI transfers ownership of the pidfile, lockfile, and log files to th
 target user/group before dropping privileges, so the daemon can keep writing to
 them.
 
-| Flag | Long                | Description |
-| ---- | ------------------- | --- |
-| `-p` | `--pidfile PATH`    | Write daemon PID to file |
-| `-c` | `--chdir PATH`      | Working directory (default: `/`) |
-| `-m` | `--umask MODE`      | Process umask in octal (e.g. `022`) |
-| `-o` | `--stdout PATH`     | Redirect stdout to file (also sets stderr if `-e` is not given) |
-| `-e` | `--stderr PATH`     | Redirect stderr to file (default: stdout path; `.stdout`→`.stderr`, `.out`→`.err`) |
-| `-a` | `--append`          | Append to stdout/stderr files instead of truncating |
-| `-l` | `--lock PATH`       | Exclusive lockfile (default: pidfile path, if set) |
-|      | `--no-lock`         | Do not lock the pidfile (allows multiple instances) |
-| `-E` | `--env NAME=VAL`    | Set environment variable (repeatable; a bare `NAME` sets the empty string) |
-| `-u` | `--user NAME\|UID`  | Switch to user after daemonizing (requires root) |
-| `-g` | `--group NAME\|GID` | Switch to group after daemonizing (requires root) |
-| `-f` | `--foreground`      | Stay in foreground (no fork/setsid) |
-| `-v` | `--verbose`         | Print diagnostic info before daemonizing, and every change a failed start left |
+[daemonize(1)](docs/daemonize.1.md#options) describes every flag, and
+`daemonize --help` lists them.
 
 ## Platform support
 

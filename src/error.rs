@@ -535,7 +535,7 @@ mod tests {
     /// One sample of every variant, by hand. [`variant_name`] is the one
     /// exhaustive match over `ErrorKind`: a new variant fails to compile
     /// there, which is the prompt to sample it here. Nothing checks that it
-    /// was: a variant left out of this list escapes the README guard below.
+    /// was: a variant left out of this list escapes the SPEC guard below.
     /// Every test that needs every variant iterates this list.
     fn every_variant() -> Vec<ErrorKind> {
         vec![
@@ -562,7 +562,7 @@ mod tests {
         ]
     }
 
-    /// The variant's name, as the README table writes it.
+    /// The variant's name, as the SPEC table writes it.
     fn variant_name(err: &ErrorKind) -> &'static str {
         match err {
             ErrorKind::ValidationError(_) => "ValidationError",
@@ -603,20 +603,20 @@ mod tests {
         }
     }
 
-    /// The README, baked in at compile time.
+    /// SPEC, baked in at compile time.
     ///
     /// Never read at run time: this test ships with the crate, and a run-time
     /// read would panic for anyone running `cargo test` on a packaged or
     /// vendored copy. `just package-test` runs it on the packaged copy.
-    const README: &str = include_str!("../README.md");
+    const SPEC: &str = include_str!("../docs/SPEC.md");
 
-    /// The README's exit-code table restates `DaemonizeError`: its variants
-    /// and what `exit_code()` returns for each. It cannot be generated (the
-    /// "Meaning" column is prose) and nothing outside the crate can enumerate
-    /// a `#[non_exhaustive]` enum, so this guard lives here, in the crate.
-    /// The table must list every variant, no more, and each code must match.
+    /// SPEC's exit-code table restates `DaemonizeError`: its variants and
+    /// what `exit_code()` returns for each. Nothing outside the crate can
+    /// enumerate a `#[non_exhaustive]` enum, so this guard lives here, in the
+    /// crate. The table must list every variant, no more, and each code must
+    /// match.
     #[test]
-    fn readme_exit_codes_match_error_impl() {
+    fn spec_exit_codes_match_error_impl() {
         let documented = parse_exit_code_table();
         let names: std::collections::BTreeSet<&str> =
             every_variant().iter().map(variant_name).collect();
@@ -624,14 +624,17 @@ mod tests {
             documented.keys().map(String::as_str).collect();
         assert_eq!(
             names, table,
-            "README exit-code table and DaemonizeError variants must match exactly"
+            "SPEC exit-code table and DaemonizeError variants must match exactly"
         );
 
         for err in every_variant() {
             let name = variant_name(&err);
             let cell = &documented[name];
             if name == "Application" {
-                assert_eq!(cell, "caller's", "Application row should read \"caller's\"");
+                assert!(
+                    cell.starts_with("caller's"),
+                    "Application row should read \"caller's\", got {cell:?}"
+                );
                 assert_eq!(
                     err.exit_code(),
                     42,
@@ -641,21 +644,17 @@ mod tests {
                 let code: u8 = cell
                     .parse()
                     .unwrap_or_else(|_| panic!("{name} exit code cell '{cell}' is not a number"));
-                assert_eq!(
-                    code,
-                    err.exit_code(),
-                    "{name} exit code drifted from the README"
-                );
+                assert_eq!(code, err.exit_code(), "{name} exit code drifted from SPEC");
             }
         }
     }
 
-    /// Parse the README "Errors & exit codes" table into `variant -> code cell`.
+    /// Parse SPEC's "Exit codes" table into `variant -> code cell`.
     fn parse_exit_code_table() -> std::collections::BTreeMap<String, String> {
-        let section = README
-            .split("### Errors & exit codes")
+        let section = SPEC
+            .split("### Exit codes")
             .nth(1)
-            .expect("README has an 'Errors & exit codes' section")
+            .expect("SPEC has an 'Exit codes' section")
             .split("\n## ")
             .next()
             .unwrap();
@@ -663,9 +662,9 @@ mod tests {
         let mut map = std::collections::BTreeMap::new();
         for line in section.lines() {
             let line = line.trim();
-            // Data rows start with a backticked variant name; the header and
-            // the `| --- |` separator do not.
-            if !line.starts_with("| `") {
+            // Data rows start with a backticked variant name; the header
+            // (`ErrorKind` variant) and the `| --- |` separator do not.
+            if !line.starts_with("| `") || line.contains("variant") {
                 continue;
             }
             let cells: Vec<&str> = line.split('|').map(str::trim).collect();

@@ -862,23 +862,9 @@ Clap defaults for `--help` and `--version` are acceptable.
 
 ### Flags
 
-| Short | Long              | Argument     | Description                          |
-| ----- | ----------------- | ------------ | ------------------------------------ |
-| `-p`  | `--pidfile`       | path         | Pidfile path                         |
-| `-c`  | `--chdir`         | path         | Working directory                    |
-| `-m`  | `--umask`         | octal string | Process umask (e.g. `022`)           |
-| `-o`  | `--stdout`        | path         | Redirect stdout to file              |
-| `-e`  | `--stderr`        | path         | Redirect stderr to file              |
-| `-a`  | `--append`        |              | Append to stdout/stderr files        |
-| `-l`  | `--lock`          | path         | Lockfile path                        |
-|       | `--no-lock`       |              | Do not lock the pidfile              |
-| `-E`  | `--env`           | `name=value` | Set environment variable             |
-| `-u`  | `--user`          | name or uid  | Run daemon as user                   |
-| `-g`  | `--group`         | name or gid  | Run daemon as group                  |
-| `-f`  | `--foreground`    |              | Stay in foreground (no fork)         |
-| `-v`  | `--verbose`       |              | Diagnostic output; every rollback line |
-
-Assign all short flags explicitly to avoid collisions.
+daemonize(1) (`docs/daemonize.1.md`) describes each flag, and clap's
+`--help` lists them; every short flag is assigned explicitly, so two
+cannot collide. The rules below are the ones those leave open.
 
 After flags: positional program path (absolute or relative) followed by
 zero or more arguments. Parsed with `trailing_var_arg(true)` +

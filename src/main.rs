@@ -319,52 +319,51 @@ mod tests {
         );
     }
 
-    // --- README flag table parity ---
-
-    /// The README CLI flag table must list exactly the binary's flags. Keeps
-    /// clap as the single source of truth so the docs cannot silently drift.
+    /// daemonize(1)'s OPTIONS must list exactly the binary's flags, clap's
+    /// own `--help` and `--version` among them.
     #[test]
-    fn readme_flag_table_matches_clap() {
+    fn man_page_options_match_clap() {
         use clap::CommandFactory;
 
-        let cmd = Args::command();
+        let mut cmd = Args::command();
+        // Adds the `--help` and `--version` clap generates.
+        cmd.build();
         let mut clap_longs: Vec<String> = cmd
             .get_arguments()
             .filter_map(|a| a.get_long())
-            // clap auto-adds --help/--version; they are not in the flag table.
-            .filter(|l| *l != "help" && *l != "version")
             .map(String::from)
             .collect();
         clap_longs.sort();
 
-        const README: &str = include_str!("../README.md");
-        let mut readme_longs: Vec<String> = README
+        const MAN: &str = include_str!("../docs/daemonize.1.md");
+        let options = MAN
+            .split("\n# OPTIONS\n")
+            .nth(1)
+            .expect("daemonize(1) has an OPTIONS section")
+            .split("\n# ")
+            .next()
+            .unwrap();
+        let mut man_longs: Vec<String> = options
             .lines()
-            // CLI flag-table rows carry the long flag in their *second* cell,
-            // e.g. "| `-p` | `--pidfile PATH` | …". The short-flag cell may be
-            // empty (long-only flags like --no-lock). Keying on that cell —
-            // not the whole line — keeps description prose that mentions a
-            // flag from matching.
-            .filter(|line| {
-                line.split('|')
-                    .nth(2)
-                    .is_some_and(|cell| cell.trim().starts_with("`--"))
-            })
+            // An option's term line starts in column 0, e.g.
+            // "**-p**, **--pidfile** *path*"; its description is indented, so
+            // prose that mentions a flag does not match.
+            .filter(|line| line.starts_with("**"))
             .filter_map(parse_long_flag)
             .collect();
-        readme_longs.sort();
-        readme_longs.dedup();
+        man_longs.sort();
+        man_longs.dedup();
 
         assert_eq!(
-            clap_longs, readme_longs,
-            "README CLI flag table is out of sync with the binary's flags"
+            clap_longs, man_longs,
+            "daemonize(1) OPTIONS are out of sync with the binary's flags"
         );
     }
 
-    /// Extract the long-flag name from a README table row like
-    /// `| `-p` | `--pidfile PATH` | ... |`.
+    /// Extract the long-flag name from a man page term line like
+    /// `**-p**, **--pidfile** *path*`.
     fn parse_long_flag(line: &str) -> Option<String> {
-        let start = line.find("`--")? + 3;
+        let start = line.find("**--")? + 4;
         let name: String = line[start..]
             .chars()
             .take_while(|c| c.is_ascii_alphanumeric() || *c == '-')
@@ -375,16 +374,13 @@ mod tests {
     #[test]
     fn parse_long_flag_extracts_name() {
         assert_eq!(
-            parse_long_flag("| `-p` | `--pidfile PATH` | Write PID |").as_deref(),
+            parse_long_flag("**-p**, **--pidfile** *path*").as_deref(),
             Some("pidfile")
         );
+        assert_eq!(parse_long_flag("**--no-lock**").as_deref(), Some("no-lock"));
         assert_eq!(
-            parse_long_flag("| `-f` | `--foreground` | Stay |").as_deref(),
-            Some("foreground")
-        );
-        assert_eq!(
-            parse_long_flag("|      | `--no-lock` | Do not lock |").as_deref(),
-            Some("no-lock")
+            parse_long_flag("**-E**, **--env** *name*=*value*").as_deref(),
+            Some("env")
         );
     }
 
