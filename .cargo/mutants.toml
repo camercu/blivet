@@ -45,8 +45,10 @@ exclude_re = [
     # The guard's Drop rolls the ledger back before `files` releases the
     # lock. The ledger's own Drop does the same when the guard's body is gone,
     # because `ledger` is declared before `files`. The body keeps the
-    # pidfile-before-lock order if the fields are ever reordered.
-    'replace <impl Drop for AbortGuard<._>>::drop with [(][)]$',
+    # pidfile-before-lock order if the fields are ever reordered. Its owner
+    # give-back is unreachable from Drop: every path past step 16 that fails
+    # calls roll_back first, and nothing between step 16 and 18 panics.
+    'replace <impl Drop for AbortGuard>::drop with [(][)]$',
     # -- equivalent today --
     # No ErrorKind variant has a source: each message names its cause, so a
     # chain prints it once. The delegation keeps a source a later variant
@@ -57,4 +59,11 @@ exclude_re = [
     # root reaches this restore. root_gets_its_groups_back_after_a_failed_
     # foreground_start kills it under `just docker-test` (checked by hand).
     'replace Groups::restore -> Result<[(][)], RestoreFailure> with Ok[(][(][)][)]$',
+    # Only root chowns at step 16, so only root has owners to keep or give
+    # back. root_a_started_daemon_keeps_its_files_chowned kills the first;
+    # root_gives_a_file_its_owner_back_with_no_descriptor_free and
+    # root_a_daemon_dropped_before_readiness_gives_each_owner_back kill the
+    # second, under `just docker-test` (checked by hand).
+    'replace OpenedFiles::keep_owners with [(][)]$',
+    'replace OpenedFiles::give_owners_back -> Vec<RestoreFailure> with vec!\[\]$',
 ]
