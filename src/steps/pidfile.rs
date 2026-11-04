@@ -10,7 +10,7 @@ use nix::unistd::Whence;
 
 use super::*;
 use crate::error::ErrorKind;
-use crate::file_identity::{FileId, file_id, paths_same, stat_if_named};
+use crate::file_identity::{FileId, file_id, lstat_if_named, paths_same, stat_if_named};
 
 /// Step 7: Open and exclusively lock a lockfile, saying whether this start
 /// created it.
@@ -21,20 +21,22 @@ use crate::file_identity::{FileId, file_id, paths_same, stat_if_named};
 /// that. So the lock counts only once the path still names the locked file;
 /// else the step opens the path again, up to [`LOCK_ATTEMPTS`] times.
 ///
-/// A lockfile that is the pidfile is opened as the pidfile is, refusing a
-/// symlink (see [`open_pidfile`]).
+/// A lockfile derived from the pidfile is opened as the pidfile is, refusing
+/// a symlink (see [`open_pidfile`]). An explicit one may be a symlink.
+///
+/// Returns the lock, whether this start created the file, and its identity.
 pub(crate) fn lock_path(
     path: &Path,
-    is_pidfile: bool,
-) -> Result<(Flock<OwnedFd>, bool), ErrorKind> {
+    derived: bool,
+) -> Result<(Flock<OwnedFd>, bool, FileId), ErrorKind> {
     for _ in 0..LOCK_ATTEMPTS {
-        let (flock, created) = lock_once(path, is_pidfile)?;
+        let (flock, created) = lock_once(path, derived)?;
         let locked = file_id(&*flock)
             .map_err(|e| ErrorKind::LockfileError(format!("fstat {}: {e}", path.display())))?;
         let named = stat_if_named(path, locked)
             .map_err(|e| ErrorKind::LockfileError(format!("stat {}: {e}", path.display())))?;
         if named.is_some() {
-            return Ok((flock, created));
+            return Ok((flock, created, locked));
         }
     }
     Err(ErrorKind::LockfileError(format!(
@@ -46,7 +48,7 @@ pub(crate) fn lock_path(
 /// [`lock_path`], for the tests that want only the lock.
 #[cfg(test)]
 pub(crate) fn open_and_lock(path: &Path) -> Result<Flock<OwnedFd>, ErrorKind> {
-    lock_path(path, false).map(|(flock, _)| flock)
+    lock_path(path, false).map(|(flock, ..)| flock)
 }
 
 /// How often step 7 opens the lockfile again when the path stopped naming the
@@ -55,14 +57,14 @@ pub(crate) fn open_and_lock(path: &Path) -> Result<Flock<OwnedFd>, ErrorKind> {
 const LOCK_ATTEMPTS: usize = 8;
 
 /// Opens the lockfile and takes its lock, without checking the path.
-fn lock_once(path: &Path, is_pidfile: bool) -> Result<(Flock<OwnedFd>, bool), ErrorKind> {
-    let flags = if is_pidfile {
+fn lock_once(path: &Path, derived: bool) -> Result<(Flock<OwnedFd>, bool), ErrorKind> {
+    let flags = if derived {
         OFlag::O_WRONLY | OFlag::O_NOFOLLOW
     } else {
         OFlag::O_WRONLY
     };
     let (fd, created) = open_creating(path, flags, Mode::from_bits_truncate(0o644))
-        .map_err(|e| ErrorKind::LockfileError(format!("cannot open {}: {e}", path.display())))?;
+        .map_err(|e| ErrorKind::LockfileError(open_failure(path, &e)))?;
 
     #[cfg(test)]
     crate::steps::failpoints::unlink_if_injected(path);
@@ -90,10 +92,21 @@ pub(crate) fn open_pidfile<'a>(
     pidfile_path: &'a Path,
     lockfile: Option<(&Path, &'a Flock<OwnedFd>)>,
 ) -> Result<Pidfile<'a>, ErrorKind> {
-    // The lockfile is the pidfile: step 7 already opened and locked it.
+    // The lockfile is the pidfile: step 7 already opened and locked it. The
+    // pidfile path must still be that file itself, not a link to it, for the
+    // rollback to remove it.
     if let Some((lp, flock)) = lockfile {
         if paths_same(pidfile_path, lp) {
-            return Ok(Pidfile::Locked(flock));
+            let locked = file_id(flock.as_fd())
+                .map_err(|e| ErrorKind::PidfileError(format!("fstat: {e}")))?;
+            return match lstat_if_named(pidfile_path, locked) {
+                Ok(Some(_)) => Ok(Pidfile::Locked(flock)),
+                Ok(None) => Err(ErrorKind::PidfileError(not_the_locked_file(pidfile_path))),
+                Err(e) => Err(ErrorKind::PidfileError(format!(
+                    "lstat {}: {e}",
+                    pidfile_path.display()
+                ))),
+            };
         }
     }
 
@@ -114,11 +127,42 @@ pub(crate) fn open_pidfile<'a>(
         OFlag::O_WRONLY | OFlag::O_CREAT | OFlag::O_TRUNC | OFlag::O_NOFOLLOW,
         Mode::from_bits_truncate(0o644),
     )
-    .map_err(|e| ErrorKind::PidfileError(format!("open {}: {e}", pidfile_path.display())))?;
+    .map_err(|e| ErrorKind::PidfileError(open_failure(pidfile_path, &e)))?;
     Ok(Pidfile::Opened {
         fd,
         path: pidfile_path,
     })
+}
+
+/// Why opening `path` failed. A refusal under `O_NOFOLLOW` is `ELOOP` on
+/// Linux and macOS but `EMLINK` on FreeBSD, so the path says what it is.
+fn open_failure(path: &Path, e: &std::io::Error) -> String {
+    if std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink()) {
+        not_the_file(path)
+    } else {
+        format!("cannot open {}: {e}", path.display())
+    }
+}
+
+/// The refusal of a pidfile path that is a symlink.
+fn not_the_file(path: &Path) -> String {
+    format!(
+        "{} is a symlink: name the file it points to, so a failed start can remove it",
+        path.display()
+    )
+}
+
+/// The refusal of a pidfile path that no longer names the file step 7 locked:
+/// a symlink to it, or a path another process removed or replaced since.
+fn not_the_locked_file(path: &Path) -> String {
+    if std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink()) {
+        not_the_file(path)
+    } else {
+        format!(
+            "{} no longer names the file locked at step 7",
+            path.display()
+        )
+    }
 }
 
 /// A pidfile this process has taken hold of — see [`open_pidfile`].
@@ -395,25 +439,39 @@ mod tests {
     }
 
     #[test]
-    fn write_pidfile_shared_writes_through_locked_fd_not_path() {
+    fn write_pidfile_shared_never_reopens_the_path() {
         // When the pidfile shares the lockfile path, write_pidfile must reuse the
-        // already-locked fd (seek + truncate + write), *not* re-open the path.
-        // Both routes leave identical file *content*, so a content check alone
-        // cannot tell them apart — a mutant that forces the standalone
-        // `fs::write` branch survives it. Pin the distinguishing behavior:
-        // unlink the path after locking, leaving the held fd pointing at the
-        // now-orphaned inode. Writing through that fd leaves the directory entry
-        // gone; the standalone branch would `O_CREAT` the path back.
+        // already-locked fd, *not* re-open the path. Both routes leave identical
+        // file *content*, so a content check alone cannot tell them apart — a
+        // mutant that forces the standalone branch survives it. Pin the
+        // distinguishing behavior: unlink the path after locking. The shared
+        // route refuses the path that no longer names the locked file; the
+        // standalone branch would `O_CREAT` the path back.
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("shared.pid");
         let flock = open_and_lock(&path).unwrap();
         std::fs::remove_file(&path).unwrap();
 
-        write_pidfile(&path, Some((path.as_path(), &flock))).unwrap();
+        let _ = write_pidfile(&path, Some((path.as_path(), &flock)));
 
         assert!(
             !path.exists(),
-            "shared path must write through the locked fd, not re-create the pidfile at its path"
+            "shared path must not re-create the pidfile at its path"
+        );
+    }
+
+    #[test]
+    fn a_shared_pidfile_unlinked_after_locking_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("shared.pid");
+        let flock = open_and_lock(&path).unwrap();
+        std::fs::remove_file(&path).unwrap();
+
+        let result = write_pidfile(&path, Some((path.as_path(), &flock)));
+
+        assert!(
+            matches!(&result, Err(ErrorKind::PidfileError(m)) if m.contains("no longer names")),
+            "{result:?}"
         );
     }
 

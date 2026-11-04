@@ -783,13 +783,16 @@ The append flag applies uniformly to both stdout and stderr.
 
 ### Pidfile mechanics
 
-If lockfile and pidfile are the same path, seek to 0, truncate, and
-write PID + `\n` to the already-locked fd from step 7. Otherwise open
-with `O_WRONLY | O_CREAT | O_TRUNC`, mode 0644, write PID + `\n`, and
-close. Either open adds `O_NOFOLLOW`: a pidfile path that is a symlink
-fails the start (`PidfileError`, or `LockfileError` when the pidfile is
-the lockfile), since a failed start could not remove a pidfile written
-through one (R164). Write failure returns `PidfileError`. When not configured, no
+A pidfile path that is a symlink fails the start, since a failed start
+could not remove a pidfile written through one (R164). If lockfile and
+pidfile are the same file, check with `lstat` that the pidfile path
+itself is the file locked at step 7, else `PidfileError`; then seek to
+0, truncate, and write PID + `\n` to the already-locked fd. A lockfile
+derived from the pidfile opened with `O_NOFOLLOW` at step 7, so there a
+symlink fails as `LockfileError`. Otherwise open with
+`O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW`, mode 0644, write PID +
+`\n`, and close. An explicit lockfile may be a symlink, even to the
+pidfile. Write failure returns `PidfileError`. When not configured, no
 pidfile is created. The pidfile is removed on exit when `cleanup_on_drop`
 is `true` (the default); see `DaemonContext::cleanup()`.
 

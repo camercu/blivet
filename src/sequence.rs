@@ -262,16 +262,13 @@ unsafe fn run_steps<'a, T>(
     // unless derivation was opted out)
     let lockfile_path = config.effective_lockfile().map(std::path::PathBuf::as_path);
     if let Some(path) = lockfile_path {
-        let is_pidfile = config
-            .pidfile
-            .as_deref()
-            .is_some_and(|pidfile| crate::file_identity::paths_same(pidfile, path));
-        let (lock, created) = steps::lock_path(path, is_pidfile)?;
-        let id = crate::file_identity::file_id(&*lock)
-            .map_err(|e| ErrorKind::LockfileError(format!("fstat: {e}")))?;
+        let derived = config.lockfile_is_derived();
+        let (lock, created, id) = steps::lock_path(path, derived)?;
         files.push(path, steps::Role::Lockfile(lock), id);
-        // A lockfile that is the pidfile goes with step 8's token.
-        if created && !is_pidfile {
+        // A lockfile derived from the pidfile goes with step 8's token. One
+        // named apart from it gets its own, even when the pidfile path links
+        // to it: step 8 refuses that link, and the file is still this start's.
+        if created && !derived {
             let removal = steps::Removal::new(path, id, steps::Created::Lockfile);
             ledger.record_lasting(steps::Saved::Removal(removal))?;
         }
@@ -1723,6 +1720,108 @@ mod tests {
             "{result:?}"
         );
         assert_eq!(std::fs::read_to_string(&target).unwrap(), "");
+    }
+
+    // Covers: R164
+    /// A pidfile symlink is refused when an explicit lockfile names its
+    /// target too: the pidfile path is still a link the rollback could not
+    /// remove.
+    #[test]
+    fn a_pidfile_symlink_to_its_explicit_lockfile_is_refused() {
+        if !isolated() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let lockfile = dir.path().join("app.lock");
+        let pidfile = dir.path().join("app.pid");
+        std::os::unix::fs::symlink(&lockfile, &pidfile).unwrap();
+        let mut config = DaemonConfig::new();
+        config
+            .foreground(true)
+            .close_fds(false)
+            .pidfile(&pidfile)
+            .lockfile(&lockfile);
+
+        let result = run_inner(&config, &mut NullForker::new(vec![], Ok(())));
+
+        assert!(
+            matches!(
+                result.as_ref().map_err(DaemonizeError::kind),
+                Err(ErrorKind::PidfileError(_))
+            ),
+            "{result:?}"
+        );
+    }
+
+    // Covers: R164
+    /// The lockfile that start created is still its own to remove.
+    #[test]
+    fn the_lockfile_created_for_a_refused_pidfile_symlink_is_removed() {
+        if !isolated() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let lockfile = dir.path().join("app.lock");
+        let pidfile = dir.path().join("app.pid");
+        std::os::unix::fs::symlink(&lockfile, &pidfile).unwrap();
+        let mut config = DaemonConfig::new();
+        config
+            .foreground(true)
+            .close_fds(false)
+            .pidfile(&pidfile)
+            .lockfile(&lockfile);
+
+        let _ = run_inner(&config, &mut NullForker::new(vec![], Ok(())));
+
+        assert!(!lockfile.exists(), "the created lockfile was left");
+    }
+
+    // Covers: R164
+    /// The refusal names the cause, not the platform's errno for it.
+    #[test]
+    fn a_refused_pidfile_symlink_is_named_as_one() {
+        if !isolated() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("target.pid");
+        let pidfile = dir.path().join("app.pid");
+        std::os::unix::fs::symlink(&target, &pidfile).unwrap();
+        let mut config = DaemonConfig::new();
+        config
+            .foreground(true)
+            .close_fds(false)
+            .no_lockfile()
+            .pidfile(&pidfile);
+
+        let err = run_inner(&config, &mut NullForker::new(vec![], Ok(()))).unwrap_err();
+
+        assert!(err.to_string().contains("is a symlink"), "{err}");
+    }
+
+    // Covers: R164
+    /// An explicit lockfile may be a symlink, even to the pidfile: only the
+    /// pidfile path, and a lockfile derived from it, refuse one.
+    #[test]
+    fn an_explicit_lockfile_symlink_to_the_pidfile_is_followed() {
+        if !isolated() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let pidfile = dir.path().join("app.pid");
+        std::fs::write(&pidfile, "").unwrap();
+        let lockfile = dir.path().join("app.lock");
+        std::os::unix::fs::symlink(&pidfile, &lockfile).unwrap();
+        let mut config = DaemonConfig::new();
+        config
+            .foreground(true)
+            .close_fds(false)
+            .pidfile(&pidfile)
+            .lockfile(&lockfile);
+
+        let result = run_inner(&config, &mut NullForker::new(vec![], Ok(())));
+
+        assert!(result.is_ok(), "{result:?}");
     }
 
     // Covers: R164

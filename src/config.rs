@@ -189,6 +189,11 @@ impl DaemonConfig {
         self
     }
 
+    /// Whether the lockfile is the pidfile's own path, derived from it.
+    pub(crate) fn lockfile_is_derived(&self) -> bool {
+        self.pidfile.is_some() && matches!(self.lockfile, LockfileSetting::DeriveFromPidfile)
+    }
+
     /// The lockfile path after resolving the tri-state setting: an explicit
     /// path, the pidfile (derived default), or none (disabled / no pidfile).
     pub(crate) fn effective_lockfile(&self) -> Option<&PathBuf> {
