@@ -235,6 +235,12 @@ impl OpenedFiles<'_> {
         Ok(())
     }
 
+    /// Keeps the owners [`chown_to`](Self::chown_to) gave: nothing gives
+    /// them back from here.
+    pub(crate) fn keep_owners(&mut self) {
+        self.0.iter_mut().for_each(|o| o.owner_was = None);
+    }
+
     /// Gives each file [`chown_to`](Self::chown_to) chowned its owner back,
     /// by the descriptor this record holds, and returns what it could not
     /// give back.

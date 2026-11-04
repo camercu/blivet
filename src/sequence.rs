@@ -182,6 +182,12 @@ impl AbortGuard<'_> {
         failures
     }
 
+    /// Keeps every change: the ledger's, and the owners step 16 gave.
+    fn keep(&mut self) {
+        self.ledger.keep_all();
+        self.files.keep_owners();
+    }
+
     fn new(foreground: bool) -> Self {
         let rollback = if foreground {
             steps::Rollback::PutBack
@@ -257,7 +263,7 @@ unsafe fn run_steps<'a, T>(
     init: impl FnOnce() -> Result<T, DaemonizeError>,
     abort: &mut AbortGuard<'a>,
 ) -> Result<(DaemonContext, T), DaemonizeError> {
-    let AbortGuard { ledger, files } = abort;
+    let AbortGuard { ledger, files } = &mut *abort;
     // Step 4: Set umask
     steps::set_umask(config.umask, ledger)?;
 
@@ -391,8 +397,8 @@ unsafe fn run_steps<'a, T>(
     // Step 18: Return DaemonContext (clones the config-derived fields it needs).
     // The context owns the pidfile and the lock from here, so the abort guard
     // stands down.
-    ledger.keep_all();
     let lockfile = files.take_lock();
+    abort.keep();
     Ok((DaemonContext::new(config, lockfile, pipe_wr.take()), value))
 }
 
@@ -910,6 +916,32 @@ mod tests {
             err.rollback_failures()
         );
         assert_eq!(std::fs::metadata(&log).unwrap().gid(), before);
+    }
+
+    // Covers: R163, R164
+    /// A start that succeeds keeps its files chowned: only a failure gives
+    /// the owners back.
+    #[test]
+    #[ignore = "needs root: the privileged tier runs it"]
+    fn root_a_started_daemon_keeps_its_files_chowned() {
+        use std::os::unix::fs::MetadataExt;
+        if !isolated() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("app.log");
+        let gid = crate::test_support::foreign_gid();
+        let mut config = DaemonConfig::new();
+        config
+            .foreground(true)
+            .close_fds(false)
+            .stdout(&log)
+            .group(gid.to_string());
+
+        let result = run_inner_with(&config, &mut NullForker::new(vec![], Ok(())), || Ok(()));
+
+        assert!(result.is_ok(), "{:?}", result.err());
+        assert_eq!(std::fs::metadata(&log).unwrap().gid(), gid);
     }
 
     // Covers: R163
