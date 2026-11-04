@@ -61,6 +61,11 @@ fn if_named(
     }
 }
 
+/// Whether `path` itself is a symlink, without following it.
+pub(crate) fn is_symlink(path: &Path) -> bool {
+    std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink())
+}
+
 /// True when both paths name one file, whether or not it exists yet.
 ///
 /// An existing file is settled by `canonicalize` on both operands. A file that

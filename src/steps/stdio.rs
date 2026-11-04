@@ -11,7 +11,7 @@ use nix::unistd::{self};
 
 use super::{Ledger, Rollback, Saved, Undo};
 use crate::error::{ChangedState, ErrorKind, RestoreFailure};
-use crate::file_identity::FileId;
+use crate::file_identity::{FileId, is_symlink};
 use std::os::fd::AsRawFd;
 
 /// What step 12 does with the streams it has opened — see
@@ -71,7 +71,7 @@ pub(crate) fn open_creating(
         // A symlink is `EEXIST` to the exclusive open, dangling or not.
         // Dangling, the file it names is created through it, and is not this
         // start's to remove: the path is the link.
-        if std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink()) {
+        if is_symlink(path) {
             return open_above_stdio(path, flags | OFlag::O_CREAT, mode).map(|fd| (fd, false));
         }
         // Not there for either open: the exclusive open's error is the cause.

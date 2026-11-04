@@ -10,7 +10,9 @@ use nix::unistd::Whence;
 
 use super::*;
 use crate::error::ErrorKind;
-use crate::file_identity::{FileId, file_id, lstat_if_named, paths_same, stat_if_named};
+use crate::file_identity::{
+    FileId, file_id, is_symlink, lstat_if_named, paths_same, stat_if_named,
+};
 
 /// Step 7: Open and exclusively lock a lockfile, saying whether this start
 /// created it.
@@ -137,7 +139,7 @@ pub(crate) fn open_pidfile<'a>(
 /// Why opening `path` failed. A refusal under `O_NOFOLLOW` is `ELOOP` on
 /// Linux and macOS but `EMLINK` on FreeBSD, so the path says what it is.
 fn open_failure(path: &Path, e: &std::io::Error) -> String {
-    if std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink()) {
+    if is_symlink(path) {
         not_the_file(path)
     } else {
         format!("cannot open {}: {e}", path.display())
@@ -155,7 +157,7 @@ fn not_the_file(path: &Path) -> String {
 /// The refusal of a pidfile path that no longer names the file step 7 locked:
 /// a symlink to it, or a path another process removed or replaced since.
 fn not_the_locked_file(path: &Path) -> String {
-    if std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink()) {
+    if is_symlink(path) {
         not_the_file(path)
     } else {
         format!(
