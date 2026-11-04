@@ -59,11 +59,8 @@ exclude_re = [
     # root reaches this restore. root_gets_its_groups_back_after_a_failed_
     # foreground_start kills it under `just docker-test` (checked by hand).
     'replace Groups::restore -> Result<[(][)], RestoreFailure> with Ok[(][(][)][)]$',
-    # Only root chowns at step 16, so only root has owners to keep or give
-    # back. root_a_started_daemon_keeps_its_files_chowned kills the first;
-    # root_gives_a_file_its_owner_back_with_no_descriptor_free and
-    # root_a_daemon_dropped_before_readiness_gives_each_owner_back kill the
-    # second, under `just docker-test` (checked by hand).
+    # Only root chowns at step 16, so only root has owners to keep.
+    # root_a_started_daemon_keeps_its_files_chowned kills it under
+    # `just docker-test` (checked by hand).
     'replace OpenedFiles::keep_owners with [(][)]$',
-    'replace OpenedFiles::give_owners_back -> Vec<RestoreFailure> with vec!\[\]$',
 ]
