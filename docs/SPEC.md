@@ -134,66 +134,23 @@ The context-dependent sites, each carrying the single-threaded contract:
 
 ## Public API
 
+The rustdoc is the API reference: each type, method, field default and
+error variant is documented there, and `public-api.txt` pins the
+signatures and trait impls. This section keeps only the rules the rustdoc
+does not state.
+
 ### DaemonConfig
 
-`DaemonConfig` is a plain data struct with `&mut self` builder methods.
-It derives `Default`, `Debug`, `Clone`, `Eq`, `PartialEq`, and `Hash`.
-`DaemonConfig::new()` returns the same value as `Default::default()`.
+`DaemonConfig` is a plain data struct with private fields and infallible
+`&mut self` builder methods. All builder methods except `.env()` are
+setters: each call replaces the previous value. `.env()` is an
+accumulator: each call pushes a new entry in insertion order.
+Last-write-wins for duplicate keys is achieved at application time (step
+11) via sequential `setenv` calls. Empty string values are legal (POSIX
+`setenv` semantics). There is no `.clear_env()` method; construct a new
+`DaemonConfig` to start over.
 
-All fields are private; callers use builder methods.
-
-| Field        | Type                    | Default              | Builder method       | Builder input type         | Semantics   |
-| ------------ | ----------------------- | -------------------- | -------------------- | -------------------------- | ----------- |
-| `pidfile`    | `Option<PathBuf>`       | `None`               | `.pidfile(path)`     | `impl Into<PathBuf>`       | Setter      |
-| `chdir`      | `PathBuf`               | `PathBuf::from("/")` | `.chdir(path)`       | `impl Into<PathBuf>`       | Setter      |
-| `umask`      | `u32`                   | `0`                  | `.umask(mode)`       | `u32` (octal, `<= 0o7777`) | Setter      |
-| `stdout`     | `Option<PathBuf>`       | `None`               | `.stdout(path)`      | `impl Into<PathBuf>`       | Setter      |
-| `stderr`     | `Option<PathBuf>`       | `None`               | `.stderr(path)`      | `impl Into<PathBuf>`       | Setter      |
-| `append`     | `bool`                  | `false`              | `.append(bool)`      | `bool`                     | Setter      |
-| `lockfile`   | `LockfileSetting` (private tri-state) | derive from `pidfile` | `.lockfile(path)` / `.no_lockfile()` | `impl Into<PathBuf>` / none | Setter      |
-| `user`       | `Option<String>`        | `None`               | `.user(name)`        | `impl Into<String>`        | Setter      |
-| `group`      | `Option<String>`        | `None`               | `.group(name)`       | `impl Into<String>`        | Setter      |
-| `foreground` | `bool`                  | `false`              | `.foreground(bool)`  | `bool`                     | Setter      |
-| `close_fds`  | `bool`                  | `true`               | `.close_fds(bool)`   | `bool`                     | Setter      |
-| `cleanup_on_drop` | `bool`             | `true`               | `.cleanup_on_drop(bool)` | `bool`                 | Setter      |
-| `chown_paths` | `bool`                 | `true`               | `.chown_paths(bool)` | `bool`                     | Setter      |
-| `env`        | `Vec<(String, String)>` | `vec![]`             | `.env(key, value)`   | `impl Into<String>` (both) | Accumulator |
-
-All builder methods except `.env()` are setters: each call replaces the
-previous value. `.env()` is an accumulator: each call pushes a new
-entry in insertion order. Last-write-wins for duplicate keys is achieved
-at application time (step 11) via sequential `setenv` calls. Empty
-string values are legal (POSIX `setenv` semantics). There is no
-`.clear_env()` method; construct a new `DaemonConfig` to start over.
-
-All builder methods are infallible (`&mut Self`, no `Result`). All
-input validation is centralized in `validate()`.
-
-```rust
-let mut config = DaemonConfig::new();
-config.pidfile("/var/run/foo.pid").chdir("/var/lib/foo");
-
-config.validate()?;                     // optional early check
-
-let mut ctx = daemonize(&config)?;
-// ... application initialization (still privileged if run as root) ...
-ctx.notify_parent()?;
-// daemon process continues here
-```
-
-**Privileged init** (work that needs the original privileges):
-
-```rust
-let mut config = DaemonConfig::new();
-config.pidfile("/var/run/foo.pid").user("nobody").group("nogroup");
-
-let (mut ctx, listener) = daemonize_with(&config, || {
-    // still root, holding the lock (e.g., bind port 80)
-    TcpListener::bind("0.0.0.0:80").with_exit_code(71)
-})?;
-// now running as nobody:nogroup; pidfile/lockfile/logs chowned first
-ctx.notify_parent()?;
-```
+All input validation is centralized in `validate()`.
 
 ### DaemonContext
 
@@ -202,20 +159,12 @@ ctx.notify_parent()?;
 where `T` is `init`'s value. The context exists only after the identity
 switch, so there is no way to signal readiness while still privileged
 (R125).
-`DaemonContext` is `#[non_exhaustive]` with all private fields. It has a
-manual `Debug` impl (see below). Do not derive `Clone` or `PartialEq`.
 
 The context carries the validated `DaemonConfig` whole rather than
 mirroring each post-daemonization setting into a parallel field. So the
 pidfile, lockfile, stdout, stderr, user, group, `cleanup_on_drop`, and
 `chown_paths` values are read from `config`, not stored separately.
-
-| Field                | Type                | Semantics                                          |
-| -------------------- | ------------------- | -------------------------------------------------- |
-| `config`             | `DaemonConfig`      | The validated config, cloned in whole. Single source of truth for pidfile, lockfile, stdout/stderr, user/group, `cleanup_on_drop`, and `chown_paths`. |
-| `lockfile`           | `Option<Flock>`     | Owned lock (`nix::fcntl`), once no launcher waits; drop releases. While one waits, the start's abort guard holds it. |
-| `launcher`           | `Launcher`          | `Waiting` (holds the pipe's write end and the start's abort guard, R170), `Released`, or `Foreground`; see below. |
-| `pidfile`            | `Option<Removal>`   | The pidfile this start wrote, by identity; cleanup takes it, so it runs once, and removes the file only while the path still names it. |
+Step 18 says what else it owns.
 
 **Debug output:** the manual `impl` does not print `config` verbatim.
 It renders `lockfile` as `held`/`none` and the launcher as a
@@ -300,46 +249,12 @@ A `RestoreFailure` holds the `ChangedState` left changed, `state()`; for
 a file, its path, `path() -> Option<&Path>`; and why, `error() ->
 &io::Error`: the restore's error, or the error that kept the step from
 saving the state. `Display` is `<state>: <error>`, or `<state> <path>:
-<error>` for a file.
-`ChangedState` is `#[non_exhaustive]`: `Stdin`, `Stdout`, `Stderr`,
-`WorkingDirectory`, `SignalMask`, `SignalDispositions`,
-`SupplementaryGroups`, `PrimaryGroup`, `Pidfile`, `Lockfile`,
-`OutputFile`, `FileOwner`, `Environment`, `EmptiedOutputFile`. The
-umask is not in it: restoring it cannot fail. `Environment` is the
-environment a failure after `init` leaves as step 11 set it.
-`OutputFile` is a log the start created and could not remove;
-`EmptiedOutputFile` is one that was there before, which step 15 emptied:
-the caller's own file, not a leftover to delete.
+<error>` for a file. `ChangedState` names each kind of change; the umask
+is not one, since restoring it cannot fail.
 
-`ErrorKind` is one enum covering validation and runtime errors. Derives
-`Debug` and `thiserror::Error` (providing `Display` and
-`std::error::Error`). Do not derive `Clone` or `PartialEq`; use
-`matches!()` on `kind()` in tests. `Display` messages are lowercase with
-no trailing punctuation.
-
-| Variant            | Condition                                               |
-| ------------------ | ------------------------------------------------------- |
-| `ValidationError`  | Bad path, bad env key, path overlap, other config error |
-| `ProgramNotFound`  | Program missing or not executable (the CLI's pre-fork path check, or `ENOENT`/`EACCES` from `DaemonContext::exec`) |
-| `UserNotFound`     | User does not exist at runtime during the identity switch |
-| `GroupNotFound`    | Group does not exist at runtime during group switching  |
-| `LockConflict`     | flock already held by another process                   |
-| `LockfileError`    | Lockfile cannot be opened                               |
-| `ForkFailed`       | `fork()` returns an error                               |
-| `SetsidFailed`     | `setsid()` returns an error                             |
-| `ChdirFailed`      | `chdir()` fails at runtime after fork                   |
-| `SystemError`      | A system call with no more specific variant fails: creating the notification pipe, opening `/dev/null` or `dup2` onto it, `sigaction`, `sigprocmask`, `getrlimit` |
-| `PermissionDenied` | Non-root caller with user/group switch, or setuid/setgid/chown fail |
-| `PidfileError`     | Pidfile cannot be written                               |
-| `OutputFileError`  | stdout/stderr file cannot be opened, truncated or dup2'd, or, in foreground mode, fd 1/2 cannot be saved first |
-| `ChownError`       | chown of pidfile/lockfile/output file failed             |
-| `ExecFailed`       | `DaemonContext::exec` failed (other than `ENOENT`/`EACCES`) |
-| `NotifyFailed`     | Writing the readiness message to the notification pipe failed |
-| `InitLeftThreads`  | A checked `daemonize_with` init left threads running before an identity switch to a user |
-| `Application`      | Caller-reported startup failure (returned from `init`, or via `application()`/`report_error`) |
-
-`ProgramNotFound` and `ExecFailed` come only from `DaemonContext::exec`
-and the CLI's pre-fork path check.
+`ErrorKind` is one enum covering validation and runtime errors; its
+variants and the conditions for each are in the rustdoc. `Display`
+messages are lowercase with no trailing punctuation.
 
 `DaemonizeError::exit_code(&self) -> u8` returns the `sysexits.h` code
 for the kind's variant (see CLI exit code table).
@@ -356,14 +271,6 @@ for the kind's variant (see CLI exit code table).
 > variant without breaking validation semantics.
 
 ### daemonize()
-
-```rust
-#[cfg(unix)]
-#[cfg(blivet_thread_count)]
-pub fn daemonize(
-    config: &DaemonConfig,
-) -> Result<DaemonContext, DaemonizeError>
-```
 
 Gated on the capability, so it is the real function on exactly the
 platforms whose thread count can be read — Android included. Consumers
@@ -395,19 +302,6 @@ On a target the table gives no thread-count source it is a
 
 ### daemonize_unchecked()
 
-```rust
-/// # Safety
-///
-/// No other threads may be running when this function is called.
-/// Forking a multithreaded process leaves mutexes held by other
-/// threads permanently locked in the child, causing deadlocks or
-/// undefined behavior. Call before spawning threads, async runtimes,
-/// or libraries with background threads.
-pub unsafe fn daemonize_unchecked(
-    config: &DaemonConfig,
-) -> Result<DaemonContext, DaemonizeError>
-```
-
 The `unsafe` escape hatch, available on all Unix targets. Used by
 `daemonize` internally, and called directly on platforms where `daemonize`
 is unavailable (or when the caller manages the single-threaded contract).
@@ -427,7 +321,7 @@ no-op.
 - Pre-fork errors (validation failure, pipe creation failure, first
   fork failure) return `Err` directly to the original caller. No
   notification pipe is involved because the caller *is* the parent.
-- Post-fork errors (steps 2–14) are written to the notification pipe
+- Post-fork errors (steps 2–17) are written to the notification pipe
   per the notification protocol. The grandchild calls `_exit()`. The
   parent reads the error, prints it to its stderr, and calls `_exit()`
   with the mapped exit code. The grandchild's `_exit()` code uses the
