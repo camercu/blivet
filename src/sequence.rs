@@ -241,9 +241,10 @@ unsafe fn run_steps<T>(
     let mut pidfile_id = None;
     if let Some(ref pidfile_path) = config.pidfile {
         let pidfile = steps::open_pidfile(pidfile_path, files.lock())?;
-        let removal = steps::Removal::new(pidfile_path, pidfile.id()?, steps::Created::Pidfile);
+        let id = pidfile.id()?;
+        let removal = steps::Removal::new(pidfile_path, id, steps::Created::Pidfile);
         ledger.record_lasting(steps::Saved::Removal(removal))?;
-        let (id, fd) = pidfile.write_pid()?;
+        let fd = pidfile.write_pid()?;
         pidfile_id = Some(id);
         // A standalone pidfile's descriptor, kept for step 16's chown (R163).
         if let Some(fd) = fd {
