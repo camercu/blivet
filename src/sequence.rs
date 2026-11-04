@@ -125,16 +125,7 @@ pub(crate) unsafe fn daemonize_inner_with<T>(
     // parent and exit. `pipe_wr` stays available so the error path can still
     // signal it.
     // SAFETY: this function's own contract requires a single thread.
-    let run = || unsafe { run_post_fork(config, &mut pipe_wr, init) };
-    let result = if foreground {
-        run()
-    } else {
-        // A panic (in practice, init's) ends the daemon as an error does:
-        // unwinding on would run the caller's frames in a detached process
-        // whose launcher has already read a failure (R166).
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(run))
-            .unwrap_or_else(|panic| Err(panicked(&*panic).into()))
-    };
+    let result = unsafe { run_post_fork(config, &mut pipe_wr, init) };
     match result {
         Ok(done) => Ok(done),
         Err(e) if foreground => Err(e),
@@ -161,8 +152,9 @@ fn panicked(payload: &(dyn std::any::Any + Send)) -> ErrorKind {
 /// What a failed sequence undoes (R164): each change in the
 /// [`Ledger`](steps::Ledger), in the reverse of the order the steps made
 /// them, and last the lock (step 7). A half-done identity switch (step 17)
-/// undoes itself. A panic unwinding past the sequence rolls back as the
-/// guard drops, with nowhere to report.
+/// undoes itself. A panic in foreground mode, unwinding past the sequence,
+/// rolls back as the guard drops, with nowhere to report; a daemon catches
+/// its panic and rolls back as for an error (R166).
 ///
 /// In foreground mode the process is the caller's, and it gets back the parts
 /// that can be restored. In daemon mode the process exits on failure, so only
@@ -196,8 +188,8 @@ impl AbortGuard<'_> {
 
 impl Drop for AbortGuard<'_> {
     fn drop(&mut self) {
-        // Empty unless a panic unwound past `run_post_fork`, which leaves no
-        // error to report the failures in. Here, not by field order, so the
+        // Empty unless a foreground panic unwound past `run_post_fork`,
+        // which leaves no error to report the failures in. Here, not by field order, so the
         // pidfile goes before the lock whatever order the fields are in.
         let _ = self.ledger.roll_back();
     }
@@ -225,7 +217,17 @@ unsafe fn run_post_fork<T>(
     // exits on failure, only what it left on disk.
     let mut abort = AbortGuard::new(config.foreground);
     // SAFETY: this function's contract, passed on.
-    let result = unsafe { run_steps(config, pipe_wr, init, &mut abort) };
+    let run = || unsafe { run_steps(config, pipe_wr, init, &mut abort) };
+    let result = if config.foreground {
+        run()
+    } else {
+        // A panic (in practice, init's) ends the daemon as an error does,
+        // through the same flush and rollback below: unwinding on would run
+        // the caller's frames in a detached process whose launcher has
+        // already read a failure (R166).
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(run))
+            .unwrap_or_else(|panic| Err(panicked(&*panic).into()))
+    };
     result.map_err(|e| {
         // What init left in stdout's buffer belongs in the log, and decides
         // whether the rollback keeps it.
@@ -2030,6 +2032,73 @@ mod tests {
             }
             _ => panic!("the launcher did not read a failure with code 75"),
         }
+    }
+
+    // Covers: R160, R164, R166
+    /// A panic in init fails the start as an error does, so the launcher
+    /// hears what the rollback left too.
+    #[test]
+    fn a_panicking_daemon_tells_the_launcher_what_its_rollback_left() {
+        use std::os::unix::fs::PermissionsExt;
+        if !isolated() {
+            return;
+        }
+        crate::test_support::shed_root();
+        let dir = tempfile::tempdir().unwrap();
+        let pidfile = dir.path().join("app.pid");
+        let mut config = DaemonConfig::new();
+        config.close_fds(false).pidfile(&pidfile);
+        let mut forker = NullForker::both_child_with_reader();
+        let read_only = |mode| {
+            std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(mode)).unwrap();
+        };
+
+        let _ = catch_unwind(std::panic::AssertUnwindSafe(|| {
+            run_inner_with(&config, &mut forker, || -> Result<(), _> {
+                read_only(0o555);
+                panic!("database schema too new")
+            })
+        }));
+        read_only(0o755);
+
+        let rd = forker
+            .take_pipe_reader()
+            .expect("NullForker stores a reader");
+        match notify::decode(&crate::test_support::read_pipe(rd)) {
+            notify::Outcome::Failure { message, .. } => assert!(
+                message.contains(&format!("rollback left pidfile {}: ", pidfile.display())),
+                "{message}"
+            ),
+            notify::Outcome::Success => panic!("the launcher read a success"),
+        }
+    }
+
+    // Covers: R164, R166
+    /// A panic flushes what init left in stdout's buffer before the rollback
+    /// looks at the log, as an error does.
+    #[test]
+    fn a_panicking_daemon_keeps_output_still_buffered() {
+        use std::io::Write;
+        if !isolated() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("app.log");
+        let mut config = DaemonConfig::new();
+        config.close_fds(false).stdout(&log);
+        let mut forker = NullForker::both_child_with_reader();
+
+        let _ = catch_unwind(std::panic::AssertUnwindSafe(|| {
+            run_inner_with(&config, &mut forker, || -> Result<(), _> {
+                write!(std::io::stdout(), "connecting").unwrap();
+                panic!("database schema too new")
+            })
+        }));
+
+        assert_eq!(
+            std::fs::read_to_string(&log).ok().as_deref(),
+            Some("connecting")
+        );
     }
 
     // Covers: R154

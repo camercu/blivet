@@ -668,7 +668,8 @@ without a more specific variant — opening `/dev/null`, `sigaction`,
 `sigprocmask`, `getrlimit` — map to `SystemError` (exit 71).
 Individual `close()` errors in step 13 are silently ignored. A panic in
 steps 4–17, `init`'s included, is caught and reported the same way, as
-exit 70 with the panic text (R166): unwinding on would run the caller's
+exit 70 with the panic text (R166), after the same flush and rollback,
+whose failures it reports too: unwinding on would run the caller's
 frames, and any recovery they hold, in a detached daemon whose launcher
 has already read a failure.
 
@@ -1760,8 +1761,9 @@ on any change to it, so the rows only copied the snapshot.
   `MSG_NOSIGNAL`, so a launcher that is gone costs `EPIPE` and never
   SIGPIPE, whatever disposition the caller kept (R127, ADR 0006).
 - R166. A panic in the daemon process's sequence, `init`'s included,
-  does not unwind into the caller's frames: the daemon reports it as a
-  failure with exit code 70 and the panic text, then exits.
+  does not unwind into the caller's frames: the daemon rolls back and
+  reports it as an error does, with exit code 70 and the panic text, then
+  exits.
 - R167. `DaemonContext::exec` refuses an empty `args` with
   `ExecFailed` before it changes anything, so no program runs with
   argc 0.
