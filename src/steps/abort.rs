@@ -31,7 +31,11 @@ impl AbortGuard {
     /// Puts back what the steps changed, latest first, and returns what it
     /// could not put back. The owners step 16 replaced go first: no step
     /// after 16 changes anything a rollback undoes.
+    ///
+    /// Flushes stdout first, on every path: what init left in its buffer
+    /// belongs in the log, and decides whether the rollback keeps it.
     pub(crate) fn roll_back(&mut self) -> Vec<crate::RestoreFailure> {
+        let _ = std::io::Write::flush(&mut std::io::stdout());
         let mut failures = self.files.give_owners_back();
         failures.extend(self.ledger.roll_back());
         failures

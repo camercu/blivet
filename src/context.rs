@@ -75,9 +75,11 @@ enum Launcher {
     /// The guard holds what the start changed, for a failure to undo as an
     /// init failure does (R164); leaving this state any other way keeps it.
     ///
-    /// Asserted unwind-safe, so the context stays `UnwindSafe`: each token
-    /// leaves the guard as it restores, so a panic part way through a
-    /// rollback leaves only tokens not yet run, which a later drop runs.
+    /// Asserted unwind-safe, so the context stays `UnwindSafe`: each owner
+    /// leaves its record as it is given back, and the ledger takes every
+    /// token out before it runs one, so a panic part way through never leaves
+    /// a half-run change to run again. The ledger's tokens after the
+    /// panicking one are lost; none panics today.
     Waiting(NotifyChannel, std::panic::AssertUnwindSafe<AbortGuard>),
     /// The launcher was told the start succeeded, or `notify_parent` handed
     /// its failure to a caller that may keep running.
@@ -472,10 +474,7 @@ impl DaemonContext {
         signal: impl FnOnce(NotifyChannel, &[crate::RestoreFailure]),
     ) {
         let left = match &mut self.launcher {
-            Launcher::Waiting(_, start) => {
-                let _ = std::io::Write::flush(&mut std::io::stdout());
-                Some(start.roll_back())
-            }
+            Launcher::Waiting(_, start) => Some(start.roll_back()),
             Launcher::Released | Launcher::Foreground => None,
         };
         if self.config.cleanup_on_drop || left.is_some() {

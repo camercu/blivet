@@ -182,12 +182,7 @@ unsafe fn run_post_fork<T>(
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(run))
             .unwrap_or_else(|panic| Err(panicked(&*panic).into()))
     };
-    result.map_err(|e| {
-        // What init left in stdout's buffer belongs in the log, and decides
-        // whether the rollback keeps it.
-        let _ = std::io::Write::flush(&mut std::io::stdout());
-        e.with_rollback_failures(abort.roll_back())
-    })
+    result.map_err(|e| e.with_rollback_failures(abort.roll_back()))
 }
 
 /// The steps of [`run_post_fork`], recording in `abort` what each changed.
@@ -2187,6 +2182,39 @@ mod tests {
         drop(ctx);
 
         assert!(log.exists(), "a started daemon's log was removed");
+    }
+
+    // Covers: R164, R166
+    /// A foreground panic unwinds past the sequence, and the rollback that
+    /// runs on the way flushes stdout first, as an error's does: the log
+    /// keeps what init wrote, and the text does not reach the caller's
+    /// terminal.
+    #[test]
+    fn a_foreground_panic_keeps_output_still_buffered() {
+        use std::io::Write;
+        if !isolated() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("app.log");
+        let mut config = DaemonConfig::new();
+        config.foreground(true).close_fds(false).stdout(&log);
+
+        let _ = catch_unwind(std::panic::AssertUnwindSafe(|| {
+            run_inner_with(
+                &config,
+                &mut NullForker::new(vec![], Ok(())),
+                || -> Result<(), _> {
+                    write!(std::io::stdout(), "connecting").unwrap();
+                    panic!("database schema too new")
+                },
+            )
+        }));
+
+        assert_eq!(
+            std::fs::read_to_string(&log).ok().as_deref(),
+            Some("connecting")
+        );
     }
 
     // Covers: R154
