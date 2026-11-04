@@ -652,6 +652,10 @@ mod tests {
                     70,
                     "Application remaps 0 to 70"
                 );
+                assert_eq!(
+                    constant, "(caller's choice)",
+                    "Application's constant drifted"
+                );
             } else {
                 let code: u8 = cell
                     .parse()

@@ -257,7 +257,7 @@ variants and the conditions for each are in the rustdoc. `Display`
 messages are lowercase with no trailing punctuation.
 
 `DaemonizeError::exit_code(&self) -> u8` returns the `sysexits.h` code
-for the kind's variant (see CLI exit code table).
+for the kind's variant, as [`exit-codes.md`](exit-codes.md) lists.
 
 > Placing exit code mapping on the error type (rather than keeping it
 > as a CLI-only concern) is motivated by the notification pipe: the
