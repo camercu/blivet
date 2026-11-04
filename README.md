@@ -264,118 +264,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ## Recipes
 
-### Pidfile cleanup on signals
+Each has a worked example in the API docs.
 
-When `cleanup_on_drop` is `true` (the default), the pidfile is removed when
-`DaemonContext` is dropped. But **`Drop` does not run when a signal kills the
-process**, and most daemons stop that way (`SIGTERM`, `SIGKILL`, …). The pidfile
-stays behind. The built-in fix installs async-signal-safe
-handlers that remove the pidfile on `SIGINT`/`SIGTERM`, then re-raise so the
-process still terminates normally. Like `cleanup()`, they remove it only while
-the path still names the file this daemon wrote, so a pidfile a newer instance
-put there stays:
+- **Remove the pidfile on `SIGTERM`/`SIGINT`.** `Drop` does not run when a
+  signal kills the process, so call
+  [`cleanup_on_term_signals`][cleanup_on_term_signals]. It works from the
+  library only: the CLI's `exec` resets custom handlers. A daemon with its own
+  signal loop drops the context when the loop ends instead, as
+  [`examples/echo_server.rs`](examples/echo_server.rs) does.
+- **Report your own startup failure.** Inside `init`, use
+  `.with_exit_code(code)` or return `DaemonizeError::application(code,
+  message)`; after `daemonize`, call [`report_error_msg`][report_error_msg].
+- **Hand off to another program.** [`exec`][exec] replaces the daemon, as the
+  CLI does; the launcher exits 0 once the exec succeeds.
+- **Propagate exit codes.** `fn main() -> Result<(), E>` exits 1 whatever the
+  error; call [`exit_code`][exit_code] and `std::process::exit` yourself.
 
-```rust,no_run
-use blivet::{daemonize, DaemonConfig};
-
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut config = DaemonConfig::new();
-    config.pidfile("/var/run/myapp.pid");
-    let mut ctx = daemonize(&config)?;
-
-    ctx.cleanup_on_term_signals()?; // or cleanup_on_signals(&[...]) for custom signals
-    ctx.notify_parent()?;
-    // … daemon work …
-    Ok(())
-}
-```
-
-> **Library-only.** The `daemonize` **CLI** cannot do this: it `exec`s the
-> target program, and `exec` resets custom signal handlers to their default
-> disposition, so a CLI-launched program must clean up its own pidfile.
-
-If you already run your own signal loop (e.g. for graceful shutdown), you don't
-need the built-in handler. Let the loop exit, then call `cleanup()` or let
-`ctx` drop. The [`signal-hook`](https://crates.io/crates/signal-hook) crate
-is one way to drive that loop; `blivet` does not re-export it, so
-`cargo add signal-hook` first. Pick one approach per signal:
-`cleanup_on_signals` refuses a signal that already has a handler, such as one
-`signal_hook` registered, or that is ignored, rather than silently replacing it.
-
-```rust,no_run
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
-use blivet::{daemonize, DaemonConfig};
-
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut config = DaemonConfig::new();
-    config.pidfile("/var/run/myapp.pid");
-    let mut ctx = daemonize(&config)?;
-    ctx.notify_parent()?;
-
-    // `flag::register` *sets* the flag when the signal arrives, so start at
-    // `false` and loop until it flips.
-    let shutdown = Arc::new(AtomicBool::new(false));
-    signal_hook::flag::register(signal_hook::consts::SIGTERM, Arc::clone(&shutdown))?;
-    signal_hook::flag::register(signal_hook::consts::SIGINT, Arc::clone(&shutdown))?;
-
-    while !shutdown.load(Ordering::Relaxed) {
-        // … daemon work …
-    }
-    ctx.cleanup(); // or just let ctx drop
-    Ok(())
-}
-```
-
-### Reporting your own failures
-
-Inside `daemonize_with()`'s init, use `.with_exit_code(code)` or return
-`DaemonizeError::application(code, message)`. After the call, when startup work
-that needs no privileges fails (a database connect), report it to the launcher
-with a `sysexits.h` code of your choosing via `report_error_msg`, without
-building a `DaemonizeError` by hand:
-
-```rust,ignore
-let db = match Database::connect(&url) {
-    Ok(db) => db,
-    // 69 == EX_UNAVAILABLE; the launcher prints the message and exits with it.
-    Err(e) => ctx.report_error_msg(69, format!("database connect failed: {e}")),
-};
-```
-
-### Handing off to another program
-
-`ctx.exec(program, argv)` replaces the daemon with another program, as the
-`daemonize` CLI does. The program keeps the lock and starts with the default
-`SIGPIPE`. The launcher exits 0 once the exec succeeds, or with the exec's
-error (66 for a missing program, 71 otherwise) if it fails.
-
-### Propagating exit codes
-
-The `sysexits.h` codes only reach the shell if you use them. The idiomatic
-`fn main() -> Result<(), E>` prints the error via `Termination` and exits **1**,
-ignoring `exit_code()`. To preserve the codes, drive `exit_code()` yourself:
-
-```rust,no_run
-use blivet::{daemonize, DaemonConfig, DaemonizeError};
-
-fn main() {
-    if let Err(e) = run() {
-        eprintln!("{e}");
-        std::process::exit(e.exit_code() as i32); // e.g. 77 for PermissionDenied
-    }
-}
-
-fn run() -> Result<(), DaemonizeError> {
-    let config = DaemonConfig::new();
-    let mut ctx = daemonize(&config)?;
-    // … application init …
-    // notify_parent() returns DaemonizeError (NotifyFailed, exit 71), so `?`
-    // keeps a single error type and preserves the exit code.
-    ctx.notify_parent()?;
-    Ok(())
-}
-```
+[cleanup_on_term_signals]:
+  https://docs.rs/blivet/latest/blivet/struct.DaemonContext.html#method.cleanup_on_term_signals
+[report_error_msg]:
+  https://docs.rs/blivet/latest/blivet/struct.DaemonContext.html#method.report_error_msg
+[exec]:
+  https://docs.rs/blivet/latest/blivet/struct.DaemonContext.html#method.exec
+[exit_code]:
+  https://docs.rs/blivet/latest/blivet/struct.DaemonizeError.html#method.exit_code
 
 ## CLI
 
