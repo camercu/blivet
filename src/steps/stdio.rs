@@ -530,6 +530,26 @@ mod tests {
         assert_eq!(err.kind(), std::io::ErrorKind::PermissionDenied);
     }
 
+    /// A file there that this start may not open is reported as such, not
+    /// taken for one that keeps appearing and going.
+    #[test]
+    fn a_file_found_but_not_writable_reports_why() {
+        if nix::unistd::geteuid().is_root() {
+            return; // root writes to a read-only file
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app.log");
+        std::fs::write(&path, "").unwrap();
+        let mut perms = std::fs::metadata(&path).unwrap().permissions();
+        std::os::unix::fs::PermissionsExt::set_mode(&mut perms, 0o444);
+        std::fs::set_permissions(&path, perms).unwrap();
+
+        let err =
+            open_creating(&path, OFlag::O_WRONLY, Mode::from_bits_truncate(0o644)).unwrap_err();
+
+        assert_eq!(err.kind(), std::io::ErrorKind::PermissionDenied);
+    }
+
     #[test]
     fn a_file_found_is_not_created() {
         let dir = tempfile::tempdir().unwrap();
