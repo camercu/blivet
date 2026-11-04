@@ -297,6 +297,37 @@ mod tests {
         files.push(path, role, id);
     }
 
+    /// A record whose `fchown` back to root fails unprivileged.
+    fn chowned_from_root(dir: &Path) -> (OpenedFiles, std::path::PathBuf) {
+        let path = dir.join("app.pid");
+        let mut files = OpenedFiles::default();
+        push(&mut files, &path, Role::Pidfile(file(dir, "app.pid")));
+        files.0[0].owner_was = Some((Uid::from_raw(0), Gid::from_raw(0)));
+        (files, path)
+    }
+
+    // Covers: R170
+    #[test]
+    fn a_removed_file_gets_no_owner_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut files, path) = chowned_from_root(dir.path());
+        std::fs::remove_file(&path).unwrap();
+
+        assert!(files.give_owners_back().is_empty());
+    }
+
+    // Covers: R164
+    #[test]
+    fn a_file_still_on_disk_reports_an_owner_it_cannot_give_back() {
+        if nix::unistd::geteuid().is_root() {
+            return; // root can give any owner back
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let (mut files, _path) = chowned_from_root(dir.path());
+
+        assert_eq!(files.give_owners_back().len(), 1);
+    }
+
     #[test]
     fn the_owned_files_are_named_by_role() {
         let dir = tempfile::tempdir().unwrap();
