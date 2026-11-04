@@ -224,7 +224,7 @@ impl Emptied {
     /// Reports the content lost.
     pub(crate) fn restore(self) -> Result<(), RestoreFailure> {
         Err(RestoreFailure::at(
-            ChangedState::OutputFile,
+            ChangedState::EmptiedOutputFile,
             &self.0,
             std::io::Error::other("truncated, so its earlier content is lost"),
         ))

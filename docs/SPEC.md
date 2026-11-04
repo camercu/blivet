@@ -303,9 +303,12 @@ saving the state. `Display` is `<state>: <error>`, or `<state> <path>:
 `ChangedState` is `#[non_exhaustive]`: `Stdin`, `Stdout`, `Stderr`,
 `WorkingDirectory`, `SignalMask`, `SignalDispositions`,
 `SupplementaryGroups`, `PrimaryGroup`, `Pidfile`, `Lockfile`,
-`OutputFile`, `FileOwner`, `Environment`. The umask is not in it:
-restoring it cannot fail. `Environment` is the environment a failure
-after `init` leaves as step 11 set it.
+`OutputFile`, `FileOwner`, `Environment`, `EmptiedOutputFile`. The
+umask is not in it: restoring it cannot fail. `Environment` is the
+environment a failure after `init` leaves as step 11 set it.
+`OutputFile` is a log the start created and could not remove;
+`EmptiedOutputFile` is one that was there before, which step 15 emptied:
+the caller's own file, not a leftover to delete.
 
 `ErrorKind` is one enum covering validation and runtime errors. Derives
 `Debug` and `thiserror::Error` (providing `Display` and

@@ -222,9 +222,7 @@ pub enum ChangedState {
     Pidfile,
     /// The lockfile the sequence created, still on disk.
     Lockfile,
-    /// A stdout or stderr file: one the sequence created, still on disk, or
-    /// one it emptied of earlier content. An emptied file is the caller's
-    /// own; do not delete it as a leftover.
+    /// A stdout or stderr file the sequence created, still on disk.
     OutputFile,
     /// The owner and group of a file the sequence handed to the target
     /// identity.
@@ -233,6 +231,10 @@ pub enum ChangedState {
     /// has run: init may have started threads, and `setenv` is not
     /// thread-safe.
     Environment,
+    /// A stdout or stderr file that was there before the start, which the
+    /// sequence emptied of its earlier content. The file is the caller's
+    /// own, not a leftover: do not delete it.
+    EmptiedOutputFile,
 }
 
 impl ChangedState {
@@ -250,7 +252,11 @@ impl ChangedState {
             | Self::SupplementaryGroups
             | Self::Environment
             | Self::PrimaryGroup => false,
-            Self::Pidfile | Self::Lockfile | Self::OutputFile | Self::FileOwner => true,
+            Self::Pidfile
+            | Self::Lockfile
+            | Self::OutputFile
+            | Self::EmptiedOutputFile
+            | Self::FileOwner => true,
         }
     }
 }
@@ -271,6 +277,7 @@ impl std::fmt::Display for ChangedState {
             Self::Lockfile => "lockfile",
             Self::OutputFile => "output file",
             Self::FileOwner => "file owner",
+            Self::EmptiedOutputFile => "emptied output file",
         })
     }
 }
@@ -743,7 +750,10 @@ mod tests {
             .into_iter()
             .filter(|s| s.outlives_process())
             .collect();
-        assert_eq!(lasting, [Pidfile, Lockfile, OutputFile, FileOwner]);
+        assert_eq!(
+            lasting,
+            [Pidfile, Lockfile, OutputFile, FileOwner, EmptiedOutputFile]
+        );
     }
 
     #[test]
@@ -763,7 +773,7 @@ mod tests {
     }
 
     /// Every [`ChangedState`], in declaration order.
-    const ALL_STATES: [ChangedState; 13] = {
+    const ALL_STATES: [ChangedState; 14] = {
         use ChangedState::*;
         [
             Stdin,
@@ -779,6 +789,7 @@ mod tests {
             OutputFile,
             FileOwner,
             Environment,
+            EmptiedOutputFile,
         ]
     };
 
@@ -800,6 +811,7 @@ mod tests {
             OutputFile => 10,
             FileOwner => 11,
             Environment => 12,
+            EmptiedOutputFile => 13,
         }
     }
 

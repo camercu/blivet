@@ -1939,7 +1939,7 @@ mod tests {
             .iter()
             .map(|f| (f.state(), f.path()))
             .collect();
-        assert_eq!(report, [(ChangedState::OutputFile, Some(&*log))]);
+        assert_eq!(report, [(ChangedState::EmptiedOutputFile, Some(&*log))]);
     }
 
     // Covers: R164
