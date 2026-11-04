@@ -131,7 +131,8 @@ _Avoid_: custom error, user error
 **Rollback failure**:
 A change a failed start could not put back, reported beside the error
 (`RestoreFailure`, `DaemonizeError::rollback_failures`). A daemon sends it to
-the launcher. _Avoid_: restore
+the launcher, also when its `DaemonContext` fails the start before
+readiness. _Avoid_: restore
 error, cleanup error
 
 **Program handoff**:

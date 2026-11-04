@@ -149,67 +149,6 @@ fn panicked(payload: &(dyn std::any::Any + Send)) -> ErrorKind {
     ErrorKind::application(70, format!("daemon panicked during startup: {text}"))
 }
 
-/// What a failed sequence undoes (R164): the owners step 16 replaced, then
-/// each change in the [`Ledger`](steps::Ledger), in the reverse of the order
-/// the steps made them, and last the lock (step 7). A half-done identity switch (step 17)
-/// undoes itself. A panic in foreground mode, unwinding past the sequence,
-/// rolls back as the guard drops, with nowhere to report; a daemon catches
-/// its panic and rolls back as for an error (R166).
-///
-/// In foreground mode the process is the caller's, and it gets back the parts
-/// that can be restored. In daemon mode the process exits on failure, so only
-/// the tokens for files on disk hold anything. What cannot be restored is in
-/// R164. Step 18 keeps every change and hands over the lock.
-///
-/// The pidfile goes while the lock is still held: released first, the lock
-/// would let a second instance in to write its pid into a file this one then
-/// removes. [`Drop`] rolls the ledger back in its body, and `files`, the
-/// lock among them, drops after the body.
-struct AbortGuard<'a> {
-    /// What the steps changed.
-    ledger: steps::Ledger,
-    /// The files steps 7, 8 and 12 opened, the lock among them.
-    files: steps::OpenedFiles<'a>,
-}
-
-impl AbortGuard<'_> {
-    /// Puts back what the steps changed, latest first, and returns what it
-    /// could not put back. The owners step 16 replaced go first: no step
-    /// after 16 changes anything a rollback undoes.
-    fn roll_back(&mut self) -> Vec<crate::RestoreFailure> {
-        let mut failures = self.files.give_owners_back();
-        failures.extend(self.ledger.roll_back());
-        failures
-    }
-
-    /// Keeps every change: the ledger's, and the owners step 16 gave.
-    fn keep(&mut self) {
-        self.ledger.keep_all();
-        self.files.keep_owners();
-    }
-
-    fn new(foreground: bool) -> Self {
-        let rollback = if foreground {
-            steps::Rollback::PutBack
-        } else {
-            steps::Rollback::Skip
-        };
-        Self {
-            ledger: steps::Ledger::new(rollback),
-            files: steps::OpenedFiles::default(),
-        }
-    }
-}
-
-impl Drop for AbortGuard<'_> {
-    fn drop(&mut self) {
-        // Empty unless a foreground panic unwound past `run_post_fork`,
-        // which leaves no error to report the failures in. Here, not by field order, so the
-        // pidfile goes before the lock whatever order the fields are in.
-        let _ = self.roll_back();
-    }
-}
-
 /// Steps 4–18: apply the configuration in the final daemon process.
 ///
 /// Forker-free and fallible: every step returns its error rather than touching
@@ -230,7 +169,7 @@ unsafe fn run_post_fork<T>(
     // What a failure must undo (R164): everything restorable in foreground
     // mode, where the process is the caller's; in a daemon, whose process
     // exits on failure, only what it left on disk.
-    let mut abort = AbortGuard::new(config.foreground);
+    let mut abort = steps::AbortGuard::new(config.foreground);
     // SAFETY: this function's contract, passed on.
     let run = || unsafe { run_steps(config, pipe_wr, init, &mut abort) };
     let result = if config.foreground {
@@ -257,13 +196,13 @@ unsafe fn run_post_fork<T>(
 ///
 /// As [`run_post_fork`].
 #[allow(unsafe_code)]
-unsafe fn run_steps<'a, T>(
-    config: &'a DaemonConfig,
+unsafe fn run_steps<T>(
+    config: &DaemonConfig,
     pipe_wr: &mut Option<NotifyChannel>,
     init: impl FnOnce() -> Result<T, DaemonizeError>,
-    abort: &mut AbortGuard<'a>,
+    abort: &mut steps::AbortGuard,
 ) -> Result<(DaemonContext, T), DaemonizeError> {
-    let AbortGuard { ledger, files } = &mut *abort;
+    let steps::AbortGuard { ledger, files } = &mut *abort;
     // Step 4: Set umask
     steps::set_umask(config.umask, ledger)?;
 
@@ -395,17 +334,28 @@ unsafe fn run_steps<'a, T>(
     }
 
     // Step 18: Return DaemonContext (clones the config-derived fields it needs).
-    // The context owns the pidfile and the lock from here, so the abort guard
-    // stands down.
+    // The context owns the pidfile and the lock from here. A launcher waits
+    // until the daemon reports readiness, so the start can still fail: the
+    // context takes what the start changed, to undo on that failure (R164).
+    // In foreground mode the start has succeeded, so the guard stands down.
     let lockfile = files.take_lock();
-    abort.keep();
+    let launcher = match pipe_wr.take() {
+        Some(pipe) => Some((
+            pipe,
+            std::mem::replace(abort, steps::AbortGuard::new(false)),
+        )),
+        None => {
+            abort.keep();
+            None
+        }
+    };
     let pidfile = config
         .pidfile
         .as_deref()
         .zip(pidfile_id)
         .map(|(path, id)| steps::Removal::new(path, id, steps::Created::Pidfile));
     Ok((
-        DaemonContext::new(config, pidfile, lockfile, pipe_wr.take()),
+        DaemonContext::new(config, pidfile, lockfile, launcher),
         value,
     ))
 }
@@ -950,6 +900,33 @@ mod tests {
 
         assert!(result.is_ok(), "{:?}", result.err());
         assert_eq!(std::fs::metadata(&log).unwrap().gid(), gid);
+    }
+
+    // Covers: R163, R164, R170
+    /// A daemon whose context drops before readiness never started: the
+    /// file step 16 chowned gets its owner back, as on an init failure.
+    #[test]
+    #[ignore = "needs root: the privileged tier runs it"]
+    fn root_a_daemon_dropped_before_readiness_gives_each_owner_back() {
+        use std::os::unix::fs::MetadataExt;
+        if !isolated() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("app.log");
+        std::fs::write(&log, "earlier run\n").unwrap();
+        let gid_was = std::fs::metadata(&log).unwrap().gid();
+        let mut config = DaemonConfig::new();
+        config
+            .close_fds(false)
+            .stdout(&log)
+            .group(crate::test_support::foreign_gid().to_string());
+        let mut forker = NullForker::both_child_with_reader();
+
+        let (ctx, ()) = run_inner_with(&config, &mut forker, || Ok(())).unwrap();
+        drop(ctx);
+
+        assert_eq!(std::fs::metadata(&log).unwrap().gid(), gid_was);
     }
 
     // Covers: R163
@@ -2109,6 +2086,108 @@ mod tests {
         );
     }
 
+    // Covers: R164, R170
+    /// A daemon whose context drops before it tells the launcher it is
+    /// ready never started: the log it created goes, as on an init failure.
+    #[test]
+    fn a_context_dropped_before_readiness_rolls_the_start_back() {
+        if !isolated() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("app.log");
+        let mut config = DaemonConfig::new();
+        config.close_fds(false).stdout(&log);
+        let mut forker = NullForker::both_child_with_reader();
+
+        let (ctx, ()) = run_inner_with(&config, &mut forker, || Ok(())).unwrap();
+        drop(ctx);
+
+        assert!(!log.exists(), "the log this start created stayed");
+    }
+
+    // Covers: R160, R164, R170
+    /// The launcher of a daemon whose context dropped before readiness hears
+    /// what the rollback could not put back.
+    #[test]
+    fn a_context_dropped_before_readiness_tells_the_launcher_what_it_left() {
+        use std::os::unix::fs::PermissionsExt;
+        if !isolated() {
+            return;
+        }
+        crate::test_support::shed_root();
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("app.log");
+        let mut config = DaemonConfig::new();
+        config.close_fds(false).stdout(&log);
+        let mut forker = NullForker::both_child_with_reader();
+        let read_only = |mode| {
+            std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(mode)).unwrap();
+        };
+
+        let (ctx, ()) = run_inner_with(&config, &mut forker, || Ok(())).unwrap();
+        read_only(0o555);
+        drop(ctx);
+        read_only(0o755);
+
+        let rd = forker
+            .take_pipe_reader()
+            .expect("NullForker stores a reader");
+        match notify::decode(&crate::test_support::read_pipe(rd)) {
+            notify::Outcome::Failure { message, .. } => assert!(
+                message.contains(&format!("rollback left output file {}: ", log.display())),
+                "{message}"
+            ),
+            notify::Outcome::Success => panic!("the launcher read a success"),
+        }
+    }
+
+    // Covers: R164, R170
+    /// What the daemon left in stdout's buffer reaches the log before the
+    /// rollback looks at it, so a log with output stays.
+    #[test]
+    fn a_context_dropped_before_readiness_keeps_output_still_buffered() {
+        use std::io::Write;
+        if !isolated() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("app.log");
+        let mut config = DaemonConfig::new();
+        config.close_fds(false).stdout(&log);
+        let mut forker = NullForker::both_child_with_reader();
+
+        let (ctx, ()) = run_inner_with(&config, &mut forker, || Ok(())).unwrap();
+        write!(std::io::stdout(), "connecting").unwrap();
+        drop(ctx);
+
+        assert_eq!(
+            std::fs::read_to_string(&log).ok().as_deref(),
+            Some("connecting")
+        );
+    }
+
+    // Covers: R164, R170
+    /// A daemon that told its launcher it is ready keeps what its start
+    /// made: the log stays after the context drops.
+    #[test]
+    fn a_ready_daemon_keeps_its_log_when_the_context_drops() {
+        if !isolated() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("app.log");
+        let mut config = DaemonConfig::new();
+        config.close_fds(false).stdout(&log);
+        let mut forker = NullForker::both_child_with_reader();
+
+        let (mut ctx, ()) = run_inner_with(&config, &mut forker, || Ok(())).unwrap();
+        ctx.notify_parent().unwrap();
+        drop(ctx);
+
+        assert!(log.exists(), "a started daemon's log was removed");
+    }
+
     // Covers: R154
     #[test]
     fn daemon_init_error_reaches_the_launcher() {
@@ -2543,21 +2622,17 @@ mod tests {
         let result = catch_unwind(std::panic::AssertUnwindSafe(|| {
             run_inner(&config, &mut forker)
         }));
-        // Exactly one descriptor is free now: the stdout file's own, closed
-        // once it was on fd 1. A second would have let step 12 save fd 1, and
-        // the test would prove nothing.
-        let clone = || std::os::fd::AsFd::as_fd(&std::io::stdin()).try_clone_to_owned();
-        let spare = (clone(), clone());
-        drop(held);
-
-        let ctx = result
+        let mut ctx = result
             .expect("a daemon with no free descriptor must start, not exit")
             .unwrap();
+        // No descriptor is free: the context holds the stdout file's own, to
+        // undo a failed start. One free would have let step 12 save fd 1, and
+        // the test would prove nothing.
+        let spare = std::os::fd::AsFd::as_fd(&std::io::stdin()).try_clone_to_owned();
+        drop(held);
+        let _ = ctx.notify_parent();
         drop(ctx);
-        assert!(
-            spare.0.is_ok() && spare.1.is_err(),
-            "not exactly one descriptor free: {spare:?}"
-        );
+        assert!(spare.is_err(), "a descriptor was free: {spare:?}");
         let on_fd1 = fstat(std::io::stdout()).unwrap();
         let file = stat(&log).unwrap();
         assert_eq!(

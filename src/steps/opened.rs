@@ -110,8 +110,8 @@ impl Removal {
 }
 
 /// One opened file: the path it was opened by, its role, and its identity.
-struct Opened<'a> {
-    path: &'a Path,
+struct Opened {
+    path: PathBuf,
     role: Role,
     id: FileId,
     /// The owner and group step 16 replaced, to give back by `role`'s
@@ -121,13 +121,13 @@ struct Opened<'a> {
 
 /// The files the sequence opened, in the order it opened them.
 #[derive(Default)]
-pub(crate) struct OpenedFiles<'a>(Vec<Opened<'a>>);
+pub(crate) struct OpenedFiles(Vec<Opened>);
 
-impl<'a> OpenedFiles<'a> {
+impl OpenedFiles {
     /// Records a file a step opened, with the identity `fstat` gave it.
-    pub(crate) fn push(&mut self, path: &'a Path, role: Role, id: FileId) {
+    pub(crate) fn push(&mut self, path: &Path, role: Role, id: FileId) {
         self.0.push(Opened {
-            path,
+            path: path.to_path_buf(),
             role,
             id,
             owner_was: None,
@@ -153,20 +153,20 @@ impl<'a> OpenedFiles<'a> {
     }
 
     /// Step 12's stream files, by the path each was opened by.
-    pub(crate) fn streams(&self) -> Vec<(&'a Path, BorrowedFd<'_>)> {
+    pub(crate) fn streams(&self) -> Vec<(&Path, BorrowedFd<'_>)> {
         self.0
             .iter()
             .filter_map(|o| match &o.role {
-                Role::Stream(fd) => Some((o.path, fd.as_fd())),
+                Role::Stream(fd) => Some((o.path.as_path(), fd.as_fd())),
                 Role::Lockfile(_) | Role::Pidfile(_) => None,
             })
             .collect()
     }
 
     /// The lock step 7 holds, with the path it was opened by.
-    pub(crate) fn lock(&self) -> Option<(&'a Path, &Flock<OwnedFd>)> {
+    pub(crate) fn lock(&self) -> Option<(&Path, &Flock<OwnedFd>)> {
         self.0.iter().find_map(|o| match &o.role {
-            Role::Lockfile(flock) => Some((o.path, flock)),
+            Role::Lockfile(flock) => Some((o.path.as_path(), flock)),
             Role::Pidfile(_) | Role::Stream(_) => None,
         })
     }
@@ -202,7 +202,7 @@ pub(crate) fn spared_fds(
         .collect()
 }
 
-impl OpenedFiles<'_> {
+impl OpenedFiles {
     /// Step 16: chown each regular file in the record to `owner` and
     /// `group`, while the process is still privileged (R163).
     ///
@@ -229,14 +229,14 @@ impl OpenedFiles<'_> {
     ) -> Result<(), ErrorKind> {
         let failed = |path: &Path, e| ErrorKind::ChownError(format!("{}: {e}", path.display()));
         for o in &mut self.0 {
-            let st = nix::sys::stat::fstat(o.role.as_fd()).map_err(|e| failed(o.path, e))?;
+            let st = nix::sys::stat::fstat(o.role.as_fd()).map_err(|e| failed(&o.path, e))?;
             // Only a regular file is the daemon's own. A device, FIFO, or
             // socket (`-o /dev/null`, a tty) belongs to the system; the
             // daemon writes through the descriptor it holds either way.
             if st.st_mode & libc::S_IFMT != libc::S_IFREG {
                 continue;
             }
-            nix::unistd::fchown(o.role.as_fd(), owner, group).map_err(|e| failed(o.path, e))?;
+            nix::unistd::fchown(o.role.as_fd(), owner, group).map_err(|e| failed(&o.path, e))?;
             o.owner_was = Some((Uid::from_raw(st.st_uid), Gid::from_raw(st.st_gid)));
             ledger.checkpoint()?;
         }
@@ -260,7 +260,11 @@ impl OpenedFiles<'_> {
                 nix::unistd::fchown(o.role.as_fd(), Some(owner), Some(group))
                     .err()
                     .map(|e| {
-                        RestoreFailure::at(ChangedState::FileOwner, o.path, std::io::Error::from(e))
+                        RestoreFailure::at(
+                            ChangedState::FileOwner,
+                            &o.path,
+                            std::io::Error::from(e),
+                        )
                     })
             })
             .collect()
@@ -283,7 +287,7 @@ mod tests {
     }
 
     /// Records `role` under `path`, by the identity its descriptor has.
-    fn push<'a>(files: &mut OpenedFiles<'a>, path: &'a Path, role: Role) {
+    fn push(files: &mut OpenedFiles, path: &Path, role: Role) {
         let id = crate::file_identity::file_id(role.as_fd()).unwrap();
         files.push(path, role, id);
     }

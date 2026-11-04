@@ -659,8 +659,10 @@ undefined behaviour. The error reports that environment as
     identity, unless `chown_paths(false)`. See path ownership.
 17. **Switch identity.** See user/group switching.
 18. **Return `DaemonContext`** owning lockfile `Option<Flock>`,
-    `pipe_wr` as `Option<NotifyChannel>`, and the cloned config, beside
-    `init`'s value.
+    `pipe_wr` as `Option<NotifyChannel>`, the pidfile it wrote, and the
+    cloned config, beside `init`'s value. In daemon mode the context
+    also takes what the start changed, for a failure before readiness
+    to undo (R170); in foreground mode the start keeps it.
 
 ### Post-fork error policy
 
@@ -1787,3 +1789,11 @@ on any change to it, so the rows only copied the snapshot.
   unlinked file would let the next instance lock a new one beside it.
   On a mismatch, or a path gone, step 7 opens the path again, up to 8
   times, then fails with `LockfileError`.
+- R170. In daemon mode the start has not succeeded until the launcher
+  hears readiness. A `DaemonContext` that reports an error, fails its
+  `exec`, or drops while the launcher still waits rolls back as a
+  failed `init` does (R164): it flushes stdout, removes the files the
+  start created, gives each chowned file its owner back, and sends the
+  launcher what it could not put back after the message. A successful
+  `notify_parent`, or one whose failure goes to the caller, keeps every
+  change and closes the files the context held only to undo them.

@@ -67,8 +67,14 @@ impl DaemonizeError {
     /// The message a launcher prints for this error: the
     /// [`kind`](Self::kind)'s, then one `rollback left` line per
     /// [rollback failure](Self::rollback_failures) (R160, R164).
-    pub(crate) fn report(&self) -> impl std::fmt::Display + '_ {
-        Report(self)
+    pub(crate) fn report(&self) -> Report<'_> {
+        self.report_also(&[])
+    }
+
+    /// As [`report`](Self::report), with `more` failures after the ones
+    /// this error holds.
+    pub(crate) fn report_also<'a>(&'a self, more: &'a [RestoreFailure]) -> Report<'a> {
+        Report::new(&self.kind, self.rollback_failures.iter().chain(more))
     }
 
     /// This error, with `failures` after the ones it holds.
@@ -96,13 +102,29 @@ impl std::fmt::Display for DaemonizeError {
     }
 }
 
-/// See [`DaemonizeError::report`].
-struct Report<'a>(&'a DaemonizeError);
+/// A message for the launcher: a first line, then one `rollback left` line
+/// per [rollback failure](RestoreFailure) (R160, R164).
+pub(crate) struct Report<'a> {
+    head: &'a dyn std::fmt::Display,
+    failures: Vec<&'a RestoreFailure>,
+}
+
+impl<'a> Report<'a> {
+    pub(crate) fn new(
+        head: &'a dyn std::fmt::Display,
+        failures: impl IntoIterator<Item = &'a RestoreFailure>,
+    ) -> Self {
+        Self {
+            head,
+            failures: failures.into_iter().collect(),
+        }
+    }
+}
 
 impl std::fmt::Display for Report<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.0.kind.fmt(f)?;
-        for failure in &self.0.rollback_failures {
+        self.head.fmt(f)?;
+        for failure in &self.failures {
             write!(f, "\nrollback left {failure}")?;
         }
         Ok(())

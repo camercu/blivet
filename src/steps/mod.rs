@@ -5,6 +5,7 @@
 //! testable. Callers use `steps::name`; the submodules are an internal
 //! grouping.
 
+mod abort;
 mod fds;
 mod opened;
 mod pidfile;
@@ -12,6 +13,7 @@ mod process;
 mod stdio;
 mod undo;
 
+pub(crate) use abort::*;
 pub(crate) use fds::*;
 pub(crate) use opened::*;
 pub(crate) use pidfile::*;

@@ -11,7 +11,7 @@ use nix::fcntl::Flock;
 use crate::config::DaemonConfig;
 use crate::error::{DaemonizeError, ErrorKind};
 use crate::notify::NotifyChannel;
-use crate::steps::Removal;
+use crate::steps::{AbortGuard, Removal};
 
 /// Context returned by a successful daemonization.
 ///
@@ -30,6 +30,13 @@ use crate::steps::Removal;
 /// launcher still waits for readiness, otherwise when
 /// [`cleanup_on_drop`](crate::DaemonConfig::cleanup_on_drop) is `true` (the
 /// default).
+///
+/// Until the launcher hears readiness, the start can still fail. Dropping,
+/// [`report_error`](DaemonContext::report_error), or a failed
+/// [`exec`](DaemonContext::exec) then rolls the start back as a failed
+/// `init` does: it removes the files the start created, gives chowned files
+/// their owners back, and sends the launcher what it could not put back
+/// (R170).
 ///
 /// **Signal caveat:** `Drop` does not run when the process is killed by a
 /// signal. To clean up the pidfile on `SIGTERM`/`SIGINT`, either call
@@ -64,7 +71,14 @@ enum Launcher {
     /// The launcher reads the channel for the outcome. After a failed readiness
     /// send from `notify_parent_or_report` the channel is spent but the start
     /// still never succeeded, so the state stays here.
-    Waiting(NotifyChannel),
+    ///
+    /// The guard holds what the start changed, for a failure to undo as an
+    /// init failure does (R164); leaving this state any other way keeps it.
+    ///
+    /// Asserted unwind-safe, so the context stays `UnwindSafe`: each token
+    /// leaves the guard as it restores, so a panic part way through a
+    /// rollback leaves only tokens not yet run, which a later drop runs.
+    Waiting(NotifyChannel, std::panic::AssertUnwindSafe<AbortGuard>),
     /// The launcher was told the start succeeded, or `notify_parent` handed
     /// its failure to a caller that may keep running.
     Released,
@@ -90,7 +104,7 @@ impl fmt::Debug for DaemonContext {
             .field(
                 "notify_pipe",
                 &OptFmt(&match self.launcher {
-                    Launcher::Waiting(_) => Some("open"),
+                    Launcher::Waiting(..) => Some("open"),
                     Launcher::Released | Launcher::Foreground => None,
                 }),
             )
@@ -111,20 +125,33 @@ impl fmt::Debug for DaemonContext {
 impl DaemonContext {
     /// Builds a context from the validated config plus the runtime
     /// resources acquired during daemonization: the pidfile written, the held
-    /// lockfile, and the notification channel's write end, `None` in
-    /// foreground mode. The config-derived fields are cloned from `config`.
+    /// lockfile, and the launcher's: the notification channel's write end with
+    /// what the start changed, `None` in foreground mode. The config-derived
+    /// fields are cloned from `config`.
     pub(crate) fn new(
         config: &DaemonConfig,
         pidfile: Option<Removal>,
         lockfile: Option<Flock<OwnedFd>>,
-        notify_pipe: Option<NotifyChannel>,
+        launcher: Option<(NotifyChannel, AbortGuard)>,
     ) -> Self {
         Self {
             config: config.clone(),
             lockfile,
-            launcher: notify_pipe.map_or(Launcher::Foreground, Launcher::Waiting),
+            launcher: launcher.map_or(Launcher::Foreground, |(pipe, start)| {
+                Launcher::Waiting(pipe, std::panic::AssertUnwindSafe(start))
+            }),
             pidfile,
         }
+    }
+
+    /// The launcher was told the start succeeded, or a caller that may keep
+    /// running has the failure: the start's changes stay, and the files it
+    /// held only to undo them close.
+    fn release(&mut self) {
+        if let Launcher::Waiting(_, start) = &mut self.launcher {
+            start.keep();
+        }
+        self.launcher = Launcher::Released;
     }
 
     /// Returns a borrowed reference to the lockfile fd, or `None` if no
@@ -283,11 +310,11 @@ impl DaemonContext {
     #[must_use = "the parent process blocks until notified; ignoring this Result may leave it waiting"]
     pub fn notify_parent(&mut self) -> Result<(), DaemonizeError> {
         match &mut self.launcher {
-            Launcher::Waiting(pipe) => {
+            Launcher::Waiting(pipe, _) => {
                 let sent = pipe.signal_ready();
                 // Told, or the failure goes to a caller that may keep
                 // running: either way this daemon reports nothing more.
-                self.launcher = Launcher::Released;
+                self.release();
                 Ok(sent.map_err(ErrorKind::NotifyFailed)?)
             }
             Launcher::Released | Launcher::Foreground => Ok(()),
@@ -308,8 +335,8 @@ impl DaemonContext {
     /// launcher still waiting exits 1, reading the closed channel as a failure.
     pub fn notify_parent_or_report(&mut self) {
         match &mut self.launcher {
-            Launcher::Waiting(pipe) => match pipe.signal_ready() {
-                Ok(()) => self.launcher = Launcher::Released,
+            Launcher::Waiting(pipe, _) => match pipe.signal_ready() {
+                Ok(()) => self.release(),
                 // Still waiting, with the channel spent: the report sees a start
                 // that never succeeded (R154) and prints its error (R161).
                 Err(e) => self.report_error(&ErrorKind::NotifyFailed(e).into()),
@@ -358,7 +385,7 @@ impl DaemonContext {
         // A broken pipe here means only that the launcher is gone: run the
         // program anyway (R157). The send cannot raise SIGPIPE (R165).
         match &mut self.launcher {
-            Launcher::Waiting(pipe) => match pipe.signal_exec_pending() {
+            Launcher::Waiting(pipe, _) => match pipe.signal_exec_pending() {
                 Err(e) if e.kind() != std::io::ErrorKind::BrokenPipe => {
                     return ErrorKind::NotifyFailed(e);
                 }
@@ -390,7 +417,10 @@ impl DaemonContext {
     /// Because `_exit` bypasses [`Drop`], this replicates the drop-time pidfile
     /// cleanup itself: a daemon that aborts startup must not leave a stale
     /// pidfile behind, so while the launcher waits the pidfile goes whatever
-    /// [`cleanup_on_drop`](crate::DaemonConfig::cleanup_on_drop) says.
+    /// [`cleanup_on_drop`](crate::DaemonConfig::cleanup_on_drop) says. While
+    /// the launcher waits, it also flushes stdout and rolls the start back,
+    /// and the message gets one `rollback left` line per change the rollback
+    /// could not put back (R170).
     pub fn report_error(&mut self, err: &DaemonizeError) -> ! {
         let code = self.cleanup_and_signal_error(err);
         crate::sys::raw_exit(code as i32)
@@ -410,16 +440,16 @@ impl DaemonContext {
     /// while the pidfile was still being removed — a race.
     fn cleanup_and_signal_error(&mut self, err: &DaemonizeError) -> u8 {
         match self.launcher {
-            // `signal_error` writes it, or prints it when the launcher is
+            // `signal_error_also` writes it, or prints it when the launcher is
             // gone or the channel already spent.
-            Launcher::Waiting(_) => {}
+            Launcher::Waiting(..) => {}
             // No launcher to tell: say it on stderr instead of exiting with
             // only a code (R161).
             Launcher::Released | Launcher::Foreground => {
                 crate::notify::print_on_stderr(err.report())
             }
         }
-        self.cleanup_then_signal(|pipe| pipe.signal_error(err));
+        self.cleanup_then_signal(|pipe, left| pipe.signal_error_also(err, left));
         err.exit_code()
     }
 
@@ -432,18 +462,27 @@ impl DaemonContext {
     /// enough that a parent could wake to a pidfile still on disk, ten lines
     /// below the comment forbidding exactly that.
     ///
-    /// A launcher still waiting means the start never succeeded, so the
-    /// pidfile goes whatever `cleanup_on_drop` says (R154).
-    fn cleanup_then_signal(&mut self, signal: impl FnOnce(NotifyChannel)) {
-        let waiting = match self.launcher {
-            Launcher::Waiting(_) => true,
-            Launcher::Released | Launcher::Foreground => false,
+    /// A launcher still waiting means the start never succeeded. It rolls
+    /// back as an init failure does, stdout flushed first so the log keeps
+    /// what the daemon wrote, and `signal` gets what the rollback could not
+    /// put back (R164). The pidfile goes whatever `cleanup_on_drop` says
+    /// (R154).
+    fn cleanup_then_signal(
+        &mut self,
+        signal: impl FnOnce(NotifyChannel, &[crate::RestoreFailure]),
+    ) {
+        let left = match &mut self.launcher {
+            Launcher::Waiting(_, start) => {
+                let _ = std::io::Write::flush(&mut std::io::stdout());
+                Some(start.roll_back())
+            }
+            Launcher::Released | Launcher::Foreground => None,
         };
-        if self.config.cleanup_on_drop || waiting {
+        if self.config.cleanup_on_drop || left.is_some() {
             self.cleanup();
         }
         match std::mem::replace(&mut self.launcher, Launcher::Released) {
-            Launcher::Waiting(pipe) => signal(pipe),
+            Launcher::Waiting(pipe, _) => signal(pipe, left.as_deref().unwrap_or_default()),
             Launcher::Released => {}
             Launcher::Foreground => self.launcher = Launcher::Foreground,
         }
@@ -556,7 +595,9 @@ mod tests {
                 });
             Removal::new(path, id, crate::steps::Created::Pidfile)
         });
-        DaemonContext::new(config, pidfile, lockfile, notify_pipe)
+        // A start that changed nothing a rollback undoes.
+        let launcher = notify_pipe.map(|pipe| (pipe, AbortGuard::new(false)));
+        DaemonContext::new(config, pidfile, lockfile, launcher)
     }
 
     // Covers: R157
@@ -1229,6 +1270,40 @@ mod tests {
                 message: "exec failed: boom".into(),
             },
             "the error is signaled to the parent"
+        );
+    }
+
+    /// A start whose rollback cannot put one change back.
+    fn start_leaving(failure: &str) -> AbortGuard {
+        let mut start = AbortGuard::new(false);
+        let left = crate::RestoreFailure::new(
+            crate::ChangedState::OutputFile,
+            std::io::Error::other(failure.to_owned()),
+        );
+        start
+            .ledger
+            .record_lasting(crate::steps::Saved::Left(left))
+            .unwrap();
+        start
+    }
+
+    // Covers: R160, R164, R170
+    /// A failure reported while the launcher waits undoes the start, and the
+    /// launcher hears what the rollback could not put back after the error.
+    #[test]
+    fn report_error_before_readiness_tells_the_launcher_what_the_rollback_left() {
+        let (rd, wr) = make_pipe();
+        let launcher = Some((NotifyChannel::new(wr), start_leaving("disk gone")));
+        let mut ctx = DaemonContext::new(&DaemonConfig::new(), None, None, launcher);
+
+        ctx.cleanup_and_signal_error(&ErrorKind::ExecFailed("boom".into()).into());
+
+        assert_eq!(
+            crate::notify::decode(&read_pipe(rd)),
+            crate::notify::Outcome::Failure {
+                code: 71,
+                message: "exec failed: boom\nrollback left output file: disk gone".into(),
+            }
         );
     }
 

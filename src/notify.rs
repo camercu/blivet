@@ -23,7 +23,7 @@
 use std::io::{self, Read, Write};
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd};
 
-use crate::error::DaemonizeError;
+use crate::error::{DaemonizeError, Report, RestoreFailure};
 
 /// The write end of the notification channel.
 ///
@@ -98,16 +98,26 @@ impl NotifyChannel {
     /// message goes to stderr instead, so it is not lost with the channel
     /// (R161).
     /// The process is aborting either way.
-    pub(crate) fn signal_error(mut self, err: &DaemonizeError) {
-        if self.write_all(&error_bytes(err)).is_err() {
-            print_on_stderr(err.report());
+    pub(crate) fn signal_error(self, err: &DaemonizeError) {
+        self.signal_error_also(err, &[]);
+    }
+
+    /// As [`signal_error`](Self::signal_error), with `more` rollback
+    /// failures after the ones `err` holds.
+    pub(crate) fn signal_error_also(mut self, err: &DaemonizeError, more: &[RestoreFailure]) {
+        let report = err.report_also(more);
+        let bytes = encode(err.exit_code(), report.to_string().as_bytes());
+        if self.write_all(&bytes).is_err() {
+            print_on_stderr(report);
         }
     }
 
     /// Signal that the daemon exited without ever calling
-    /// [`notify_parent`](crate::DaemonContext::notify_parent). Best-effort.
-    pub(crate) fn signal_unnotified(mut self) {
-        let _ = self.write_all(&unnotified_bytes());
+    /// [`notify_parent`](crate::DaemonContext::notify_parent), with what the
+    /// rollback of its start could not put back. Best-effort.
+    pub(crate) fn signal_unnotified(mut self, rollback_failures: &[RestoreFailure]) {
+        let report = Report::new(&UNNOTIFIED_MSG, rollback_failures);
+        let _ = self.write_all(&encode(UNNOTIFIED_CODE, report.to_string().as_bytes()));
     }
 
     /// Take the fd and write `bytes` through it, closing it. Fails without
@@ -229,7 +239,7 @@ impl Drop for NotifyChannel {
 const UNNOTIFIED_CODE: u8 = 1;
 
 /// Message paired with [`UNNOTIFIED_CODE`].
-const UNNOTIFIED_MSG: &[u8] = b"daemon exited without signaling readiness";
+const UNNOTIFIED_MSG: &str = "daemon exited without signaling readiness";
 
 /// Message for a channel that closed with no message and no exec marker.
 const EOF_UNNOTIFIED_MSG: &str = "daemon ended without signaling readiness (killed by a signal, or exited without dropping its DaemonContext)";
@@ -245,13 +255,14 @@ pub(crate) const EXEC_PENDING: [u8; 2] = [0x00, 0x01];
 ///
 /// [`exit_code`](crate::DaemonizeError::exit_code) is always non-zero, so the message
 /// can never collide with the [`SUCCESS`] byte.
+#[cfg(test)]
 pub(crate) fn error_bytes(err: &DaemonizeError) -> Vec<u8> {
     encode(err.exit_code(), err.report().to_string().as_bytes())
 }
 
 /// Encode the "dropped without notifying the parent" failure message.
 pub(crate) fn unnotified_bytes() -> Vec<u8> {
-    encode(UNNOTIFIED_CODE, UNNOTIFIED_MSG)
+    encode(UNNOTIFIED_CODE, UNNOTIFIED_MSG.as_bytes())
 }
 
 /// A failure on the wire: the code byte, the message's length as two
@@ -374,7 +385,7 @@ mod tests {
     #[test]
     fn signal_unnotified_writes_protocol() {
         let (rd, wr) = make_pipe();
-        NotifyChannel::new(wr).signal_unnotified();
+        NotifyChannel::new(wr).signal_unnotified(&[]);
         assert_eq!(
             decode(&read_pipe(rd)),
             Outcome::Failure {
