@@ -8,6 +8,7 @@
 #![allow(unsafe_code)]
 
 use crate::error::{ChangedState, ErrorKind, RestoreFailure};
+use crate::file_identity::FileId;
 use crate::steps::{Ledger, Rollback, Saved};
 
 /// Reset signal dispositions from 1 through the signal ceiling to SIG_DFL.
@@ -163,25 +164,45 @@ fn signal_range() -> Vec<i32> {
     }
 }
 
-/// Path to unlink from inside the async-signal-safe cleanup handler.
+/// The pidfile the cleanup handler removes: its path, and the identity it
+/// must still have.
+struct CleanupTarget {
+    path: std::ffi::CString,
+    id: FileId,
+}
+
+/// What the async-signal-safe cleanup handler removes.
 ///
-/// Set by [`install_pidfile_cleanup_signals`] to a leaked, NUL-terminated C
-/// string that lives for the rest of the process, so the handler can read it
-/// without touching freed memory. The handler only loads this pointer.
-static CLEANUP_PIDFILE: std::sync::atomic::AtomicPtr<libc::c_char> =
+/// Set by [`install_pidfile_cleanup_signals`] to a leaked [`CleanupTarget`]
+/// that lives for the rest of the process, so the handler can read it without
+/// touching freed memory. One pointer carries path and identity together, so
+/// the handler never pairs one install's path with another's identity.
+static CLEANUP_PIDFILE: std::sync::atomic::AtomicPtr<CleanupTarget> =
     std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
 
 /// Async-signal-safe handler that removes the pidfile, then re-raises the
 /// signal so the default action (process termination) still runs.
+///
+/// The pidfile goes only while its path still names the file this daemon
+/// wrote: `lstat` must report its identity. A file put there since, or a
+/// symlink, stays.
 pub(crate) extern "C" fn pidfile_cleanup_handler(signum: i32) {
     use std::sync::atomic::Ordering;
 
     let ptr = CLEANUP_PIDFILE.load(Ordering::Acquire);
-    if !ptr.is_null() {
-        // SAFETY: `ptr` is null or a valid NUL-terminated C string leaked in
-        // `install_pidfile_cleanup_signals` (never freed), so it stays valid
-        // for the life of the process. `unlink` is async-signal-safe.
-        unsafe { libc::unlink(ptr) };
+    // SAFETY: `ptr` is null or a `CleanupTarget` leaked in
+    // `install_pidfile_cleanup_signals` (never freed), so it stays valid for
+    // the life of the process.
+    if let Some(target) = unsafe { ptr.as_ref() } {
+        // SAFETY: an all-zero `stat` is a valid value for lstat to overwrite.
+        let mut st: libc::stat = unsafe { std::mem::zeroed() };
+        // SAFETY: `target.path` is NUL-terminated and `st` is writable.
+        // `lstat` is async-signal-safe.
+        let found = unsafe { libc::lstat(target.path.as_ptr(), &mut st) } == 0;
+        if found && st.st_dev == target.id.dev && st.st_ino == target.id.ino {
+            // SAFETY: as above; `unlink` is async-signal-safe.
+            unsafe { libc::unlink(target.path.as_ptr()) };
+        }
     }
     // The disposition was reset to default by SA_RESETHAND before this handler
     // ran; re-raise so the process terminates with a status reflecting the
@@ -260,8 +281,8 @@ impl CallerSigpipe {
 
 /// Install [`pidfile_cleanup_handler`] for each signal in `signals`.
 ///
-/// Stores `pidfile` (leaked, so it outlives any later free) for the handler to
-/// unlink. Uses `SA_RESETHAND` so the handler runs once and the re-raise hits
+/// Stores `pidfile` and its identity `id` (leaked, so they outlive any later
+/// free) for the handler to unlink. Uses `SA_RESETHAND` so the handler runs once and the re-raise hits
 /// the default action.
 ///
 /// Refuses, before changing anything (R129), a signal outside the cleanup
@@ -271,6 +292,7 @@ impl CallerSigpipe {
 /// error names the signal and the earlier signals keep the handler.
 pub(crate) fn install_pidfile_cleanup_signals(
     pidfile: &std::ffi::CStr,
+    id: FileId,
     signals: &[i32],
 ) -> std::io::Result<()> {
     use std::sync::atomic::Ordering;
@@ -315,7 +337,10 @@ pub(crate) fn install_pidfile_cleanup_signals(
     // multi-`sigaction` setup and cannot be closed without weakening the common
     // path (publishing last would leave the pidfile if a term signal lands in
     // the post-install/pre-publish gap).
-    let leaked: *mut libc::c_char = pidfile.to_owned().into_raw();
+    let leaked = Box::into_raw(Box::new(CleanupTarget {
+        path: pidfile.to_owned(),
+        id,
+    }));
     CLEANUP_PIDFILE.store(leaked, Ordering::Release);
 
     for &sig in signals {
@@ -548,13 +573,21 @@ mod tests {
         }
 
         // A prior install, so an unchanged path is distinguishable from null.
-        install_pidfile_cleanup_signals(c"/a/prior.pid", &[libc::SIGUSR2])
-            .expect("SIGUSR2 install should succeed");
+        install_pidfile_cleanup_signals(
+            c"/a/prior.pid",
+            FileId { dev: 1, ino: 1 },
+            &[libc::SIGUSR2],
+        )
+        .expect("SIGUSR2 install should succeed");
         let prior_ptr = CLEANUP_PIDFILE.load(Ordering::Acquire);
         let prior_usr1 = current_disposition(libc::SIGUSR1);
 
-        install_pidfile_cleanup_signals(c"/a/new.pid", &[libc::SIGUSR1, libc::SIGCHLD])
-            .expect_err("SIGCHLD does not end the process, so it is refused");
+        install_pidfile_cleanup_signals(
+            c"/a/new.pid",
+            FileId { dev: 1, ino: 2 },
+            &[libc::SIGUSR1, libc::SIGCHLD],
+        )
+        .expect_err("SIGCHLD does not end the process, so it is refused");
 
         assert_eq!(
             (

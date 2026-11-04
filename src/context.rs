@@ -11,6 +11,7 @@ use nix::fcntl::Flock;
 use crate::config::DaemonConfig;
 use crate::error::{DaemonizeError, ErrorKind};
 use crate::notify::NotifyChannel;
+use crate::steps::Removal;
 
 /// Context returned by a successful daemonization.
 ///
@@ -48,7 +49,9 @@ pub struct DaemonContext {
     config: DaemonConfig,
     lockfile: Option<Flock<OwnedFd>>,
     launcher: Launcher,
-    cleaned_up: bool,
+    /// The pidfile this start wrote, until [`cleanup`](Self::cleanup) takes
+    /// it: removed only while its path still names that file.
+    pidfile: Option<Removal>,
 }
 
 /// Whether a launcher waits on this daemon's start.
@@ -106,12 +109,13 @@ impl fmt::Debug for DaemonContext {
 }
 
 impl DaemonContext {
-    /// Builds a context from the validated config plus the two runtime
-    /// resources acquired during daemonization: the held lockfile and the
-    /// notification channel's write end, `None` in foreground mode. The
-    /// config-derived fields are cloned from `config`.
+    /// Builds a context from the validated config plus the runtime
+    /// resources acquired during daemonization: the pidfile written, the held
+    /// lockfile, and the notification channel's write end, `None` in
+    /// foreground mode. The config-derived fields are cloned from `config`.
     pub(crate) fn new(
         config: &DaemonConfig,
+        pidfile: Option<Removal>,
         lockfile: Option<Flock<OwnedFd>>,
         notify_pipe: Option<NotifyChannel>,
     ) -> Self {
@@ -119,7 +123,7 @@ impl DaemonContext {
             config: config.clone(),
             lockfile,
             launcher: notify_pipe.map_or(Launcher::Foreground, Launcher::Waiting),
-            cleaned_up: false,
+            pidfile,
         }
     }
 
@@ -144,7 +148,9 @@ impl DaemonContext {
 
     /// Removes the pidfile from disk (best-effort).
     ///
-    /// Only the pidfile is removed. Standalone lockfiles are left on disk
+    /// The pidfile goes only while its path still names the file this daemon
+    /// wrote. A file another process put there since stays, and so does a
+    /// symlink, even one to the file. Only the pidfile is removed. Standalone lockfiles are left on disk
     /// (the flock is released when this context is dropped).
     ///
     /// Errors are silently ignored — the daemon is shutting down and there
@@ -161,13 +167,8 @@ impl DaemonContext {
     /// [`signal_hook`](https://docs.rs/signal-hook)) that exits the main loop
     /// cleanly, allowing this context to drop or calling `cleanup()` explicitly.
     pub fn cleanup(&mut self) {
-        if self.cleaned_up {
-            return;
-        }
-        self.cleaned_up = true;
-
-        if let Some(ref path) = self.config.pidfile {
-            let _ = std::fs::remove_file(path);
+        if let Some(pidfile) = self.pidfile.take() {
+            let _ = pidfile.restore();
         }
     }
 
@@ -199,8 +200,10 @@ impl DaemonContext {
     /// signals prefer [`cleanup_on_term_signals`](Self::cleanup_on_term_signals),
     /// which needs no signal constants.
     ///
-    /// The handler does nothing but `unlink` the pidfile and re-raise, so it is
-    /// safe to run from signal context. Only the pidfile is removed; standalone
+    /// The handler does nothing but `lstat` and `unlink` the pidfile and
+    /// re-raise, so it is safe to run from signal context. Like
+    /// [`cleanup`](Self::cleanup), it removes the pidfile only while its path
+    /// still names the file this daemon wrote. Only the pidfile is removed; standalone
     /// lockfiles are left on disk (the flock releases when the process exits).
     ///
     /// One approach per signal: this replaces the signal's disposition, so it
@@ -230,7 +233,8 @@ impl DaemonContext {
     /// default disposition. A process that `exec`s must clean up its own
     /// pidfile.
     ///
-    /// No-op if no pidfile is configured or `signals` is empty.
+    /// No-op if no pidfile is configured, [`cleanup`](Self::cleanup) already
+    /// removed it, or `signals` is empty.
     ///
     /// Call this once. Each call leaks a small, bounded copy of the pidfile
     /// path — kept live forever so the async-signal-safe handler can read it
@@ -246,15 +250,15 @@ impl DaemonContext {
     /// is ignored. The error names the signal. Every signal is checked before
     /// anything changes, so an `Err` leaves the process exactly as it was.
     pub fn cleanup_on_signals(&self, signals: &[i32]) -> Result<(), DaemonizeError> {
-        let Some(ref pidfile) = self.config.pidfile else {
+        let Some(ref pidfile) = self.pidfile else {
             return Ok(());
         };
         if signals.is_empty() {
             return Ok(());
         }
-        let c_path = CString::new(pidfile.as_os_str().as_bytes())
+        let c_path = CString::new(pidfile.path().as_os_str().as_bytes())
             .map_err(|_| ErrorKind::ValidationError("pidfile path contains NUL byte".into()))?;
-        crate::signals::install_pidfile_cleanup_signals(&c_path, signals)
+        crate::signals::install_pidfile_cleanup_signals(&c_path, pidfile.id(), signals)
             .map_err(|e| ErrorKind::ValidationError(format!("cleanup_on_signals: {e}")))?;
         Ok(())
     }
@@ -543,7 +547,16 @@ mod tests {
         lockfile: Option<Flock<OwnedFd>>,
         notify_pipe: Option<NotifyChannel>,
     ) -> DaemonContext {
-        DaemonContext::new(config, lockfile, notify_pipe)
+        // The file at the pidfile path is the one this start wrote. With
+        // none there, an identity no file has: the pidfile is already gone.
+        let pidfile = config.pidfile.as_deref().map(|path| {
+            let id = nix::sys::stat::lstat(path)
+                .map_or(crate::file_identity::FileId { dev: 0, ino: 0 }, |st| {
+                    crate::file_identity::FileId::of(&st)
+                });
+            Removal::new(path, id, crate::steps::Created::Pidfile)
+        });
+        DaemonContext::new(config, pidfile, lockfile, notify_pipe)
     }
 
     // Covers: R157
@@ -1060,6 +1073,36 @@ mod tests {
         );
     }
 
+    // Covers: R72
+    /// The signal handler, too, removes only the file this daemon wrote.
+    #[test]
+    fn the_signal_handler_leaves_a_pidfile_another_process_replaced() {
+        use std::os::unix::process::ExitStatusExt;
+        let setup = || {
+            let dir = tempfile::tempdir().unwrap();
+            let pidfile = dir.path().join("daemon.pid");
+            (dir, pidfile)
+        };
+        let (_dir, pidfile, output) = crate::test_support::isolated_output_with(setup, |path| {
+            std::fs::write(&path, "123").unwrap();
+            let mut cfg = DaemonConfig::new();
+            cfg.pidfile(&path).cleanup_on_drop(false);
+            let ctx = ctx(&cfg, None, None);
+            ctx.cleanup_on_signals(&[libc::SIGTERM]).unwrap();
+            replace_with_another_file(std::path::Path::new(&path));
+            nix::sys::signal::raise(nix::sys::signal::Signal::SIGTERM).unwrap();
+            unreachable!("should have been killed by the re-raised SIGTERM");
+        });
+
+        assert_eq!(
+            output.status.signal(),
+            Some(libc::SIGTERM),
+            "{}",
+            crate::test_support::subprocess_report(&output)
+        );
+        assert_eq!(std::fs::read_to_string(&pidfile).unwrap(), "999\n");
+    }
+
     #[test]
     fn cleanup_on_signals_removes_pidfile_on_signal() {
         assert_handler_removes_pidfile(
@@ -1371,6 +1414,51 @@ mod tests {
         let mut ctx = ctx(&pidfile_config(&pidfile), None, None);
         ctx.cleanup();
         assert!(!pidfile.exists(), "pidfile should be removed after cleanup");
+    }
+
+    /// Puts another file at `pidfile`, created while the first still exists
+    /// so the two cannot share an inode.
+    fn replace_with_another_file(pidfile: &std::path::Path) {
+        let other = pidfile.with_extension("other");
+        std::fs::write(&other, "999\n").unwrap();
+        std::fs::rename(&other, pidfile).unwrap();
+    }
+
+    // Covers: R72
+    /// Only the file this daemon wrote is its to remove: a pidfile another
+    /// process put at the path since stays.
+    #[test]
+    fn cleanup_leaves_a_pidfile_another_process_replaced() {
+        let dir = tempfile::tempdir().unwrap();
+        let pidfile = dir.path().join("test.pid");
+        std::fs::write(&pidfile, "12345\n").unwrap();
+        let mut ctx = ctx(&pidfile_config(&pidfile), None, None);
+
+        replace_with_another_file(&pidfile);
+        ctx.cleanup();
+
+        assert_eq!(std::fs::read_to_string(&pidfile).unwrap(), "999\n");
+    }
+
+    // Covers: R72
+    /// A symlink at the path is not the file this daemon wrote, even one to
+    /// it: removing it would hide the file it points to.
+    #[test]
+    fn cleanup_leaves_a_symlink_put_at_the_pidfile_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let pidfile = dir.path().join("test.pid");
+        std::fs::write(&pidfile, "12345\n").unwrap();
+        let mut ctx = ctx(&pidfile_config(&pidfile), None, None);
+
+        let moved = dir.path().join("moved.pid");
+        std::fs::rename(&pidfile, &moved).unwrap();
+        std::os::unix::fs::symlink(&moved, &pidfile).unwrap();
+        ctx.cleanup();
+
+        assert!(
+            pidfile.symlink_metadata().is_ok(),
+            "cleanup removed the symlink"
+        );
     }
 
     // Covers: R73

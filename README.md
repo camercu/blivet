@@ -267,7 +267,9 @@ When `cleanup_on_drop` is `true` (the default), the pidfile is removed when
 process**, and most daemons stop that way (`SIGTERM`, `SIGKILL`, …). The pidfile
 stays behind. The built-in fix installs async-signal-safe
 handlers that remove the pidfile on `SIGINT`/`SIGTERM`, then re-raise so the
-process still terminates normally:
+process still terminates normally. Like `cleanup()`, they remove it only while
+the path still names the file this daemon wrote, so a pidfile a newer instance
+put there stays:
 
 ```rust,no_run
 use blivet::{daemonize, DaemonConfig};

@@ -90,6 +90,14 @@ impl Removal {
         }
     }
 
+    pub(crate) fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub(crate) fn id(&self) -> FileId {
+        self.id
+    }
+
     pub(crate) fn restore(self) -> Result<(), RestoreFailure> {
         let failed = |e: std::io::Error| RestoreFailure::at(self.what.state(), &self.path, e);
         match lstat_if_named(&self.path, self.id) {

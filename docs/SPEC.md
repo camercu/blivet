@@ -236,10 +236,13 @@ none derived, or locking disabled via `no_lockfile()`).
 
 **Cleanup:**
 
-`cleanup(&mut self)` removes the pidfile from disk (best-effort).
-Standalone lockfiles are left on disk; the flock is released when
-`DaemonContext` drops. Errors are silently ignored. Idempotent via
-an internal `cleaned_up` flag. Note that `Drop` does not run when the
+`cleanup(&mut self)` removes the pidfile from disk (best-effort), and
+only while the path still names the file this start wrote, compared by
+`lstat` device and inode: a file another process put there since stays,
+and so does a symlink, even one to the file (R72). Standalone lockfiles
+are left on disk; the flock is released when `DaemonContext` drops.
+Errors are silently ignored. Idempotent: the first call takes the
+pidfile record. Note that `Drop` does not run when the
 process is killed by a signal — callers must install a signal handler
 to ensure `cleanup()` runs (either explicitly or by dropping
 `DaemonContext` at main-loop exit).
@@ -1271,8 +1274,9 @@ continues; (2) `daemonize_with()` with privileged `init` →
 - All builder methods: what the field controls, default value.
 - `cleanup()`: best-effort, idempotent, standalone lockfiles preserved.
 - `cleanup_on_term_signals()` / `cleanup_on_signals(&[i32])`: opt-in,
-  install async-signal-safe handlers that `unlink` the pidfile and
-  re-raise (SA_RESETHAND) so the default termination action still runs.
+  install async-signal-safe handlers that `unlink` the pidfile, under
+  the same identity check as `cleanup()` (R72), and re-raise
+  (SA_RESETHAND) so the default termination action still runs.
   Library-only — the CLI's `exec` resets handlers. No-op without a
   pidfile; `ValidationError` on a NUL path, a signal outside the
   allowlist (R151, which also covers uncatchable and invalid signals),
@@ -1421,7 +1425,9 @@ verification points.
 - R70. Group switching sets GID independently from user's primary GID.
 - R71. The CLI's daemonize call chowns configured paths and switches
   identity when user or group is configured.
-- R72. `cleanup()` removes pidfile from disk.
+- R72. `cleanup()` and the `cleanup_on_signals()` handler remove the
+  pidfile from disk only while its path, by `lstat`, still names the
+  file this start wrote.
 - R73. `cleanup()` is idempotent (second call is no-op).
 - R74. `cleanup()` ignores errors (best-effort).
 - R75. `cleanup()` leaves standalone lockfiles on disk.

@@ -399,7 +399,15 @@ unsafe fn run_steps<'a, T>(
     // stands down.
     let lockfile = files.take_lock();
     abort.keep();
-    Ok((DaemonContext::new(config, lockfile, pipe_wr.take()), value))
+    let pidfile = config
+        .pidfile
+        .as_deref()
+        .zip(pidfile_id)
+        .map(|(path, id)| steps::Removal::new(path, id, steps::Created::Pidfile));
+    Ok((
+        DaemonContext::new(config, pidfile, lockfile, pipe_wr.take()),
+        value,
+    ))
 }
 
 /// Parent-side channel reader. Reads from the channel and exits accordingly.

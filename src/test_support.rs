@@ -755,6 +755,7 @@ mod tests {
             ("install_pidfile_cleanup_signals", || {
                 drop(crate::signals::install_pidfile_cleanup_signals(
                     c"/nonexistent",
+                    crate::file_identity::FileId { dev: 0, ino: 0 },
                     &[],
                 ));
             }),
