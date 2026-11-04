@@ -25,6 +25,9 @@ pub(crate) struct AbortGuard {
     pub(crate) ledger: Ledger,
     /// The files steps 7, 8 and 12 opened, the lock among them.
     pub(crate) files: OpenedFiles,
+    /// Set by [`keep`](Self::keep): the start succeeded, and the drop that
+    /// follows rolls back nothing, so it leaves stdout's buffer alone.
+    kept: bool,
 }
 
 impl AbortGuard {
@@ -33,11 +36,12 @@ impl AbortGuard {
     /// ledger removed needs no owner, and a daemon switched to a user could
     /// not give it one.
     ///
-    /// Flushes stdout first while the ledger holds a change: what init left
-    /// in its buffer belongs in the log, and decides whether the rollback
-    /// keeps it. A start kept whole leaves the caller's buffer alone.
+    /// Flushes stdout first unless the start was kept: what init left in its
+    /// buffer belongs in the log, decides whether the rollback keeps it, and
+    /// is lost to a daemon's `_exit` otherwise. Not keyed on the ledger: a
+    /// daemon's records only files, so it can fail with the ledger empty.
     pub(crate) fn roll_back(&mut self) -> Vec<crate::RestoreFailure> {
-        if !self.ledger.is_empty() {
+        if !self.kept {
             let _ = std::io::Write::flush(&mut std::io::stdout());
         }
         let mut failures = self.ledger.roll_back();
@@ -49,6 +53,7 @@ impl AbortGuard {
     pub(crate) fn keep(&mut self) {
         self.ledger.keep_all();
         self.files.keep_owners();
+        self.kept = true;
     }
 
     pub(crate) fn new(foreground: bool) -> Self {
@@ -60,6 +65,7 @@ impl AbortGuard {
         Self {
             ledger: Ledger::new(rollback),
             files: OpenedFiles::default(),
+            kept: false,
         }
     }
 }

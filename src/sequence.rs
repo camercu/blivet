@@ -190,7 +190,7 @@ unsafe fn run_steps<T>(
     init: impl FnOnce() -> Result<T, DaemonizeError>,
     abort: &mut steps::AbortGuard,
 ) -> Result<(DaemonContext, T), DaemonizeError> {
-    let steps::AbortGuard { ledger, files } = &mut *abort;
+    let steps::AbortGuard { ledger, files, .. } = &mut *abort;
     // Step 4: Set umask
     steps::set_umask(config.umask, ledger)?;
 
@@ -2191,6 +2191,36 @@ mod tests {
         let log = dir.path().join("app.log");
         let mut config = DaemonConfig::new();
         config.close_fds(false).stdout(&log);
+        let mut forker = NullForker::both_child_with_reader();
+
+        let _ = catch_unwind(std::panic::AssertUnwindSafe(|| {
+            run_inner_with(&config, &mut forker, || -> Result<(), _> {
+                write!(std::io::stdout(), "connecting").unwrap();
+                panic!("database schema too new")
+            })
+        }));
+
+        assert_eq!(
+            std::fs::read_to_string(&log).ok().as_deref(),
+            Some("connecting")
+        );
+    }
+
+    // Covers: R164
+    /// A daemon start with nothing on disk to undo (no pidfile, appending to
+    /// a log that was there) still flushes what init left buffered: its
+    /// rollback has no change, but the process exits without a flush.
+    #[test]
+    fn a_failed_daemon_with_nothing_to_undo_keeps_output_still_buffered() {
+        use std::io::Write;
+        if !isolated() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("app.log");
+        std::fs::write(&log, "").unwrap();
+        let mut config = DaemonConfig::new();
+        config.close_fds(false).stdout(&log).append(true);
         let mut forker = NullForker::both_child_with_reader();
 
         let _ = catch_unwind(std::panic::AssertUnwindSafe(|| {
