@@ -1616,7 +1616,8 @@ on any change to it, so the rows only copied the snapshot.
   it left on disk: the pidfile it wrote, the lockfile it created, and
   the stdout and stderr files it created while they are still empty (a
   log something wrote to may say why the start failed, so it stays;
-  the rollback flushes the process's stdout buffer first).
+  the rollback flushes the process's stdout buffer first; a start that
+  succeeds, or waits on readiness, leaves the buffer alone).
   It removes each only while its
   path itself is still the file the start wrote, compared by device and
   inode without following a symlink, so a file or symlink another
