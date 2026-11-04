@@ -1698,14 +1698,14 @@ fn stdout_and_stderr_on_one_file_share_a_descriptor() {
     );
 }
 
-// Covers: R164
-/// In foreground mode the CLI prints, after the error, each change the
-/// rollback could not put back. A working directory the caller can no longer
-/// search cannot be saved, and a lock conflict then fails the start.
-#[test]
-fn verbose_foreground_failure_prints_what_the_rollback_left_changed() {
+/// Runs a foreground start, with `-v` when `verbose`, that cannot save its
+/// working directory (the caller can no longer search it) and then fails on
+/// a lock conflict. Returns the exit code, whether stderr reports the
+/// working directory as left changed, and stderr. `None` as root, which searches any
+/// directory, so the working directory is saved.
+fn fail_with_an_unsaved_working_directory(verbose: bool) -> Option<(Option<i32>, bool, String)> {
     if nix::unistd::geteuid().is_root() {
-        return; // root searches any directory, so the working directory is saved
+        return None;
     }
     let dir = tempfile::tempdir().unwrap();
     let lockfile = dir.path().join("test.lock");
@@ -1722,60 +1722,34 @@ fn verbose_foreground_failure_prints_what_the_rollback_left_changed() {
         .current_dir(start.path())
         .args(["-c", "chmod 0 . && exec \"$0\" \"$@\""])
         .arg(daemonize_bin())
-        .args(["-v", "-f", "-l", lockfile.to_str().unwrap(), "--", "true"])
+        .args(verbose.then_some("-v"))
+        .args(["-f", "-l", lockfile.to_str().unwrap(), "--", "true"])
         .output()
         .unwrap();
 
     std::fs::set_permissions(start.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert_eq!(
-        (
-            output.status.code(),
-            stderr
-                .lines()
-                .any(|l| l.starts_with("rollback left working directory: "))
-        ),
-        (Some(69), true),
-        "stderr: {stderr}"
-    );
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    let reported = stderr
+        .lines()
+        .any(|l| l.starts_with("rollback left working directory: "));
+    Some((output.status.code(), reported, stderr))
+}
+
+// Covers: R164
+/// In foreground mode the CLI prints, after the error, each change the
+/// rollback could not put back.
+#[test]
+fn verbose_foreground_failure_prints_what_the_rollback_left_changed() {
+    if let Some((code, reported, stderr)) = fail_with_an_unsaved_working_directory(true) {
+        assert_eq!((code, reported), (Some(69), true), "stderr: {stderr}");
+    }
 }
 
 // The process exits on a failed start, so what it left changed in itself
 // dies with it; without -v only changes on disk are worth a line.
 #[test]
 fn foreground_failure_keeps_quiet_about_process_state_it_exits_with() {
-    if nix::unistd::geteuid().is_root() {
-        return; // root searches any directory, so the working directory is saved
+    if let Some((code, reported, stderr)) = fail_with_an_unsaved_working_directory(false) {
+        assert_eq!((code, reported), (Some(69), false), "stderr: {stderr}");
     }
-    let dir = tempfile::tempdir().unwrap();
-    let lockfile = dir.path().join("test.lock");
-    #[allow(clippy::disallowed_methods)] // the test's own lock holder
-    let held = std::fs::File::create(&lockfile).unwrap();
-    let _held = nix::fcntl::Flock::lock(held, nix::fcntl::FlockArg::LockExclusiveNonblock)
-        .map_err(|(_, e)| e)
-        .unwrap();
-    let start = tempfile::tempdir().unwrap();
-
-    // The shell enters the directory, then takes away its search permission,
-    // so the CLI cannot save it.
-    let output = Command::new("sh")
-        .current_dir(start.path())
-        .args(["-c", "chmod 0 . && exec \"$0\" \"$@\""])
-        .arg(daemonize_bin())
-        .args(["-f", "-l", lockfile.to_str().unwrap(), "--", "true"])
-        .output()
-        .unwrap();
-
-    std::fs::set_permissions(start.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert_eq!(
-        (
-            output.status.code(),
-            stderr
-                .lines()
-                .any(|l| l.starts_with("rollback left working directory: "))
-        ),
-        (Some(69), false),
-        "stderr: {stderr}"
-    );
 }
