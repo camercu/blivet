@@ -219,7 +219,8 @@ unsafe fn run_steps<T>(
         files.push(path, steps::Role::Lockfile(lock), id);
         // A lockfile derived from the pidfile goes with step 8's token. One
         // named apart from it gets its own, even when the pidfile path links
-        // to it: step 8 refuses that link, and the file is still this start's.
+        // to it: step 8 refuses a symlink and records a hard link apart, and
+        // the file is still this start's.
         if created && !derived {
             let removal = steps::Removal::new(path, id, steps::Created::Lockfile);
             ledger.record_lasting(steps::Saved::Removal(removal))?;
