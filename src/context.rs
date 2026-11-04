@@ -187,8 +187,9 @@ impl DaemonContext {
     ///
     /// The pidfile goes only while its path still names the file this daemon
     /// wrote. A file another process put there since stays, and so does a
-    /// symlink, even one to the file. Only the pidfile is removed. Standalone lockfiles are left on disk
-    /// (the flock is released when this context is dropped).
+    /// symlink, even one to the file. Only the pidfile is removed:
+    /// standalone lockfiles are left on disk (the flock is released when
+    /// this context is dropped).
     ///
     /// Errors are silently ignored — the daemon is shutting down and there
     /// is nothing useful to do with them. Safe to call multiple times
