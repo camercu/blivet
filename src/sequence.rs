@@ -2352,6 +2352,30 @@ mod tests {
         );
     }
 
+    // Covers: R164
+    /// A start that succeeds has nothing to roll back, so it leaves the
+    /// caller's stdout buffer alone: what init wrote goes out when the
+    /// caller's own code flushes it.
+    #[test]
+    fn a_successful_start_leaves_stdout_buffered() {
+        use std::io::Write;
+        if !isolated() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("app.log");
+        let mut config = DaemonConfig::new();
+        config.foreground(true).close_fds(false).stdout(&log);
+
+        let (_ctx, ()) = run_inner_with(&config, &mut NullForker::new(vec![], Ok(())), || {
+            write!(std::io::stdout(), "connecting").unwrap();
+            Ok(())
+        })
+        .unwrap();
+
+        assert_eq!(std::fs::read_to_string(&log).unwrap(), "");
+    }
+
     // Covers: R154
     #[test]
     fn daemon_init_error_reaches_the_launcher() {

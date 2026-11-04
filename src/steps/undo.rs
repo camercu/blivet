@@ -250,6 +250,12 @@ impl Ledger {
     pub(crate) fn keep_all(&mut self) {
         self.undo.clear();
     }
+
+    /// Whether a roll back would put anything back: false once
+    /// [`keep_all`](Self::keep_all) ran, or before any step recorded.
+    pub(crate) fn is_empty(&self) -> bool {
+        self.undo.is_empty()
+    }
 }
 
 impl Drop for Ledger {

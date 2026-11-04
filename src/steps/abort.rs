@@ -33,10 +33,13 @@ impl AbortGuard {
     /// ledger removed needs no owner, and a daemon switched to a user could
     /// not give it one.
     ///
-    /// Flushes stdout first, on every path: what init left in its buffer
-    /// belongs in the log, and decides whether the rollback keeps it.
+    /// Flushes stdout first while the ledger holds a change: what init left
+    /// in its buffer belongs in the log, and decides whether the rollback
+    /// keeps it. A start kept whole leaves the caller's buffer alone.
     pub(crate) fn roll_back(&mut self) -> Vec<crate::RestoreFailure> {
-        let _ = std::io::Write::flush(&mut std::io::stdout());
+        if !self.ledger.is_empty() {
+            let _ = std::io::Write::flush(&mut std::io::stdout());
+        }
         let mut failures = self.ledger.roll_back();
         failures.extend(self.files.give_owners_back());
         failures
