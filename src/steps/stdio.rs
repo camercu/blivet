@@ -534,9 +534,12 @@ mod tests {
     /// taken for one that keeps appearing and going.
     #[test]
     fn a_file_found_but_not_writable_reports_why() {
-        if nix::unistd::geteuid().is_root() {
-            return; // root writes to a read-only file
+        if !crate::test_support::isolated() {
+            return;
         }
+        // Root writes to a read-only file. Shed it before making the
+        // directory, so the file is reached and refused, not the path.
+        crate::test_support::shed_root();
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("app.log");
         std::fs::write(&path, "").unwrap();

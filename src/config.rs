@@ -1415,4 +1415,41 @@ mod tests {
         config.user("nobody");
         assert_switch_permitted_to_root_alone(&config);
     }
+
+    /// The refusal on every tier: root sheds its privilege first, so a
+    /// root-run suite tests it too.
+    #[test]
+    fn a_caller_not_root_may_not_switch_to_a_user_alone() {
+        if !crate::test_support::isolated() {
+            return;
+        }
+        crate::test_support::shed_root();
+        let mut config = DaemonConfig::new();
+        config.user("nobody");
+
+        let kind = config.validate().map_err(DaemonizeError::into_kind);
+
+        assert!(
+            matches!(kind, Err(ErrorKind::PermissionDenied(_))),
+            "{kind:?}"
+        );
+    }
+
+    /// As for a user alone.
+    #[test]
+    fn a_caller_not_root_may_not_switch_to_a_group_alone() {
+        if !crate::test_support::isolated() {
+            return;
+        }
+        crate::test_support::shed_root();
+        let mut config = DaemonConfig::new();
+        config.group("65534");
+
+        let kind = config.validate().map_err(DaemonizeError::into_kind);
+
+        assert!(
+            matches!(kind, Err(ErrorKind::PermissionDenied(_))),
+            "{kind:?}"
+        );
+    }
 }
