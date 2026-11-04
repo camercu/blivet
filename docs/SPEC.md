@@ -213,9 +213,9 @@ pidfile, lockfile, stdout, stderr, user, group, `cleanup_on_drop`, and
 | Field                | Type                | Semantics                                          |
 | -------------------- | ------------------- | -------------------------------------------------- |
 | `config`             | `DaemonConfig`      | The validated config, cloned in whole. Single source of truth for pidfile, lockfile, stdout/stderr, user/group, `cleanup_on_drop`, and `chown_paths`. |
-| `lockfile`           | `Option<Flock>`     | Owned lock (`nix::fcntl`); drop releases.          |
-| `launcher`           | `Launcher`          | `Waiting` (holds the pipe's write end), `Released`, or `Foreground`; see below. |
-| `cleaned_up`         | `bool`              | Internal flag; prevents double cleanup.            |
+| `lockfile`           | `Option<Flock>`     | Owned lock (`nix::fcntl`), once no launcher waits; drop releases. While one waits, the start's abort guard holds it. |
+| `launcher`           | `Launcher`          | `Waiting` (holds the pipe's write end and the start's abort guard, R170), `Released`, or `Foreground`; see below. |
+| `pidfile`            | `Option<Removal>`   | The pidfile this start wrote, by identity; cleanup takes it, so it runs once, and removes the file only while the path still names it. |
 
 **Debug output:** the manual `impl` does not print `config` verbatim.
 It renders `lockfile` as `held`/`none` and the launcher as a
@@ -270,10 +270,11 @@ the error to stderr first (R161); with one waiting whose pipe is gone or
 spent, the failed write prints it instead. `exec` uses it to report an exec failure.
 
 **Drop behavior:** if the launcher is still `Waiting` when `DaemonContext`
-is dropped, the `Drop` impl removes the pidfile (whatever
-`cleanup_on_drop` says: the start never succeeded, R154), then writes an error
-with exit code `1` and the message "daemon exited without signaling readiness"
-to the pipe and closes it. The parent reads this and exits 1.
+is dropped, the `Drop` impl rolls the start back (R170) and removes the
+pidfile (whatever `cleanup_on_drop` says: the start never succeeded, R154),
+then writes an error with exit code `1` and the message "daemon exited
+without signaling readiness", followed by what the rollback could not put
+back, to the pipe and closes it. The parent reads this and exits 1.
 
 > Exit code `1` (not a `sysexits.h` value) is used for the Drop case
 > to distinguish it from categorized `DaemonizeError` failures.
@@ -663,11 +664,13 @@ undefined behaviour. The error reports that environment as
 16. **Chown** the pidfile, lockfile, stdout, and stderr to the target
     identity, unless `chown_paths(false)`. See path ownership.
 17. **Switch identity.** See user/group switching.
-18. **Return `DaemonContext`** owning lockfile `Option<Flock>`,
-    `pipe_wr` as `Option<NotifyChannel>`, the pidfile it wrote, and the
-    cloned config, beside `init`'s value. In daemon mode the context
-    also takes what the start changed, for a failure before readiness
-    to undo (R170); in foreground mode the start keeps it.
+18. **Return `DaemonContext`** owning `pipe_wr` as
+    `Option<NotifyChannel>`, the pidfile it wrote, and the cloned
+    config, beside `init`'s value. In foreground mode the start keeps
+    every change and the context owns the lock. In daemon mode the
+    context takes the start's abort guard, the lock in it, for a
+    failure before readiness to undo (R170); readiness keeps the
+    changes and hands the context the lock.
 
 ### Post-fork error policy
 
