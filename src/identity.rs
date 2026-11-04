@@ -9,7 +9,7 @@
 //! effects, then chowns and switches after init (ADR 0004).
 
 use std::ffi::CString;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use nix::unistd::{Gid, Group, Uid, User};
 
@@ -81,53 +81,6 @@ impl ResolvedIdentity {
     /// which is why this replaces the former `u32::MAX` (`-1`) sentinel.
     pub(crate) fn chown_ids(&self) -> (Option<Uid>, Option<Gid>) {
         (self.user.as_ref().map(|u| u.uid), self.effective_gid())
-    }
-
-    /// Chown each open regular file to this identity, while the process is
-    /// still privileged (R163). `path` names the file in the error.
-    ///
-    /// By descriptor, not path: the chown reaches the file the sequence opened,
-    /// even if `init` has since changed what the path names, by a `chroot` or
-    /// a rename. A symlink planted before the open still redirects the open
-    /// itself, so these paths belong in directories untrusted users cannot
-    /// write.
-    ///
-    /// Records a token per file chowned in `ledger`, in both modes: the
-    /// owner is on disk, so it outlives a daemon that exits (R164). Each goes
-    /// in as its file is chowned, so a failure part way leaves the ledger to
-    /// give back the owners of the files chowned before it.
-    ///
-    /// # Errors
-    ///
-    /// Returns `ErrorKind::ChownError` naming the first file that fails.
-    pub(crate) fn chown_files<'p>(
-        &self,
-        files: impl IntoIterator<Item = (&'p Path, std::os::fd::BorrowedFd<'p>)>,
-        ledger: &mut crate::steps::Ledger,
-    ) -> Result<(), ErrorKind> {
-        use crate::steps::Saved;
-        let (owner, group) = self.chown_ids();
-        let failed = |path: &Path, e| ErrorKind::ChownError(format!("{}: {e}", path.display()));
-        for (path, fd) in files {
-            let st = nix::sys::stat::fstat(fd).map_err(|e| failed(path, e))?;
-            // Only a regular file is the daemon's own. A device, FIFO, or
-            // socket (`-o /dev/null`, a tty) belongs to the system; the
-            // daemon writes through the descriptor it holds either way.
-            if st.st_mode & libc::S_IFMT != libc::S_IFREG {
-                continue;
-            }
-            // Its own descriptor, above stdio and close-on-exec, as the
-            // sequence's copy closes when the sequence ends.
-            let held = fd.try_clone_to_owned();
-            nix::unistd::fchown(fd, owner, group).map_err(|e| failed(path, e))?;
-            ledger.record_lasting(Saved::Owner(Owner {
-                path: path.to_path_buf(),
-                fd: held,
-                id: crate::file_identity::FileId::of(&st),
-                was: (Uid::from_raw(st.st_uid), Gid::from_raw(st.st_gid)),
-            }))?;
-        }
-        Ok(())
     }
 
     /// Set the supplementary groups to the user's, from the group database
@@ -253,47 +206,6 @@ fn resolve_group_gid(spec: &str) -> Result<Gid, ErrorKind> {
             .map_err(|e| ErrorKind::GroupNotFound(format!("getgrnam({spec}): {e}")))?
             .ok_or_else(|| ErrorKind::GroupNotFound(spec.to_string()))?;
         Ok(group.gid)
-    }
-}
-
-/// A file step 16 chowned, and the owner and group it had before.
-///
-/// The descriptor to give it back by is best-effort, as the working
-/// directory's is: with no descriptor free it is missing, and the chown goes
-/// on (R164). The restore then goes by path.
-pub(crate) struct Owner {
-    path: std::path::PathBuf,
-    fd: std::io::Result<std::os::fd::OwnedFd>,
-    id: crate::file_identity::FileId,
-    was: (Uid, Gid),
-}
-
-impl Owner {
-    /// Gives the file its owner back by descriptor. Without one, by path,
-    /// while the path still names the file: one a later token removes, or
-    /// one gone already, is nothing to report.
-    pub(crate) fn restore(self) -> Result<(), RestoreFailure> {
-        let Self { path, fd, id, was } = self;
-        let failed = |e: nix::errno::Errno| {
-            RestoreFailure::at(ChangedState::FileOwner, &path, std::io::Error::from(e))
-        };
-        let (owner, group) = (Some(was.0), Some(was.1));
-        match fd {
-            Ok(fd) => nix::unistd::fchown(&fd, owner, group).map_err(failed),
-            Err(_) => match crate::file_identity::stat_if_named(&path, id).map_err(failed)? {
-                // Following a symlink, as the identity check did, so the
-                // chown reaches the file it matched.
-                Some(_) => nix::unistd::fchownat(
-                    nix::fcntl::AT_FDCWD,
-                    &path,
-                    owner,
-                    group,
-                    nix::fcntl::AtFlags::empty(),
-                )
-                .map_err(failed),
-                None => Ok(()),
-            },
-        }
     }
 }
 

@@ -44,7 +44,6 @@ pub(crate) enum Saved {
     Slot(super::SavedSlot),
     Groups(crate::identity::Groups),
     Removal(super::Removal),
-    Owner(crate::identity::Owner),
     Emptied(super::Emptied),
     /// A change that can no longer be put back, reported on rollback.
     Left(RestoreFailure),
@@ -68,7 +67,6 @@ impl Saved {
             Self::Slot(s) => s.restore(),
             Self::Groups(s) => s.restore(),
             Self::Removal(s) => s.restore(),
-            Self::Owner(s) => s.restore(),
             Self::Emptied(s) => s.restore(),
             Self::Left(failure) => Err(failure),
         }
@@ -86,7 +84,7 @@ impl Saved {
             | Self::Groups(_)
             | Self::Removal(_) => None,
             // Made at steps 15 and 16, after the sweep.
-            Self::Owner(_) | Self::Emptied(_) | Self::Left(_) => None,
+            Self::Emptied(_) | Self::Left(_) => None,
         }
     }
 
@@ -102,7 +100,6 @@ impl Saved {
             | Self::Slot(_)
             | Self::Groups(_)
             | Self::Removal(_)
-            | Self::Owner(_)
             | Self::Emptied(_)
             | Self::Left(_) => None,
         }

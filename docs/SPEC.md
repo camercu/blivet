@@ -903,8 +903,9 @@ step 7 or 8 opens the file still redirects that open, so configured
 paths must live in directories not writable by untrusted users.
 
 `fchown()` failure returns `ChownError` naming the path and aborts the
-sequence before any `setgid`/`setuid`. Files already processed stay
-chowned; the chown is idempotent.
+sequence before any `setgid`/`setuid`. The rollback gives the files
+already processed their owners back, through the same descriptors
+(R164).
 
 ### Mode and umask interaction
 
@@ -1732,8 +1733,8 @@ on any change to it, so the rows only copied the snapshot.
   Elsewhere such a directory, and anywhere one the caller can no longer
   search, cannot be opened, and the start goes on without saving it.
   In both modes it puts back the
-  owner and group of each file step 16 chowned (by the descriptor it
-  holds, or with none free by path while the path names the file), and
+  owner and group of each file step 16 chowned, by the descriptor it
+  chowned it through, and
   removes the files
   it left on disk: the pidfile it wrote, the lockfile it created, and
   the stdout and stderr files it created while they are still empty (a

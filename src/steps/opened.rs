@@ -11,8 +11,10 @@ use std::os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd, RawFd};
 use std::path::{Path, PathBuf};
 
 use nix::fcntl::Flock;
+use nix::unistd::{Gid, Uid};
 
-use crate::error::{ChangedState, RestoreFailure};
+use super::Ledger;
+use crate::error::{ChangedState, ErrorKind, RestoreFailure};
 use crate::file_identity::{FileId, lstat_if_named};
 
 /// What a file is to the sequence, with the descriptor that holds it.
@@ -104,6 +106,9 @@ struct Opened<'a> {
     path: &'a Path,
     role: Role,
     id: FileId,
+    /// The owner and group step 16 replaced, to give back by `role`'s
+    /// descriptor on failure (R164).
+    owner_was: Option<(Uid, Gid)>,
 }
 
 /// The files the sequence opened, in the order it opened them.
@@ -113,7 +118,12 @@ pub(crate) struct OpenedFiles<'a>(Vec<Opened<'a>>);
 impl<'a> OpenedFiles<'a> {
     /// Records a file a step opened, with the identity `fstat` gave it.
     pub(crate) fn push(&mut self, path: &'a Path, role: Role, id: FileId) {
-        self.0.push(Opened { path, role, id });
+        self.0.push(Opened {
+            path,
+            role,
+            id,
+            owner_was: None,
+        });
     }
 
     /// Step 12: the files a stream must not be (R146), by the name to report
@@ -184,16 +194,63 @@ pub(crate) fn spared_fds(
         .collect()
 }
 
-/// Step 16: the files to hand to the target identity, by descriptor (R163);
-/// none without `chown_paths`.
-pub(crate) fn chown_targets<'f>(
-    files: &'f OpenedFiles,
-    chown_paths: bool,
-) -> Vec<(&'f Path, BorrowedFd<'f>)> {
-    if !chown_paths {
-        return Vec::new();
+impl OpenedFiles<'_> {
+    /// Step 16: chown each regular file in the record to `owner` and
+    /// `group`, while the process is still privileged (R163).
+    ///
+    /// By descriptor, not path: the chown reaches the file the sequence
+    /// opened, even if `init` has since changed what the path names, by a
+    /// `chroot` or a rename. For stdout and stderr that is step 12's
+    /// descriptor, as init may have moved fds 1 and 2. A symlink planted
+    /// before the open still redirects the open itself, so these paths
+    /// belong in directories untrusted users cannot write.
+    ///
+    /// Each file keeps the owner it had, in both modes: the owner is on disk,
+    /// so it outlives a daemon that exits (R164).
+    /// [`give_owners_back`](Self::give_owners_back) puts it back by the same
+    /// descriptor. Each chown is a checkpoint of `ledger`'s, so the undo walk
+    /// fails the step part way.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ErrorKind::ChownError` naming the first file that fails.
+    pub(crate) fn chown_to(
+        &mut self,
+        (owner, group): (Option<Uid>, Option<Gid>),
+        ledger: &mut Ledger,
+    ) -> Result<(), ErrorKind> {
+        let failed = |path: &Path, e| ErrorKind::ChownError(format!("{}: {e}", path.display()));
+        for o in &mut self.0 {
+            let st = nix::sys::stat::fstat(o.role.as_fd()).map_err(|e| failed(o.path, e))?;
+            // Only a regular file is the daemon's own. A device, FIFO, or
+            // socket (`-o /dev/null`, a tty) belongs to the system; the
+            // daemon writes through the descriptor it holds either way.
+            if st.st_mode & libc::S_IFMT != libc::S_IFREG {
+                continue;
+            }
+            nix::unistd::fchown(o.role.as_fd(), owner, group).map_err(|e| failed(o.path, e))?;
+            o.owner_was = Some((Uid::from_raw(st.st_uid), Gid::from_raw(st.st_gid)));
+            ledger.checkpoint()?;
+        }
+        Ok(())
     }
-    files.0.iter().map(|o| (o.path, o.role.as_fd())).collect()
+
+    /// Gives each file [`chown_to`](Self::chown_to) chowned its owner back,
+    /// by the descriptor this record holds, and returns what it could not
+    /// give back.
+    pub(crate) fn give_owners_back(&mut self) -> Vec<RestoreFailure> {
+        self.0
+            .iter_mut()
+            .filter_map(|o| {
+                let (owner, group) = o.owner_was.take()?;
+                nix::unistd::fchown(o.role.as_fd(), Some(owner), Some(group))
+                    .err()
+                    .map(|e| {
+                        RestoreFailure::at(ChangedState::FileOwner, o.path, std::io::Error::from(e))
+                    })
+            })
+            .collect()
+    }
 }
 
 #[cfg(test)]
@@ -296,42 +353,6 @@ mod tests {
         let expected: Vec<i32> = files.0.iter().map(|o| o.role.as_raw_fd()).collect();
 
         assert_eq!(spared_fds(&files, [], None), expected);
-    }
-
-    #[test]
-    fn every_file_in_the_record_is_a_chown_target() {
-        let dir = tempfile::tempdir().unwrap();
-        let mut files = OpenedFiles::default();
-        let lockfile = dir.path().join("app.lock");
-        let out = dir.path().join("out.log");
-        push(
-            &mut files,
-            &lockfile,
-            Role::Lockfile(lock(dir.path(), "app.lock")),
-        );
-        push(&mut files, &out, Role::Stream(file(dir.path(), "out.log")));
-
-        let targets: Vec<_> = chown_targets(&files, true)
-            .into_iter()
-            .map(|(path, fd)| (path.to_owned(), fd.as_raw_fd()))
-            .collect();
-
-        let expected: Vec<_> = files
-            .0
-            .iter()
-            .map(|o| (o.path.to_owned(), o.role.as_raw_fd()))
-            .collect();
-        assert_eq!(targets, expected);
-    }
-
-    #[test]
-    fn without_chown_paths_nothing_is_a_chown_target() {
-        let dir = tempfile::tempdir().unwrap();
-        let mut files = OpenedFiles::default();
-        let out = dir.path().join("out.log");
-        push(&mut files, &out, Role::Stream(file(dir.path(), "out.log")));
-
-        assert!(chown_targets(&files, false).is_empty());
     }
 
     #[test]

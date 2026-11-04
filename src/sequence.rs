@@ -149,9 +149,9 @@ fn panicked(payload: &(dyn std::any::Any + Send)) -> ErrorKind {
     ErrorKind::application(70, format!("daemon panicked during startup: {text}"))
 }
 
-/// What a failed sequence undoes (R164): each change in the
-/// [`Ledger`](steps::Ledger), in the reverse of the order the steps made
-/// them, and last the lock (step 7). A half-done identity switch (step 17)
+/// What a failed sequence undoes (R164): the owners step 16 replaced, then
+/// each change in the [`Ledger`](steps::Ledger), in the reverse of the order
+/// the steps made them, and last the lock (step 7). A half-done identity switch (step 17)
 /// undoes itself. A panic in foreground mode, unwinding past the sequence,
 /// rolls back as the guard drops, with nowhere to report; a daemon catches
 /// its panic and rolls back as for an error (R166).
@@ -173,6 +173,15 @@ struct AbortGuard<'a> {
 }
 
 impl AbortGuard<'_> {
+    /// Puts back what the steps changed, latest first, and returns what it
+    /// could not put back. The owners step 16 replaced go first: no step
+    /// after 16 changes anything a rollback undoes.
+    fn roll_back(&mut self) -> Vec<crate::RestoreFailure> {
+        let mut failures = self.files.give_owners_back();
+        failures.extend(self.ledger.roll_back());
+        failures
+    }
+
     fn new(foreground: bool) -> Self {
         let rollback = if foreground {
             steps::Rollback::PutBack
@@ -191,7 +200,7 @@ impl Drop for AbortGuard<'_> {
         // Empty unless a foreground panic unwound past `run_post_fork`,
         // which leaves no error to report the failures in. Here, not by field order, so the
         // pidfile goes before the lock whatever order the fields are in.
-        let _ = self.ledger.roll_back();
+        let _ = self.roll_back();
     }
 }
 
@@ -232,7 +241,7 @@ unsafe fn run_post_fork<T>(
         // What init left in stdout's buffer belongs in the log, and decides
         // whether the rollback keeps it.
         let _ = std::io::Write::flush(&mut std::io::stdout());
-        e.with_rollback_failures(abort.ledger.roll_back())
+        e.with_rollback_failures(abort.roll_back())
     })
 }
 
@@ -365,9 +374,9 @@ unsafe fn run_steps<'a, T>(
     // Steps 16-17: Hand the daemon's files to the target identity while still
     // privileged, then switch to it (R155).
     if let Some(identity) = &identity {
-        // The files as opened, by descriptor (R163); for stdout and stderr,
-        // step 12's, as init may have moved fds 1 and 2.
-        identity.chown_files(steps::chown_targets(files, config.chown_paths), ledger)?;
+        if config.chown_paths {
+            files.chown_to(identity.chown_ids(), ledger)?;
+        }
     }
     #[cfg(test)]
     if steps::failpoints::BEFORE_SWITCH_FAILS.injected() {
@@ -760,9 +769,8 @@ mod tests {
     }
 
     // Covers: R164
-    /// The descriptor that lets a failure give a file back its owner is an
-    /// undo aid: an init that leaves no descriptor free must not fail the
-    /// chown for want of one.
+    /// The chown needs no descriptor of its own: an init that leaves none
+    /// free does not fail it.
     #[test]
     fn a_full_fd_table_does_not_fail_the_chown() {
         if !isolated() {
@@ -786,11 +794,12 @@ mod tests {
     }
 
     // Covers: R164
-    /// With no descriptor left to give a file back its owner by, the rollback
-    /// goes by path. A log it keeps, written to, is no rollback failure.
+    /// The rollback gives an owner back by the descriptor the start holds, so
+    /// an init that leaves none free costs it nothing. A log it keeps,
+    /// written to, is no rollback failure.
     #[test]
     #[allow(clippy::disallowed_methods)] // init writes to fd 1, in a subprocess of its own
-    fn an_owner_without_a_descriptor_is_given_back_by_path() {
+    fn an_owner_is_given_back_with_no_descriptor_free() {
         if !isolated() {
             return;
         }
@@ -825,49 +834,8 @@ mod tests {
     }
 
     // Covers: R164
-    /// With no descriptor, and a path the rollback can no longer look up, the
-    /// owner cannot be given back, and the error says so, naming the file.
-    #[test]
-    fn an_owner_the_rollback_cannot_reach_is_reported() {
-        use crate::ChangedState;
-        use std::os::unix::fs::PermissionsExt;
-        if !isolated() {
-            return;
-        }
-        crate::test_support::shed_root();
-        let dir = tempfile::tempdir().unwrap();
-        let logs = dir.path().join("logs");
-        std::fs::create_dir(&logs).unwrap();
-        let log = logs.join("app.log");
-        let mut config = DaemonConfig::new();
-        config
-            .foreground(true)
-            .close_fds(false)
-            .stdout(&log)
-            .group(nix::unistd::getgid().to_string());
-        steps::failpoints::BEFORE_SWITCH_FAILS.set();
-
-        let result: Result<(DaemonContext, ()), _> =
-            run_inner_with(&config, &mut NullForker::new(vec![], Ok(())), || {
-                std::fs::set_permissions(&logs, std::fs::Permissions::from_mode(0o000)).unwrap();
-                std::mem::forget(crate::test_support::fill_fd_table(0));
-                Ok(())
-            });
-        std::fs::set_permissions(&logs, std::fs::Permissions::from_mode(0o700)).unwrap();
-
-        let err = result.expect_err("the failpoint failed the start");
-        let owners: Vec<_> = err
-            .rollback_failures()
-            .iter()
-            .filter(|f| f.state() == ChangedState::FileOwner)
-            .map(|f| (f.path(), f.error().raw_os_error()))
-            .collect();
-        assert_eq!(owners, [(Some(&*log), Some(libc::EACCES))]);
-    }
-
-    // Covers: R164
     /// A file another process put at the path since is not the one step 16
-    /// chowned: the rollback by path leaves its owner alone.
+    /// chowned: the rollback goes by descriptor and leaves its owner alone.
     #[test]
     #[ignore = "needs root: the privileged tier runs it"]
     fn root_leaves_the_owner_of_a_file_put_at_the_path_since() {
@@ -907,11 +875,11 @@ mod tests {
 
     // Covers: R164
     /// The same, as root, where the owner really changes: the file gets its
-    /// owner back by path.
+    /// owner back.
     #[test]
     #[ignore = "needs root: the privileged tier runs it"]
     #[allow(clippy::disallowed_methods)] // init writes to fd 1, in a subprocess of its own
-    fn root_gives_a_file_its_owner_back_without_a_descriptor() {
+    fn root_gives_a_file_its_owner_back_with_no_descriptor_free() {
         use std::os::unix::fs::MetadataExt;
         if !isolated() {
             return;
