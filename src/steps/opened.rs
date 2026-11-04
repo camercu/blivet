@@ -368,16 +368,15 @@ mod tests {
         files
             .chown_to(
                 (None, Some(Gid::from_raw(then))),
-                &mut Ledger::new(super::super::Rollback::PutBack),
+                &mut Ledger::new(crate::steps::Rollback::PutBack),
             )
             .unwrap();
+        assert_eq!(std::fs::metadata(&path).unwrap().gid(), then);
 
         let failures = files.give_owners_back();
 
-        assert!(
-            failures.is_empty() && std::fs::metadata(&path).unwrap().gid() == first,
-            "{failures:?}"
-        );
+        assert!(failures.is_empty(), "{failures:?}");
+        assert_eq!(std::fs::metadata(&path).unwrap().gid(), first);
     }
 
     #[test]
