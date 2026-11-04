@@ -129,8 +129,9 @@ A failure the caller reports with its own exit code (`ErrorKind::Application`).
 _Avoid_: custom error, user error
 
 **Rollback failure**:
-A change a failed foreground start could not put back, reported beside the
-error (`RestoreFailure`, `DaemonizeError::rollback_failures`). _Avoid_: restore
+A change a failed start could not put back, reported beside the error
+(`RestoreFailure`, `DaemonizeError::rollback_failures`). A daemon sends it to
+the launcher. _Avoid_: restore
 error, cleanup error
 
 **Program handoff**:

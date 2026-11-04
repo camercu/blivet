@@ -174,7 +174,8 @@ impl std::fmt::Display for RestoreFailure {
 /// error, and an error chain would print it twice.
 impl std::error::Error for RestoreFailure {}
 
-/// Process state the sequence changed and a rollback puts back (R164).
+/// What the sequence changed and a rollback puts back (R164): the
+/// process's own state, and files on disk.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum ChangedState {
@@ -199,11 +200,17 @@ pub enum ChangedState {
     Pidfile,
     /// The lockfile the sequence created, still on disk.
     Lockfile,
-    /// A stdout or stderr file the sequence created, still on disk.
+    /// A stdout or stderr file: one the sequence created, still on disk, or
+    /// one it emptied of earlier content. An emptied file is the caller's
+    /// own; do not delete it as a leftover.
     OutputFile,
     /// The owner and group of a file the sequence handed to the target
     /// identity.
     FileOwner,
+    /// The environment variables the config set. Left as set once `init`
+    /// has run: init may have started threads, and `setenv` is not
+    /// thread-safe.
+    Environment,
 }
 
 impl ChangedState {
@@ -219,6 +226,7 @@ impl ChangedState {
             | Self::SignalMask
             | Self::SignalDispositions
             | Self::SupplementaryGroups
+            | Self::Environment
             | Self::PrimaryGroup => false,
             Self::Pidfile | Self::Lockfile | Self::OutputFile | Self::FileOwner => true,
         }
@@ -235,6 +243,7 @@ impl std::fmt::Display for ChangedState {
             Self::SignalMask => "signal mask",
             Self::SignalDispositions => "signal dispositions",
             Self::SupplementaryGroups => "supplementary groups",
+            Self::Environment => "environment",
             Self::PrimaryGroup => "primary group",
             Self::Pidfile => "pidfile",
             Self::Lockfile => "lockfile",
@@ -732,7 +741,7 @@ mod tests {
     }
 
     /// Every [`ChangedState`], in declaration order.
-    const ALL_STATES: [ChangedState; 12] = {
+    const ALL_STATES: [ChangedState; 13] = {
         use ChangedState::*;
         [
             Stdin,
@@ -747,6 +756,7 @@ mod tests {
             Lockfile,
             OutputFile,
             FileOwner,
+            Environment,
         ]
     };
 
@@ -767,6 +777,7 @@ mod tests {
             Lockfile => 9,
             OutputFile => 10,
             FileOwner => 11,
+            Environment => 12,
         }
     }
 

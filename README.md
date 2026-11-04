@@ -227,7 +227,10 @@ A foreground start that fails puts back what it changed in your process. Each
 change it could not put back is in `rollback_failures()`: the `ChangedState`
 left changed, the path for a file, and the `io::Error` that stopped it. The
 error's message stays the kind's. `ChangedState::outlives_process()` tells a
-file left on disk from process state, which ends with the process. After the
+file left on disk from process state, which ends with the process. A failure
+after `init` leaves the environment as configured and reports it as
+`Environment`: `init` may have started threads, and `setenv` is unsafe then.
+After the
 error, the CLI prints one `rollback left <state> [<path>]: <error>` line for
 each file left on disk, or with `-v` for every change. A daemon that fails exits
 instead of returning, and sends the same lines to the launcher after its

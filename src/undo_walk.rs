@@ -105,8 +105,16 @@ fn walk(config: &DaemonConfig, dir: &std::path::Path) {
             (before.clone(), after)
         };
         assert_eq!(after, expected, "state differs after failure {n}");
-        assert!(
-            e.rollback_failures().is_empty(),
+        // ...and the rollback says so.
+        let left: Vec<_> = e.rollback_failures().iter().map(|f| f.state()).collect();
+        let expected_left: &[crate::ChangedState] = if init_ran {
+            &[crate::ChangedState::Environment]
+        } else {
+            &[]
+        };
+        assert_eq!(
+            left,
+            expected_left,
             "failure {n} left changes: {:?}",
             e.rollback_failures()
         );

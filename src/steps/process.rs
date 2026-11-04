@@ -130,6 +130,10 @@ impl SignalMask {
 pub(crate) fn set_env_vars(env: &[(String, String)], ledger: &mut Ledger) -> Result<(), ErrorKind> {
     #[cfg(test)]
     crate::test_support::assert_isolated("set_env_vars");
+    // Nothing set, nothing to put back or to report left.
+    if env.is_empty() {
+        return ledger.checkpoint();
+    }
     let rollback = ledger.rollback();
     let mut was = Vec::new();
     for (key, value) in env {

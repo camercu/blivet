@@ -17,7 +17,7 @@
 
 use std::os::fd::RawFd;
 
-use crate::error::{ErrorKind, RestoreFailure};
+use crate::error::{ChangedState, ErrorKind, RestoreFailure};
 
 /// Whether a step saves what it changes, so a failure can put it back
 /// (R147, R164).
@@ -46,6 +46,8 @@ pub(crate) enum Saved {
     Removal(super::Removal),
     Owner(crate::identity::Owner),
     Emptied(super::Emptied),
+    /// A change that can no longer be put back, reported on rollback.
+    Left(RestoreFailure),
 }
 
 impl Saved {
@@ -68,6 +70,7 @@ impl Saved {
             Self::Removal(s) => s.restore(),
             Self::Owner(s) => s.restore(),
             Self::Emptied(s) => s.restore(),
+            Self::Left(failure) => Err(failure),
         }
     }
 
@@ -83,15 +86,15 @@ impl Saved {
             | Self::Groups(_)
             | Self::Removal(_) => None,
             // Made at steps 15 and 16, after the sweep.
-            Self::Owner(_) | Self::Emptied(_) => None,
+            Self::Owner(_) | Self::Emptied(_) | Self::Left(_) => None,
         }
     }
 
-    /// Whether restoring is unsound once other threads may run. Restoring
-    /// the env calls `setenv`, which is undefined behaviour then.
-    fn single_threaded(&self) -> bool {
+    /// The state whose restore is unsound once other threads may run.
+    /// Restoring the env calls `setenv`, which is undefined behaviour then.
+    fn single_threaded(&self) -> Option<ChangedState> {
         match self {
-            Self::EnvVars(_) => true,
+            Self::EnvVars(_) => Some(ChangedState::Environment),
             Self::Umask(_)
             | Self::Cwd(_)
             | Self::SignalMask(_)
@@ -100,7 +103,8 @@ impl Saved {
             | Self::Groups(_)
             | Self::Removal(_)
             | Self::Owner(_)
-            | Self::Emptied(_) => false,
+            | Self::Emptied(_)
+            | Self::Left(_) => None,
         }
     }
 }
@@ -132,10 +136,14 @@ impl Undo {
     }
 
     /// Other threads may run from here, so a single-threaded token restores
-    /// nothing.
+    /// nothing, and reports the change it leaves.
     pub(crate) fn threads_may_start(&mut self) {
-        if self.0.as_ref().is_some_and(Saved::single_threaded) {
-            self.0 = None;
+        if let Some(state) = self.0.as_ref().and_then(Saved::single_threaded) {
+            let why = "init may have started threads, and setenv is not thread-safe";
+            self.0 = Some(Saved::Left(RestoreFailure::new(
+                state,
+                std::io::Error::other(why),
+            )));
         }
     }
 
@@ -220,7 +228,8 @@ impl Ledger {
     }
 
     /// From `init` on other threads may run, so a token whose restore is
-    /// unsafe then (the env's `setenv`) restores nothing (R164).
+    /// unsafe then (the env's `setenv`) restores nothing, and the rollback
+    /// reports the change it leaves (R164).
     pub(crate) fn threads_may_start(&mut self) {
         self.undo.iter_mut().for_each(Undo::threads_may_start);
     }
@@ -333,6 +342,21 @@ mod tests {
         ledger.threads_may_start();
         drop(ledger);
         assert_eq!(std::env::var(key).as_deref(), Ok("set"));
+    }
+
+    #[test]
+    fn an_env_left_once_threads_may_start_is_reported() {
+        if !isolated() {
+            return;
+        }
+        let mut ledger = Ledger::new(Rollback::PutBack);
+        set_env_vars(&[("BLIVET_UNDO_TEST".into(), "set".into())], &mut ledger).unwrap();
+        ledger.threads_may_start();
+
+        let failures = ledger.roll_back();
+
+        let states: Vec<_> = failures.iter().map(RestoreFailure::state).collect();
+        assert_eq!(states, [crate::ChangedState::Environment]);
     }
 
     #[test]

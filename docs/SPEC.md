@@ -300,8 +300,9 @@ saving the state. `Display` is `<state>: <error>`, or `<state> <path>:
 `ChangedState` is `#[non_exhaustive]`: `Stdin`, `Stdout`, `Stderr`,
 `WorkingDirectory`, `SignalMask`, `SignalDispositions`,
 `SupplementaryGroups`, `PrimaryGroup`, `Pidfile`, `Lockfile`,
-`OutputFile`, `FileOwner`. The umask and the
-environment are not in it: restoring them cannot fail.
+`OutputFile`, `FileOwner`, `Environment`. The umask is not in it:
+restoring it cannot fail. `Environment` is the environment a failure
+after `init` leaves as step 11 set it.
 
 `ErrorKind` is one enum covering validation and runtime errors. Derives
 `Debug` and `thiserror::Error` (providing `Display` and
@@ -588,7 +589,8 @@ half-done identity switch, and it removes the pidfile it wrote. What it
 cannot restore stays in effect: inherited descriptors it closed,
 whatever `init` did, and, once `init` has run, the environment, since
 `init` may start threads and `setenv` with another thread alive is
-undefined behaviour.
+undefined behaviour. The error reports that environment as
+`Environment`.
 
 ### Steps
 
@@ -1750,7 +1752,8 @@ on any change to it, so the rows only copied the snapshot.
   in `rollback_failures()`: a failed restore, a working directory it
   could not save, a file it could not remove, with its path (one
   already gone is not a failure), and a log step 15 emptied of content,
-  which no rollback can put back. Each prints as one `rollback left
+  which no rollback can put back, nor can it the environment variables
+  it set once `init` has run. Each prints as one `rollback left
   <state>[ <path>]: <reason>` line after the error: a daemon sends them
   to the launcher (R160), and in foreground mode the CLI prints those
   that outlive its process (`ChangedState::outlives_process()`: files,
