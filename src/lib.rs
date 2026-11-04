@@ -155,6 +155,8 @@
 //! ```
 
 #![deny(unsafe_code)]
+// The rustdoc is the API reference: docs/SPEC.md points at it.
+#![deny(missing_docs)]
 // `exit` skips every pending `Drop`, the abort guard's among them (R150),
 // and `mem::forget` leaks a guard without running its `Drop`. The library
 // calls neither; tests may, from subprocesses of their own.
