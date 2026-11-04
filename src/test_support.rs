@@ -356,7 +356,7 @@ pub(crate) fn assert_isolated(what: &str) {
 const SA_RESTORER: i32 = 0x0400_0000;
 
 /// One signal's action: handler, flags less `SA_RESTORER`, and the signals
-/// its handler blocks.
+/// its handler blocks, the signal itself included unless `SA_NODEFER`.
 pub(crate) type SignalAction = (i32, usize, i32, Vec<i32>);
 
 /// Every signal's action, and the signals the thread blocks, real-time ones
@@ -374,7 +374,15 @@ pub(crate) fn signal_state() -> (Vec<SignalAction>, Vec<i32>) {
     for sig in 1..=64 {
         if let Ok(now) = crate::signals::disposition(sig) {
             let flags = now.sa_flags & !SA_RESTORER;
-            dispositions.push((sig, now.sa_sigaction, flags, members(&now.sa_mask)));
+            // The mask the handler runs under: NetBSD stores the signal in
+            // `sa_mask` when one is installed, other kernels add it at
+            // delivery, so a restore cannot put back the bit alone.
+            let mut blocks = members(&now.sa_mask);
+            if now.sa_flags & libc::SA_NODEFER == 0 && !blocks.contains(&sig) {
+                blocks.push(sig);
+                blocks.sort_unstable();
+            }
+            dispositions.push((sig, now.sa_sigaction, flags, blocks));
         }
     }
     let mut mask = std::mem::MaybeUninit::<libc::sigset_t>::uninit();
