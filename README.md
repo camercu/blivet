@@ -243,8 +243,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ## Recipes
 
-Each has a worked example in the API docs.
-
 - **Remove the pidfile on `SIGTERM`/`SIGINT`.** `Drop` does not run when a
   signal kills the process, so call
   [`cleanup_on_term_signals`][cleanup_on_term_signals]. It works from the

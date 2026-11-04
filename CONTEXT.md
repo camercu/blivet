@@ -74,8 +74,8 @@ The user and group the daemon runs as after the identity switch.
 _Avoid_: target user (when a group is meant too)
 
 **Identity switch**:
-Setting the target group and, with a user, the user and its environment
-(R162). _Avoid_: user switch, privilege drop, drop privileges
+Setting the target group and, with a user, its supplementary groups, the
+user and its environment (R162). _Avoid_: user switch, privilege drop, drop privileges
 
 **Path ownership transfer**:
 Chowning the pidfile, lockfile and output files to the target identity before
