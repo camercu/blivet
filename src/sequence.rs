@@ -212,7 +212,7 @@ unsafe fn run_steps<T>(
     // Step 7: Open and lock lockfile (explicit path, or the pidfile itself
     // unless derivation was opted out)
     let lockfile_path = config.effective_lockfile().map(std::path::PathBuf::as_path);
-    let mut lock_removed = None;
+    let mut lock_removed = false;
     if let Some(path) = lockfile_path {
         let derived = config.lockfile_is_derived();
         let (lock, created, id) = steps::lock_path(path, derived)?;
@@ -223,7 +223,7 @@ unsafe fn run_steps<T>(
         if created && !derived {
             let removal = steps::Removal::new(path, id, steps::Created::Lockfile);
             ledger.record_lasting(steps::Saved::Removal(removal))?;
-            lock_removed = Some(id);
+            lock_removed = true;
         }
     }
 
@@ -239,9 +239,12 @@ unsafe fn run_steps<T>(
     if let Some(ref pidfile_path) = config.pidfile {
         let pidfile = steps::open_pidfile(pidfile_path, files.lock())?;
         let id = pidfile.id()?;
-        // A lockfile named as the pidfile's own path is the same file: step
-        // 7's token already removes it, and a second would report it twice.
-        if lock_removed != Some(id) {
+        // A lockfile named as the pidfile's own path is the same file at the
+        // same path: step 7's token already removes it, and a second would
+        // report it twice. Keyed on the path, not the identity: a pidfile
+        // path linked to the lock since step 7 is another name to remove.
+        let removed_as_lock = lock_removed && matches!(pidfile, steps::Pidfile::Locked(_));
+        if !removed_as_lock {
             let removal = steps::Removal::new(pidfile_path, id, steps::Created::Pidfile);
             ledger.record_lasting(steps::Saved::Removal(removal))?;
         }
