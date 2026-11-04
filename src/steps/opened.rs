@@ -333,21 +333,26 @@ mod tests {
 
     // Covers: R164
     /// A pidfile path hard-linked to the lockfile is one file under two
-    /// records. The later record saw the owner the earlier one gave, so the
-    /// owners go back latest first and the file ends with its first owner.
+    /// records. Step 16 chowns it once per record, so the later record saw
+    /// the owner the earlier one gave: the owners go back latest first, and
+    /// the file ends with the owner it had before the start.
     #[test]
     fn one_file_under_two_records_gets_its_first_owner_back() {
         use std::os::unix::fs::MetadataExt;
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("app.lock");
-        let mut gids = crate::test_support::supplementary_gids();
-        gids.push(nix::unistd::getegid().as_raw());
-        gids.sort_unstable();
-        gids.dedup();
-        let [first, then, ..] = gids[..] else {
-            return; // fewer than two groups to chown to
+        let first = nix::unistd::getegid().as_raw();
+        let then = if nix::unistd::geteuid().is_root() {
+            crate::test_support::foreign_gid()
+        } else {
+            let other = crate::test_support::supplementary_gids()
+                .into_iter()
+                .find(|g| *g != first);
+            let Some(other) = other else {
+                return; // no second group to chown to
+            };
+            other
         };
-        let uid = nix::unistd::geteuid();
         let mut files = OpenedFiles::default();
         push(
             &mut files,
@@ -359,14 +364,20 @@ mod tests {
             &path,
             Role::Pidfile(file(dir.path(), "app.lock")),
         );
-        files.0[0].owner_was = Some((uid, Gid::from_raw(first)));
-        files.0[1].owner_was = Some((uid, Gid::from_raw(then)));
-        nix::unistd::chown(&path, None, Some(Gid::from_raw(then))).unwrap();
-        assert_ne!(std::fs::metadata(&path).unwrap().gid(), first);
+        nix::unistd::chown(&path, None, Some(Gid::from_raw(first))).unwrap();
+        files
+            .chown_to(
+                (None, Some(Gid::from_raw(then))),
+                &mut Ledger::new(super::super::Rollback::PutBack),
+            )
+            .unwrap();
 
-        files.give_owners_back();
+        let failures = files.give_owners_back();
 
-        assert_eq!(std::fs::metadata(&path).unwrap().gid(), first);
+        assert!(
+            failures.is_empty() && std::fs::metadata(&path).unwrap().gid() == first,
+            "{failures:?}"
+        );
     }
 
     #[test]
