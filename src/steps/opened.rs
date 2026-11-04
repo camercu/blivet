@@ -252,10 +252,13 @@ impl OpenedFiles {
     /// Gives each file [`chown_to`](Self::chown_to) chowned its owner back,
     /// by the descriptor this record holds, and returns what it could not
     /// give back. A file no longer on disk (no links left) is skipped: no
-    /// one sees its owner.
+    /// one sees its owner. Latest first: one file under two records (a
+    /// pidfile path hard-linked to the lockfile) ends with the owner the
+    /// first record saw.
     pub(crate) fn give_owners_back(&mut self) -> Vec<RestoreFailure> {
         self.0
             .iter_mut()
+            .rev()
             .filter_map(|o| {
                 let (owner, group) = o.owner_was.take()?;
                 let gone = nix::sys::stat::fstat(o.role.as_fd()).is_ok_and(|st| st.st_nlink == 0);
@@ -326,6 +329,44 @@ mod tests {
         let (mut files, _path) = chowned_from_root(dir.path());
 
         assert_eq!(files.give_owners_back().len(), 1);
+    }
+
+    // Covers: R164
+    /// A pidfile path hard-linked to the lockfile is one file under two
+    /// records. The later record saw the owner the earlier one gave, so the
+    /// owners go back latest first and the file ends with its first owner.
+    #[test]
+    fn one_file_under_two_records_gets_its_first_owner_back() {
+        use std::os::unix::fs::MetadataExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app.lock");
+        let mut gids = crate::test_support::supplementary_gids();
+        gids.push(nix::unistd::getegid().as_raw());
+        gids.sort_unstable();
+        gids.dedup();
+        let [first, then, ..] = gids[..] else {
+            return; // fewer than two groups to chown to
+        };
+        let uid = nix::unistd::geteuid();
+        let mut files = OpenedFiles::default();
+        push(
+            &mut files,
+            &path,
+            Role::Lockfile(lock(dir.path(), "app.lock")),
+        );
+        push(
+            &mut files,
+            &path,
+            Role::Pidfile(file(dir.path(), "app.lock")),
+        );
+        files.0[0].owner_was = Some((uid, Gid::from_raw(first)));
+        files.0[1].owner_was = Some((uid, Gid::from_raw(then)));
+        nix::unistd::chown(&path, None, Some(Gid::from_raw(then))).unwrap();
+        assert_ne!(std::fs::metadata(&path).unwrap().gid(), first);
+
+        files.give_owners_back();
+
+        assert_eq!(std::fs::metadata(&path).unwrap().gid(), first);
     }
 
     #[test]
