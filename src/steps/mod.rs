@@ -77,6 +77,10 @@ pub(crate) mod failpoints {
     /// disk then is not this process's to remove.
     pub(crate) static PIDFILE_OPEN_FAILS: Failpoint = Failpoint::new();
 
+    /// Unlinks the path between `open_creating`'s exclusive open and its
+    /// fallback, as another instance's rollback can.
+    pub(crate) static UNLINK_BETWEEN_OPENS: Failpoint = Failpoint::new();
+
     /// How many more times step 7 unlinks the lockfile between its `open`
     /// and its `flock`, as another instance's rollback can. 0 unlinks none.
     static UNLINKS_BEFORE_LOCK: AtomicUsize = AtomicUsize::new(0);

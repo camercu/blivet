@@ -44,20 +44,51 @@ pub(crate) fn open_above_stdio<P: ?Sized + nix::NixPath>(
 
 /// [`open_above_stdio`] with `O_CREAT`, saying whether this open created the
 /// file, which a failed start then removes (R164). A file that appears
-/// between the two opens counts as found, and stays.
+/// between the two opens counts as found, and stays. One that goes between
+/// them, as another instance's rollback removes it, is tried again: the
+/// file this start then creates is its own.
 pub(crate) fn open_creating(
     path: &Path,
     flags: OFlag,
     mode: Mode,
 ) -> std::io::Result<(OwnedFd, bool)> {
-    // `EEXIST` falls back, a symlink's included, dangling or not: the file
-    // it names is not this start's to remove. Any other error the second
-    // open meets too, so it reports that one.
-    match open_above_stdio(path, flags | OFlag::O_CREAT | OFlag::O_EXCL, mode) {
-        Ok(fd) => Ok((fd, true)),
-        Err(_) => open_above_stdio(path, flags | OFlag::O_CREAT, mode).map(|fd| (fd, false)),
+    for _ in 0..OPEN_ATTEMPTS {
+        let exclusive = match open_above_stdio(path, flags | OFlag::O_CREAT | OFlag::O_EXCL, mode) {
+            Ok(fd) => return Ok((fd, true)),
+            Err(e) => e,
+        };
+        #[cfg(test)]
+        if crate::steps::failpoints::UNLINK_BETWEEN_OPENS.injected() {
+            let _ = std::fs::remove_file(path);
+        }
+        // Without `O_CREAT`, so this open cannot create the file and call it
+        // found.
+        match open_above_stdio(path, flags, mode) {
+            Ok(fd) => return Ok((fd, false)),
+            Err(e) if e.raw_os_error() != Some(libc::ENOENT) => return Err(e),
+            Err(_) => {}
+        }
+        // A symlink is `EEXIST` to the exclusive open, dangling or not.
+        // Dangling, the file it names is created through it, and is not this
+        // start's to remove: the path is the link.
+        if std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink()) {
+            return open_above_stdio(path, flags | OFlag::O_CREAT, mode).map(|fd| (fd, false));
+        }
+        // Not there for either open: the exclusive open's error is the cause.
+        if exclusive.raw_os_error() != Some(libc::EEXIST) {
+            return Err(exclusive);
+        }
     }
+    Err(std::io::Error::other(format!(
+        "{} kept appearing and going",
+        path.display()
+    )))
 }
+
+/// How often [`open_creating`] tries again when the path went between its
+/// two opens. Each retry means another instance removed the file in that
+/// moment, so a few suffice.
+const OPEN_ATTEMPTS: usize = 8;
 
 /// Step 6: Redirect standard streams to /dev/null.
 ///
@@ -448,6 +479,69 @@ pub(crate) fn above_stdio(fd: OwnedFd) -> std::io::Result<OwnedFd> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_file_removed_between_the_opens_is_created_by_this_start() {
+        if !crate::test_support::isolated() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app.lock");
+        std::fs::write(&path, "").unwrap();
+        crate::steps::failpoints::UNLINK_BETWEEN_OPENS.set();
+
+        let (_fd, created) =
+            open_creating(&path, OFlag::O_WRONLY, Mode::from_bits_truncate(0o644)).unwrap();
+
+        assert!(created);
+    }
+
+    #[test]
+    fn a_dangling_symlink_creates_its_target_as_found() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("target.log");
+        let link = dir.path().join("app.log");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+
+        let (_fd, created) =
+            open_creating(&link, OFlag::O_WRONLY, Mode::from_bits_truncate(0o644)).unwrap();
+
+        assert!(!created && target.exists());
+    }
+
+    #[test]
+    fn a_file_neither_open_can_reach_reports_why() {
+        if nix::unistd::geteuid().is_root() {
+            return; // root writes to a read-only directory
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let sealed = dir.path().join("sealed");
+        std::fs::create_dir(&sealed).unwrap();
+        let mut perms = std::fs::metadata(&sealed).unwrap().permissions();
+        std::os::unix::fs::PermissionsExt::set_mode(&mut perms, 0o555);
+        std::fs::set_permissions(&sealed, perms).unwrap();
+
+        let err = open_creating(
+            &sealed.join("app.log"),
+            OFlag::O_WRONLY,
+            Mode::from_bits_truncate(0o644),
+        )
+        .unwrap_err();
+
+        assert_eq!(err.kind(), std::io::ErrorKind::PermissionDenied);
+    }
+
+    #[test]
+    fn a_file_found_is_not_created() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app.log");
+        std::fs::write(&path, "").unwrap();
+
+        let (_fd, created) =
+            open_creating(&path, OFlag::O_WRONLY, Mode::from_bits_truncate(0o644)).unwrap();
+
+        assert!(!created);
+    }
+
     /// `redirect_output` as a foreground sequence runs it: a failure puts
     /// back what it changed, and a success stays in place, as at step 18.
     fn kept(

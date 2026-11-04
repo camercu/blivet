@@ -613,8 +613,11 @@ undefined behaviour.
 7. **Open and lock lockfile** (if configured or derived from the
    pidfile — see Lockfile derivation). Open with
    `O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC`, mode 0644, falling back
-   to an open without `O_EXCL` when the file exists, which tells the
-   start whether it created the file (R164). A lockfile derived from
+   to an open without `O_CREAT` when that fails, which tells the start
+   whether it created the file (R164). A path gone by the fallback, as
+   another instance's rollback removes it, is tried again from the
+   exclusive open; a dangling symlink creates its target through the
+   link, which is not the start's to remove. A lockfile derived from
    the pidfile also opens with `O_NOFOLLOW` (see pidfile mechanics). Then
    `flock(LOCK_EX | LOCK_NB)`, and recheck that the path still names
    the locked file, reopening if not (R169). Open failure:
