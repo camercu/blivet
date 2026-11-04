@@ -1,3 +1,71 @@
+## [0.16.0](https://github.com/camercu/blivet/compare/v0.15.0...v0.16.0) (2026-11-04)
+
+### ⚠ BREAKING CHANGES
+
+* **pidfile:** a pidfile path that is a symlink fails the start
+with PidfileError, or LockfileError when the pidfile is also the
+lockfile. Point the pidfile at the target path instead.
+* **error:** ErrorKind::NotifyFailed no longer returns its
+io::Error from source(); match on the variant to reach it.
+* **error:** DaemonizeError is a struct. Match on err.kind(),
+an ErrorKind holding the former variants. New: rollback_failures()
+-> &[RestoreFailure], with ChangedState naming what was left
+changed. DaemonizeError::application, exit_code, Display and source
+are unchanged in behaviour. The daemonize CLI prints one 'rollback
+left <state> changed: <error>' line per failure after the error.
+
+### Features
+
+* **cli:** print only rollback failures that outlive the process ([0d14b28](https://github.com/camercu/blivet/commit/0d14b2841f3a5936677f0cb5c846d3f616585af9))
+* **error:** add DaemonizeError::into_kind ([d15dd8c](https://github.com/camercu/blivet/commit/d15dd8c12e4485fecd56ac6b9d23e437a39ab406))
+* **error:** make ErrorKind::exit_code public ([0e27fbf](https://github.com/camercu/blivet/commit/0e27fbf1aeb27ab893d3eed4702edfbb112b86da))
+* **error:** report an emptied log as EmptiedOutputFile ([5e9db67](https://github.com/camercu/blivet/commit/5e9db67e8af83f241cdf7d4a35005adc546b288a))
+* **error:** report changes a failed rollback left ([64bc940](https://github.com/camercu/blivet/commit/64bc9406bea17d1f1a6de3171b3344d0b93f7283))
+* **rollback:** report the environment left after init ([02b4d2b](https://github.com/camercu/blivet/commit/02b4d2b6ea74b0487c89925364590bbb180d842a))
+
+### Bug Fixes
+
+* **abort:** flush stdout on every rollback of an unkept start ([c3e2f23](https://github.com/camercu/blivet/commit/c3e2f2331418614a30117c1d4cf106e9aa002e69))
+* **abort:** flush stdout only when there is a change to roll back ([3593d43](https://github.com/camercu/blivet/commit/3593d437e2e9418dbb08c444ba7f290a88e01dc2))
+* **abort:** leave a kept guard behind when the context takes the start ([0bd7b1b](https://github.com/camercu/blivet/commit/0bd7b1bad85c9a000a69bfb3fe92da413d88eb3d))
+* **build:** open NetBSD's working directory for reading ([379b78d](https://github.com/camercu/blivet/commit/379b78da5edf174cfc175ae94fc924a034dbbcf6))
+* **context:** give a found lockfile its owner back before readiness ([642e8af](https://github.com/camercu/blivet/commit/642e8afe9f2b6acc1368d1a22c670deb6692c0d9))
+* **context:** remove only the pidfile this daemon wrote ([e7c125a](https://github.com/camercu/blivet/commit/e7c125a9a81b9cc5e6644cfd60942ce3965664d8))
+* **context:** report no owner for a file the rollback removed ([f42ef9d](https://github.com/camercu/blivet/commit/f42ef9de4415be2865012376867df4c2955c40cf))
+* **context:** roll back a daemon start that fails before readiness ([1c7b6f9](https://github.com/camercu/blivet/commit/1c7b6f9c021231835968c1bfdf04c811183ccbed))
+* **error:** name each io cause once in an error chain ([bc96784](https://github.com/camercu/blivet/commit/bc96784326d9878527f3f629ddc6b7baf3c25fbe))
+* **identity:** follow a symlink when giving an owner back by path ([e1ce029](https://github.com/camercu/blivet/commit/e1ce029d3e514586647225a5ebb3791e917d17c2))
+* **identity:** give an owner back by path when no descriptor was free ([5fe1541](https://github.com/camercu/blivet/commit/5fe154127497767d9c90f116bd6397c4a89b799a))
+* **identity:** keep chowning when no descriptor is free ([28ed1a6](https://github.com/camercu/blivet/commit/28ed1a663235eb5195b23ba94381a5b3c3b2cd40))
+* **identity:** keep the owners a successful start chowned ([7d66018](https://github.com/camercu/blivet/commit/7d66018e455d19938364c9f1f599852c65b6d4be))
+* **just:** keep git hook variables away from recipe tools ([a72f394](https://github.com/camercu/blivet/commit/a72f39423529da0388fd66dc73338e2f5259ede0))
+* **just:** lint only the files git sees ([142c351](https://github.com/camercu/blivet/commit/142c3512e2e2283ca914664ad7bbbd0aa99fcfd4))
+* **just:** run the docker image just built, by ID ([7875b61](https://github.com/camercu/blivet/commit/7875b61c099296b5ecea62b41387d3d027d67ee9))
+* keep every held file off the stdio slots ([5faacab](https://github.com/camercu/blivet/commit/5faacab75e17776fe71e4aff272d8c7056e2ac45))
+* **lock:** hold the lock only on the file the path names ([d95eeca](https://github.com/camercu/blivet/commit/d95eeca8d4d8b7546dcb633458a4a4c51e32d596))
+* **notify:** send a daemon's rollback failures to the launcher ([c0179b8](https://github.com/camercu/blivet/commit/c0179b8f4a7f1f08f03899d2cfabdb051be3dc66))
+* **opened:** give owners back latest first ([9a6fc9b](https://github.com/camercu/blivet/commit/9a6fc9b6c3e6851c9cae27aa1124c102b002eeb2))
+* **pidfile:** refuse a symlink by path, not by file ([fe5ed8d](https://github.com/camercu/blivet/commit/fe5ed8ddbe8be80375a555cc37b623570b34a2e6))
+* **pidfile:** refuse a symlinked pidfile, remove only the path itself ([a6a647c](https://github.com/camercu/blivet/commit/a6a647cd2a7a882ea1c135858f85a4a8ca779c91))
+* **rollback:** flush stdout before deciding whether to keep a log ([7c8cca5](https://github.com/camercu/blivet/commit/7c8cca57262698b3b4a456d716d3ef7daa2f2d59))
+* **rollback:** give chowned files back their owners on failure ([080580b](https://github.com/camercu/blivet/commit/080580bbd178b738dab2c6fa82180036ec93ea76))
+* **rollback:** keep a created log once something wrote to it ([68b898c](https://github.com/camercu/blivet/commit/68b898cb5dd5453c538748111ed708b10b7cd02b))
+* **rollback:** remove the lockfile and logs a failed start created ([60c700b](https://github.com/camercu/blivet/commit/60c700b1d5fffd175f3b71356eb590ecde3b8ab0))
+* **rollback:** remove the pidfile in step order, by identity ([6698ed5](https://github.com/camercu/blivet/commit/6698ed5a69c051da575bf27cc241728e95573304))
+* **rollback:** save a working directory the caller cannot read ([c462ecb](https://github.com/camercu/blivet/commit/c462ecb437b02a7381901ebd26d02c10f980e6a4))
+* **sequence:** flush stdout before a foreground panic's rollback ([7f11299](https://github.com/camercu/blivet/commit/7f1129914d134bb7f50dc04b68389da6bc790233))
+* **sequence:** key the shared-token skip on the locked pidfile path ([b6866a3](https://github.com/camercu/blivet/commit/b6866a3879c1168da7d573484973265d4d7b368b))
+* **sequence:** report a lockfile named as the pidfile once ([cb2b924](https://github.com/camercu/blivet/commit/cb2b92409201ff9ba644f204715dd8ed4bdc0f4e))
+* **sequence:** roll a daemon's panic back as its error ([44bbcf5](https://github.com/camercu/blivet/commit/44bbcf58b97db3e7d107d9da5e81d1b82de161cd))
+* **stdio:** count a file created after a racing unlink as created ([a097bd6](https://github.com/camercu/blivet/commit/a097bd64e149a7e36ea342c959f7c555f07a928c))
+* **stdio:** truncate logs just before init, and report the loss ([0cc5cb0](https://github.com/camercu/blivet/commit/0cc5cb0b93a77b486b38509c1792f13896d8339c))
+* **steps:** open every held file close-on-exec in one place ([7288994](https://github.com/camercu/blivet/commit/7288994f016f18072b0b32930ae736638bbbfec3))
+
+### Performance Improvements
+
+* **notify:** build no message when dropping a spent channel ([51dada5](https://github.com/camercu/blivet/commit/51dada5b7e52d9ce2ddf9bdf21e6e2a9fce11db9))
+* **steps:** save env values only when they may be put back ([9bdfc40](https://github.com/camercu/blivet/commit/9bdfc4032c9ce8e433980784b1a0bfa385258167))
+
 ## [0.15.0](https://github.com/camercu/blivet/compare/v0.14.1...v0.15.0) (2026-10-14)
 
 ### ⚠ BREAKING CHANGES
