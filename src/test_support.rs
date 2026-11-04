@@ -451,7 +451,7 @@ impl ProcessSnapshot {
 }
 
 /// Each entry in `dir`, with its owner, group and length, sorted by name.
-fn dir_files(dir: &std::path::Path) -> Vec<(std::ffi::OsString, u32, u32, u64)> {
+pub(crate) fn dir_files(dir: &std::path::Path) -> Vec<(std::ffi::OsString, u32, u32, u64)> {
     use std::os::unix::fs::MetadataExt;
     let mut files: Vec<_> = std::fs::read_dir(dir)
         .unwrap()

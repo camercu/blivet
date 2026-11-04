@@ -1,7 +1,7 @@
-//! The undo walk: fails a foreground start after each undo token in turn,
-//! just before `init`, and once more just before the identity switch, and
-//! checks after each failure that the process is as it was before the start
-//! (R164).
+//! The undo walk: fails a start after each undo token in turn, just before
+//! `init`, and once more just before the identity switch, and checks after
+//! each failure that the process is as it was before the start (R164). A
+//! daemon's process exits on failure, so its walk checks only the files.
 //!
 //! The walk holds no list of steps. A step that changes the snapshot's state
 //! without returning a token leaves that change behind at every failure after
@@ -9,7 +9,7 @@
 
 use crate::forker::null_forker::NullForker;
 use crate::steps::failpoints;
-use crate::test_support::{ProcessSnapshot, isolated, open_fds_above_stdio};
+use crate::test_support::{ProcessSnapshot, dir_files, isolated, open_fds_above_stdio};
 use crate::{DaemonConfig, ErrorKind};
 
 extern "C" fn caller_handler(_: libc::c_int) {}
@@ -125,6 +125,50 @@ fn walk(config: &DaemonConfig, dir: &std::path::Path) {
     }
 }
 
+/// Walks `config`'s daemon start, comparing what it leaves in `dir`: every
+/// file token must be recorded in both modes, or a daemon's failure leaves
+/// the file behind while every foreground test passes.
+fn walk_daemon(config: &DaemonConfig, dir: &std::path::Path) {
+    use crate::notify::{self, Outcome};
+    failpoints::BEFORE_SWITCH_FAILS.set();
+    let before = dir_files(dir);
+    for n in 1.. {
+        failpoints::fail_at_checkpoint(n);
+        let mut forker = NullForker::both_child_with_reader();
+        let exited = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            // SAFETY: NullForker does not fork.
+            #[allow(unsafe_code)]
+            unsafe {
+                crate::sequence::daemonize_inner_with(config, &mut forker, || Ok(()))
+            }
+        }));
+        assert!(exited.is_err(), "the start succeeded with failpoints set");
+        let rd = forker
+            .take_pipe_reader()
+            .expect("NullForker stores a reader");
+        let Outcome::Failure { message, .. } = notify::decode(&crate::test_support::read_pipe(rd))
+        else {
+            panic!("failure {n} reached the launcher as a success")
+        };
+        let last = if message.contains(failpoints::SWITCH_FAILURE) {
+            true
+        } else if message.contains(failpoints::CHECKPOINT_FAILURE) {
+            false
+        } else {
+            panic!("failure {n} is not a failpoint's: {message}")
+        };
+        assert_eq!(dir_files(dir), before, "files differ after failure {n}");
+        assert!(
+            !message.contains("rollback left"),
+            "failure {n} left changes: {message}"
+        );
+        if last {
+            assert!(n > 1, "the walk failed no token");
+            return;
+        }
+    }
+}
+
 /// The config every step with a token acts on: umask, cwd, the stdio slots,
 /// signals, env, and with `user` the groups. The fd sweep runs too, so a
 /// token whose descriptor it does not spare loses what it saved.
@@ -154,6 +198,34 @@ fn a_foreground_start_failing_anywhere_leaves_the_process_as_it_was() {
     let dir = tempfile::tempdir().unwrap();
     let config = full_config(dir.path());
     walk(&config, dir.path());
+}
+
+// Covers: R164
+#[test]
+fn a_daemon_start_failing_anywhere_leaves_no_file_changed() {
+    if !isolated() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = full_config(dir.path());
+    config.foreground(false).close_fds(false);
+    walk_daemon(&config, dir.path());
+}
+
+// Covers: R164
+#[test]
+#[ignore = "needs root: the privileged tier runs it"]
+fn root_daemon_failing_anywhere_before_the_switch_gives_each_owner_back() {
+    if !isolated() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    // Found, not created, so it stays: step 16 chowns it, and a failure
+    // after must give it back its owner.
+    std::fs::write(dir.path().join("app.lock"), "").unwrap();
+    let mut config = full_config(dir.path());
+    config.foreground(false).close_fds(false).user("nobody");
+    walk_daemon(&config, dir.path());
 }
 
 // Covers: R164
