@@ -1605,7 +1605,7 @@ on any change to it, so the rows only copied the snapshot.
   after `setgid`, and the working directory when it could open it. It
   opens the directory for search only where the platform can (the
   `search_only_open` capability: `O_PATH` on Linux and Android,
-  `O_SEARCH` on macOS, FreeBSD, and NetBSD), so one the caller may
+  `O_SEARCH` on macOS and FreeBSD), so one the caller may
   search but not read is saved too.
   Elsewhere such a directory, and anywhere one the caller can no longer
   search, cannot be opened, and the start goes on without saving it.

@@ -50,7 +50,7 @@ impl ThreadCount {
 enum SearchOnlyOpen {
     /// `O_PATH`: Linux and Android.
     Path,
-    /// `O_SEARCH`: macOS and the BSDs that have it.
+    /// `O_SEARCH`: macOS and FreeBSD.
     Search,
 }
 
@@ -180,7 +180,9 @@ const PLATFORMS: &[Platform] = &[
         rt_signals_reserved: false,
         faccessat_lacks_eaccess: false,
         sock_cloexec: true,
-        search_only_open: Some(SearchOnlyOpen::Search),
+        // `O_SEARCH` is defined, but `open` strips it and opens for reading,
+        // which needs read permission.
+        search_only_open: None,
     },
     Platform {
         target_os: "openbsd",

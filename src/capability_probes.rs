@@ -39,9 +39,9 @@
 //! - `blivet_sock_cloexec`: macOS, the one listed platform answering "no",
 //!   has no `SOCK_CLOEXEC` in `libc` either, so the absent case cannot name
 //!   the flag it would pass.
-//! - `blivet_search_only_open`: OpenBSD, the one listed platform answering
-//!   "no", has neither `O_PATH` nor `O_SEARCH` in `libc`, so the absent case
-//!   cannot name the flag it would pass either.
+//! - `blivet_search_only_open`: OpenBSD has neither `O_PATH` nor `O_SEARCH`
+//!   in `libc`, so its absent case cannot name the flag it would pass.
+//!   NetBSD has `O_SEARCH` but answers "no", and its probe shows why.
 
 /// The highest descriptor number a directory of *static* device nodes is
 /// likely to cover. NetBSD's `MAKEDEV` creates `/dev/fd/0` through
@@ -249,6 +249,33 @@ fn socketpair_takes_sock_cloexec() {
         let flags = fcntl(&end, FcntlArg::F_GETFD).unwrap();
         assert!(FdFlag::from_bits_truncate(flags).contains(FdFlag::FD_CLOEXEC));
     }
+}
+
+/// NetBSD's `open` strips `O_SEARCH` and opens for reading, so a directory
+/// the process may enter but not read does not open: `blivet_search_only_open`
+/// is right to answer "no" there.
+#[cfg(target_os = "netbsd")]
+// Covers: R164
+#[test]
+fn o_search_needs_read_permission_on_netbsd() {
+    use std::os::unix::fs::PermissionsExt;
+    if !crate::test_support::isolated() {
+        return;
+    }
+    crate::test_support::shed_root();
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o111)).unwrap();
+    let opened = crate::steps::open_above_stdio(
+        dir.path(),
+        nix::fcntl::OFlag::O_SEARCH.union(nix::fcntl::OFlag::O_DIRECTORY),
+        nix::sys::stat::Mode::empty(),
+    );
+    std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert_eq!(
+        opened.err().map(|e| e.raw_os_error()),
+        Some(Some(libc::EACCES)),
+        "O_SEARCH opened an unreadable directory: set NetBSD's search_only_open"
+    );
 }
 
 /// `blivet_search_only_open` claims a directory the process may enter but
