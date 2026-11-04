@@ -39,8 +39,6 @@ pub(crate) fn get_max_fd() -> Result<i32, ErrorKind> {
 }
 
 /// Return an iterator of fd numbers to close, filtering out skip_fds.
-///
-/// Pure logic — no side effects.
 pub(crate) fn fds_to_close(max_fd: i32, skip_fds: &[i32]) -> impl Iterator<Item = i32> + '_ {
     (3..max_fd).filter(move |fd| !skip_fds.contains(fd))
 }

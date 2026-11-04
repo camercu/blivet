@@ -1,8 +1,5 @@
-//! Forker trait abstracting fork, setsid and channel creation for testability.
-//!
-//! [`RealForker`] wraps real syscalls;
-//! `NullForker` (test-only) provides
-//! configurable results so `daemonize_inner` can be exercised without forking.
+//! Fork, setsid and channel creation behind a trait, so tests can run
+//! `daemonize_inner` without forking.
 
 use std::os::fd::OwnedFd;
 
@@ -11,10 +8,8 @@ use nix::unistd::ForkResult;
 use crate::error::ErrorKind;
 use crate::sys;
 
-/// Abstraction over fork, setsid and channel creation for testability.
-///
-/// `daemonize_inner` is generic over this trait. `RealForker` wraps real
-/// syscalls; `NullForker` (test-only) provides configurable results.
+/// What `daemonize_inner` forks through: [`RealForker`] in production,
+/// `NullForker` in tests.
 #[allow(unsafe_code)]
 pub(crate) trait Forker {
     /// Makes the channel the daemon reports its start through: `(read, write)`.

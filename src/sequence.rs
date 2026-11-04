@@ -83,7 +83,6 @@ pub(crate) unsafe fn daemonize_inner_with<T>(
                 parent_pipe_reader(pipe_rd, forker);
             }
             ForkResult::Child => {
-                // Child: close read end, continue
                 drop(pipe_rd);
             }
         }
@@ -105,9 +104,7 @@ pub(crate) unsafe fn daemonize_inner_with<T>(
                 pipe_wr.close();
                 forker.exit(0);
             }
-            Ok(ForkResult::Child) => {
-                // Grandchild continues
-            }
+            Ok(ForkResult::Child) => {}
             Err(e) => {
                 let e = DaemonizeError::from(e);
                 pipe_wr.signal_error(&e);
@@ -118,12 +115,8 @@ pub(crate) unsafe fn daemonize_inner_with<T>(
         Some(pipe_wr)
     };
 
-    // Steps 4–18 run in the final daemon process and report failures as a
-    // single Result. In foreground mode no fork happened, so errors simply
-    // propagate to the caller. In daemon mode the child cannot return to the
-    // original caller, so funnel any error through one place: notify the
-    // parent and exit. `pipe_wr` stays available so the error path can still
-    // signal it.
+    // Steps 4–18 report failures as one Result. A daemon cannot return to the
+    // caller, so its error goes to the launcher, and the daemon exits.
     // SAFETY: this function's own contract requires a single thread.
     let result = unsafe { run_post_fork(config, &mut pipe_wr, init) };
     match result {
@@ -228,14 +221,10 @@ unsafe fn run_steps<T>(
         }
     }
 
-    // Step 8: Write pidfile. The debt is owed from the moment this process
-    // owns the file on disk — once `open_pidfile` returns, having locked it at
-    // step 7 or created and truncated it just now — not from the moment the
-    // write succeeds: a write that fails half way leaves an empty file naming
-    // no process at all. Nor any earlier: an `open_pidfile` that fails, or a
-    // lock conflict at step 7, leaves a file that belongs to someone else.
-    // Its token removes the pidfile from the second half of step 8 on, in
-    // both modes: the file outlives a daemon that exits.
+    // Step 8: Write pidfile. Its removal is owed once `open_pidfile` returns,
+    // not once the write succeeds: a half-done write leaves an empty file.
+    // Before that the file is someone else's (see `open_pidfile`). The token
+    // goes in both modes: the file outlives a daemon that exits.
     let mut pidfile_id = None;
     if let Some(ref pidfile_path) = config.pidfile {
         let pidfile = steps::open_pidfile(pidfile_path, files.lock())?;

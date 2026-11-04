@@ -77,8 +77,7 @@ impl ResolvedIdentity {
     }
 
     /// The `(owner, group)` pair for `chown`. `None` in either position means
-    /// "leave unchanged" — [`nix::unistd::chown`] interprets `None` exactly so,
-    /// which is why this replaces the former `u32::MAX` (`-1`) sentinel.
+    /// "leave unchanged", as [`nix::unistd::chown`] reads it.
     pub(crate) fn chown_ids(&self) -> (Option<Uid>, Option<Gid>) {
         (self.user.as_ref().map(|u| u.uid), self.effective_gid())
     }

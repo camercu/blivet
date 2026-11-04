@@ -95,7 +95,6 @@ fn parse_env_pair(s: &str) -> (String, String) {
 fn main() -> ExitCode {
     let args = Args::parse();
 
-    // Build config
     let mut config = DaemonConfig::new();
     if let Some(ref p) = args.pidfile {
         config.pidfile(p);
@@ -109,10 +108,7 @@ fn main() -> ExitCode {
     if let Some(ref p) = args.stdout {
         config.stdout(p);
     }
-    // Default stderr to stdout path when not explicitly set:
-    // - If stdout ends in ".stdout", swap extension to ".stderr"
-    // - If stdout ends in ".out", swap extension to ".err"
-    // - Otherwise, use the same path (shares the fd via dup2)
+    // Without --stderr, stderr follows --stdout (see `derive_stderr_path`).
     let stderr = args.stderr.as_ref().or(args.stdout.as_ref());
     let stderr = stderr.map(|p| {
         if args.stderr.is_some() {
@@ -144,7 +140,7 @@ fn main() -> ExitCode {
     }
     config.foreground(args.foreground);
 
-    // Resolve program path before daemonization
+    // Before the daemon leaves the caller's directory.
     let program = resolve_program(&args.program[0]);
     let Program {
         path: program_path,
@@ -157,7 +153,6 @@ fn main() -> ExitCode {
         }
     };
 
-    // Verbose diagnostics
     if args.verbose {
         eprintln!("daemonize: program={program_path}");
         if let Some(ref p) = args.pidfile {
@@ -220,7 +215,6 @@ fn main() -> ExitCode {
         }
     };
 
-    // Build argv for execvp
     let c_program = CString::new(program_path.as_str()).unwrap_or_else(|_| {
         ctx.report_error(&ErrorKind::ExecFailed("program path contains null byte".into()).into());
     });

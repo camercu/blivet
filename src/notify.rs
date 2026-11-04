@@ -93,11 +93,10 @@ impl NotifyChannel {
     }
 
     /// Signal a daemonization failure: write the error's exit-code byte and
-    /// [report](DaemonizeError::report), then close the channel. If the write fails, most likely because
-    /// the launcher is gone, or a failed send already spent the channel, the
-    /// message goes to stderr instead, so it is not lost with the channel
-    /// (R161).
-    /// The process is aborting either way.
+    /// [report](DaemonizeError::report), then close the channel. If the write
+    /// fails (the launcher is gone, or a failed send already spent the
+    /// channel), the message goes to stderr instead, so it is not lost with
+    /// the channel (R161). The process is aborting either way.
     pub(crate) fn signal_error(self, err: &DaemonizeError) {
         self.signal_error_also(err, &[]);
     }

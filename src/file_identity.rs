@@ -17,13 +17,11 @@ pub(crate) struct FileId {
     pub(crate) ino: libc::ino_t,
 }
 
-/// The identity of the open file `fd`.
 pub(crate) fn file_id(fd: impl AsFd) -> Result<FileId, nix::errno::Errno> {
     nix::sys::stat::fstat(fd).map(|st| FileId::of(&st))
 }
 
 impl FileId {
-    /// The identity `fstat` reported.
     pub(crate) fn of(st: &nix::sys::stat::FileStat) -> Self {
         FileId {
             dev: st.st_dev,
