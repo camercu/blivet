@@ -66,4 +66,8 @@ exclude_re = [
     # second, under `just docker-test` (checked by hand).
     'replace OpenedFiles::keep_owners with [(][)]$',
     'replace OpenedFiles::give_owners_back -> Vec<RestoreFailure> with vec!\[\]$',
+    # The skip of a file no longer on disk: unprivileged, the chown back to
+    # one's own owner succeeds either way. The four root_a_daemon_* owner
+    # tests kill it under `just docker-test` (checked by hand).
+    'replace == with != in OpenedFiles::give_owners_back$',
 ]
