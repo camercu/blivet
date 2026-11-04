@@ -54,6 +54,8 @@ pub struct DaemonContext {
     /// post-daemonization fields (pidfile, user, group, …) rather than
     /// mirroring each one into a parallel field set.
     config: DaemonConfig,
+    /// The lock, once no launcher waits. While one does, the start's guard
+    /// holds it, so a failure gives the lockfile its owner back (R170).
     lockfile: Option<Flock<OwnedFd>>,
     launcher: Launcher,
     /// The pidfile this start wrote, until [`cleanup`](Self::cleanup) takes
@@ -102,7 +104,7 @@ impl fmt::Debug for DaemonContext {
         }
 
         f.debug_struct("DaemonContext")
-            .field("lockfile", &OptFmt(&self.lockfile.as_ref().map(|_| "held")))
+            .field("lockfile", &OptFmt(&self.lockfile_fd().map(|_| "held")))
             .field(
                 "notify_pipe",
                 &OptFmt(&match self.launcher {
@@ -152,6 +154,7 @@ impl DaemonContext {
     fn release(&mut self) {
         if let Launcher::Waiting(_, start) = &mut self.launcher {
             start.keep();
+            self.lockfile = start.files.take_lock();
         }
         self.launcher = Launcher::Released;
     }
@@ -163,7 +166,12 @@ impl DaemonContext {
     /// The returned fd has `O_CLOEXEC` set. [`exec`](Self::exec) clears it so
     /// the program keeps the lock; an `exec` of your own must clear it too.
     pub fn lockfile_fd(&self) -> Option<BorrowedFd<'_>> {
-        self.lockfile.as_ref().map(|flock| flock.as_fd())
+        match &self.launcher {
+            Launcher::Waiting(_, start) => start.files.lock().map(|(_, flock)| flock.as_fd()),
+            Launcher::Released | Launcher::Foreground => {
+                self.lockfile.as_ref().map(|flock| flock.as_fd())
+            }
+        }
     }
 
     /// Sets whether [`cleanup`](DaemonContext::cleanup) runs automatically

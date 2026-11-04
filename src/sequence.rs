@@ -334,15 +334,16 @@ unsafe fn run_steps<T>(
     // until the daemon reports readiness, so the start can still fail: the
     // context takes what the start changed, to undo on that failure (R164).
     // In foreground mode the start has succeeded, so the guard stands down.
-    let lockfile = files.take_lock();
-    let launcher = match pipe_wr.take() {
-        Some(pipe) => Some((
-            pipe,
-            std::mem::replace(abort, steps::AbortGuard::new(false)),
-        )),
+    // The lock stays in the guard while a launcher waits: step 16 may have
+    // chowned it, and a failure gives it back (R170).
+    let (lockfile, launcher) = match pipe_wr.take() {
+        Some(pipe) => {
+            let start = std::mem::replace(abort, steps::AbortGuard::new(false));
+            (None, Some((pipe, start)))
+        }
         None => {
             abort.keep();
-            None
+            (abort.files.take_lock(), None)
         }
     };
     let pidfile = config
@@ -923,6 +924,33 @@ mod tests {
         drop(ctx);
 
         assert_eq!(std::fs::metadata(&log).unwrap().gid(), gid_was);
+    }
+
+    // Covers: R163, R170
+    /// The lock is one of the files step 16 chowns: a daemon dropped before
+    /// readiness gives a lockfile it found its owner back too.
+    #[test]
+    #[ignore = "needs root: the privileged tier runs it"]
+    fn root_a_daemon_dropped_before_readiness_gives_the_lockfile_its_owner_back() {
+        use std::os::unix::fs::MetadataExt;
+        if !isolated() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let lockfile = dir.path().join("app.lock");
+        std::fs::write(&lockfile, "").unwrap();
+        let gid_was = std::fs::metadata(&lockfile).unwrap().gid();
+        let mut config = DaemonConfig::new();
+        config
+            .close_fds(false)
+            .lockfile(&lockfile)
+            .group(crate::test_support::foreign_gid().to_string());
+        let mut forker = NullForker::both_child_with_reader();
+
+        let (ctx, ()) = run_inner_with(&config, &mut forker, || Ok(())).unwrap();
+        drop(ctx);
+
+        assert_eq!(std::fs::metadata(&lockfile).unwrap().gid(), gid_was);
     }
 
     // Covers: R163
