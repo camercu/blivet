@@ -337,7 +337,7 @@ unsafe fn run_steps<T>(
     // chowned it, and a failure gives it back (R170).
     let (lockfile, launcher) = match pipe_wr.take() {
         Some(pipe) => {
-            let start = std::mem::replace(abort, steps::AbortGuard::new(false));
+            let start = abort.take();
             (None, Some((pipe, start)))
         }
         None => {
@@ -2387,6 +2387,30 @@ mod tests {
         config.foreground(true).close_fds(false).stdout(&log);
 
         let (_ctx, ()) = run_inner_with(&config, &mut NullForker::new(vec![], Ok(())), || {
+            write!(std::io::stdout(), "connecting").unwrap();
+            Ok(())
+        })
+        .unwrap();
+
+        assert_eq!(std::fs::read_to_string(&log).unwrap(), "");
+    }
+
+    // Covers: R164
+    /// A daemon handed its context leaves init's buffered output alone too:
+    /// the start may still fail, but nothing has failed yet.
+    #[test]
+    fn a_started_daemon_leaves_stdout_buffered() {
+        use std::io::Write;
+        if !isolated() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("app.log");
+        let mut config = DaemonConfig::new();
+        config.close_fds(false).stdout(&log);
+        let mut forker = NullForker::both_child_with_reader();
+
+        let (_ctx, ()) = run_inner_with(&config, &mut forker, || {
             write!(std::io::stdout(), "connecting").unwrap();
             Ok(())
         })

@@ -56,6 +56,18 @@ impl AbortGuard {
         self.kept = true;
     }
 
+    /// Moves every change out to a new guard, which then answers for them.
+    /// This one is left kept and empty, so its drop neither rolls back nor
+    /// flushes.
+    pub(crate) fn take(&mut self) -> Self {
+        let left = Self {
+            ledger: Ledger::new(self.ledger.rollback()),
+            files: OpenedFiles::default(),
+            kept: true,
+        };
+        std::mem::replace(self, left)
+    }
+
     pub(crate) fn new(foreground: bool) -> Self {
         let rollback = if foreground {
             Rollback::PutBack
