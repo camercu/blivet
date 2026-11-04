@@ -926,6 +926,38 @@ mod tests {
         assert_eq!(std::fs::metadata(&log).unwrap().gid(), gid_was);
     }
 
+    // Covers: R170
+    /// After a switch to a user, the daemon cannot give a file to another
+    /// owner: a failure before readiness leaves the owner changed, and the
+    /// launcher hears so.
+    #[test]
+    #[ignore = "needs root: the privileged tier runs it"]
+    fn root_a_daemon_switched_to_a_user_reports_the_owners_it_cannot_give_back() {
+        if !isolated() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("app.log");
+        std::fs::write(&log, "earlier run\n").unwrap();
+        let mut config = DaemonConfig::new();
+        config.close_fds(false).stdout(&log).user("nobody");
+        let mut forker = NullForker::both_child_with_reader();
+
+        let (ctx, ()) = run_inner_with(&config, &mut forker, || Ok(())).unwrap();
+        drop(ctx);
+
+        let rd = forker
+            .take_pipe_reader()
+            .expect("NullForker stores a reader");
+        match notify::decode(&crate::test_support::read_pipe(rd)) {
+            notify::Outcome::Failure { message, .. } => assert!(
+                message.contains(&format!("rollback left file owner {}: ", log.display())),
+                "{message}"
+            ),
+            notify::Outcome::Success => panic!("the launcher read a success"),
+        }
+    }
+
     // Covers: R163, R170
     /// The lock is one of the files step 16 chowns: a daemon dropped before
     /// readiness gives a lockfile it found its owner back too.

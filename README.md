@@ -234,9 +234,12 @@ After the
 error, the CLI prints one `rollback left <state> [<path>]: <error>` line for
 each file left on disk, or with `-v` for every change. A daemon that fails exits
 instead of returning, and sends the same lines to the launcher after its
-error message. Until `notify_parent()` succeeds the start can still fail: a
-`DaemonContext` that reports an error, fails its `exec`, or drops before then
-rolls back the same way and sends the launcher what it left.
+error message. Until `notify_parent()` succeeds a daemon's start can still
+fail: a `DaemonContext` that reports an error, fails its `exec`, or drops
+before then rolls back the same way and sends the launcher what it left. It
+runs as the target user by then, so with `user` set it cannot give files their
+owners back or remove files from directories only root can write; it reports
+those.
 
 A foreground start returns every error to its caller, so match on `kind()` to
 handle one failure apart from the rest. (In daemon mode a failure after the
