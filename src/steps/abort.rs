@@ -2,9 +2,9 @@
 
 use super::{Ledger, OpenedFiles, Rollback};
 
-/// What a failed sequence undoes (R164): the owners step 16 replaced, then
-/// each change in the [`Ledger`], in the reverse of the order
-/// the steps made them, and last the lock (step 7). A half-done identity switch (step 17)
+/// What a failed sequence undoes (R164): each change in the [`Ledger`], in
+/// the reverse of the order the steps made them, then the owners step 16
+/// replaced, and last the lock (step 7). A half-done identity switch (step 17)
 /// undoes itself. A panic in foreground mode, unwinding past the sequence,
 /// rolls back as the guard drops, with nowhere to report; a daemon catches
 /// its panic and rolls back as for an error (R166).
@@ -28,16 +28,17 @@ pub(crate) struct AbortGuard {
 }
 
 impl AbortGuard {
-    /// Puts back what the steps changed, latest first, and returns what it
-    /// could not put back. The owners step 16 replaced go first: no step
-    /// after 16 changes anything a rollback undoes.
+    /// Puts back what the steps changed and returns what it could not put
+    /// back. The owners step 16 replaced go after the ledger: a file the
+    /// ledger removed needs no owner, and a daemon switched to a user could
+    /// not give it one.
     ///
     /// Flushes stdout first, on every path: what init left in its buffer
     /// belongs in the log, and decides whether the rollback keeps it.
     pub(crate) fn roll_back(&mut self) -> Vec<crate::RestoreFailure> {
         let _ = std::io::Write::flush(&mut std::io::stdout());
-        let mut failures = self.files.give_owners_back();
-        failures.extend(self.ledger.roll_back());
+        let mut failures = self.ledger.roll_back();
+        failures.extend(self.files.give_owners_back());
         failures
     }
 

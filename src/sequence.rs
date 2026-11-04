@@ -958,6 +958,38 @@ mod tests {
         }
     }
 
+    // Covers: R170
+    /// A file the start created goes with the rollback, so a daemon switched
+    /// to a user does not report its owner as left: no file is left.
+    #[test]
+    #[ignore = "needs root: the privileged tier runs it"]
+    fn root_a_daemon_switched_to_a_user_reports_no_owner_for_a_file_it_removed() {
+        use std::os::unix::fs::PermissionsExt;
+        if !isolated() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o777)).unwrap();
+        let pidfile = dir.path().join("app.pid");
+        let mut config = DaemonConfig::new();
+        config.close_fds(false).pidfile(&pidfile).user("nobody");
+        let mut forker = NullForker::both_child_with_reader();
+
+        let (ctx, ()) = run_inner_with(&config, &mut forker, || Ok(())).unwrap();
+        drop(ctx);
+
+        let rd = forker
+            .take_pipe_reader()
+            .expect("NullForker stores a reader");
+        match notify::decode(&crate::test_support::read_pipe(rd)) {
+            notify::Outcome::Failure { message, .. } => assert!(
+                !pidfile.exists() && !message.contains("file owner"),
+                "{message}"
+            ),
+            notify::Outcome::Success => panic!("the launcher read a success"),
+        }
+    }
+
     // Covers: R163, R170
     /// The lock is one of the files step 16 chowns: a daemon dropped before
     /// readiness gives a lockfile it found its owner back too.

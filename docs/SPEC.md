@@ -1802,6 +1802,7 @@ on any change to it, so the rows only copied the snapshot.
   launcher what it could not put back after the message. Step 17 has
   already run: after a switch to a user, the process cannot give a
   file to another owner, nor remove one from a directory only root can
-  write, so those changes stay and each is reported. A successful
+  write, so those changes stay and each is reported; a file it removed
+  needs no owner back and is not reported. A successful
   `notify_parent`, or one whose failure goes to the caller, keeps every
   change and closes the files the context held only to undo them.

@@ -251,12 +251,17 @@ impl OpenedFiles {
 
     /// Gives each file [`chown_to`](Self::chown_to) chowned its owner back,
     /// by the descriptor this record holds, and returns what it could not
-    /// give back.
+    /// give back. A file no longer on disk (no links left) is skipped: no
+    /// one sees its owner.
     pub(crate) fn give_owners_back(&mut self) -> Vec<RestoreFailure> {
         self.0
             .iter_mut()
             .filter_map(|o| {
                 let (owner, group) = o.owner_was.take()?;
+                let gone = nix::sys::stat::fstat(o.role.as_fd()).is_ok_and(|st| st.st_nlink == 0);
+                if gone {
+                    return None;
+                }
                 nix::unistd::fchown(o.role.as_fd(), Some(owner), Some(group))
                     .err()
                     .map(|e| {
