@@ -588,7 +588,9 @@ puts back what it can (R164): stdin, stdout, and stderr, the working
 directory when it could open it, the umask, the signal dispositions and
 mask, the environment variables it set (only when the failure comes
 before `init`), the supplementary groups, and the primary group of a
-half-done identity switch, and it removes the pidfile it wrote. What it
+half-done identity switch. It removes the pidfile it wrote, and the
+lockfile and still-empty logs it created, and gives each file it
+chowned its owner back. What it
 cannot restore stays in effect: inherited descriptors it closed,
 whatever `init` did, and, once `init` has run, the environment, since
 `init` may start threads and `setenv` with another thread alive is
