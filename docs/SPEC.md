@@ -1009,6 +1009,7 @@ exit_code()` returns these values.
 | `ForkFailed`             | 71        | `EX_OSERR`            |
 | `SetsidFailed`           | 71        | `EX_OSERR`            |
 | `ChdirFailed`            | 71        | `EX_OSERR`            |
+| `SystemError`            | 71        | `EX_OSERR`            |
 | `PermissionDenied`       | 77        | `EX_NOPERM`           |
 | `PidfileError`           | 73        | `EX_CANTCREAT`        |
 | `OutputFileError`        | 73        | `EX_CANTCREAT`        |
