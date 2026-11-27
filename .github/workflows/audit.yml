@@ -22,6 +22,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: cachix/install-nix-action@v31
+      - uses: cachix/install-nix-action@v32
       - name: Check advisories, licenses, bans and sources
         run: nix-shell --run 'just lint-deny'
